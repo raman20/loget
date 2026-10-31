@@ -88,6 +88,32 @@ what it does claim.
 - **Model**: the old map implementation is kept as a test model
   (`kvmodel_test.go`); rapid checks that the run index refines it.
 
+## Run files (design 21)
+
+Since design 21 a run of 1 MiB or more is written to an unlinked file in
+`Options.IndexDir` (default the OS temp dir) and memory-mapped read-only
+with `MADV_RANDOM`, so the kernel can drop its pages under pressure
+instead of the Go heap holding them. Smaller runs and the hot set stay
+on the heap; `WithIndexInMemory(true)` keeps everything there, as before.
+
+- The files hold no durable state: they are never named in a manifest
+  and are rebuilt on open from the snapshot or by replay. A crash leaves
+  nothing behind (they are unlinked at creation). So there is no new
+  protocol and no TLA+ model; the design note explains why.
+- `index` stays free of I/O: it sees files only through the `RunFiles` /
+  `RunFile` interfaces; `internal/runfile` does the mmap. Values are
+  copied out of mapped runs before the read lock is released.
+- Any file error (create, write, map, a full disk) turns that KV back to
+  heap runs for good, rebuilt from intact inputs; `OnFileError` counts it
+  as `loget_kv_index_file_errors_total`.
+- Tests: `TestKVFilesRefineMap` (rapid, every run in a file),
+  `TestKVFilesFaults` / `TestKVFilesLoadFault` (random file faults, still
+  equal to the model), `FuzzLoadKVFiles`, `TestCrashKill9IndexFiles`
+  (25 kill -9 cycles, index dir empty after each), and simulator seeds
+  with file faults (2,000 seeds: 3,989 injected faults, all recovered).
+- Numbers and tradeoffs (lower peak RSS, some read throughput lost):
+  [design/21-disk-key-index.md](../design/21-disk-key-index.md).
+
 ## TLA+ alignment
 
 There is no KV-specific spec. `LogEtTxn.tla` uses the KV index only as
@@ -205,6 +231,15 @@ reaches the 0.5 % cutoff.
   the map model only.
 
 ## Found outside this component
+
+- **Value reads were not ranged** (found 2026-10-31 while benchmarking
+  design 21; present since the import). The engine wraps its store in
+  `holdStore` (backup deletion hold), which did not forward `GetRange`,
+  so `store.GetRange` fell back to a whole-object `Get` for every value
+  cache miss: a whole segment from the log, or a whole 64 MiB chunk
+  after compaction. At 10M × 100 B, YCSB-A after a compaction ran at
+  648 ops/s and the next compaction read terabytes. Fixed by forwarding
+  `GetRange`; `TestValueReadsAreRanged` fails without the fix.
 
 - **`TestMetricsCounters` flaked in CI** (`loget_conflicts_total` 2,
   want 1; 13 of 300 local `-race` runs, and 8 of 300 on the code before

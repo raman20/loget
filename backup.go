@@ -63,6 +63,13 @@ func (h *holdStore) PutIfAbsent(ctx context.Context, key string, data []byte) er
 	return h.Store.PutIfAbsent(ctx, key, data)
 }
 
+// GetRange forwards ranged reads. Without it store.GetRange would see no
+// RangeReader here and Get the whole object for every value read (a whole
+// segment, or a 64 MiB base chunk).
+func (h *holdStore) GetRange(ctx context.Context, key string, off, n int64) ([]byte, error) {
+	return store.GetRange(ctx, h.Store, key, off, n)
+}
+
 // Keys enumerates the wrapped store.
 func (h *holdStore) Keys(ctx context.Context) ([]string, error) { return store.Keys(ctx, h.Store) }
 

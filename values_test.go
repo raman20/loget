@@ -2,9 +2,11 @@ package loget
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/raman20/loget/store"
@@ -232,4 +234,48 @@ func TestWrittenBuffersAreNotRetained(t *testing.T) {
 			}
 		}
 	}
+}
+
+// getCounter counts whole-object Gets of segments and base value chunks.
+type getCounter struct {
+	*store.Mem
+	gets atomic.Int64
+}
+
+func (g *getCounter) Get(ctx context.Context, key string) ([]byte, error) {
+	if strings.HasPrefix(key, "log/") || strings.HasSuffix(key, ".val") {
+		g.gets.Add(1)
+	}
+	return g.Mem.Get(ctx, key)
+}
+
+// Value reads are ranged, from the log and from a base's value chunks:
+// the engine's store wrapper must not hide the store's GetRange (it did,
+// so each value read fetched a whole segment or 64 MiB chunk).
+func TestValueReadsAreRanged(t *testing.T) {
+	st := &getCounter{Mem: store.NewMem()}
+	db := mustOpen(t, st, WithValueCacheBytes(-1))
+	defer db.Close()
+	for i := range 20 {
+		if err := db.Put(ctx, fmt.Sprint("k", i), bigVal("v", i)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	read := func(when string) {
+		t.Helper()
+		st.gets.Store(0)
+		for i := range 20 {
+			if v, err := db.Get(ctx, fmt.Sprint("k", i)); err != nil || !bytes.Equal(v, bigVal("v", i)) {
+				t.Fatalf("%s: k%d: %v", when, i, err)
+			}
+		}
+		if n := st.gets.Load(); n != 0 {
+			t.Fatalf("%s: %d whole-object Gets for 20 value reads", when, n)
+		}
+	}
+	read("from the log")
+	if _, err := db.Compact(ctx, CompactOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	read("from base chunks")
 }

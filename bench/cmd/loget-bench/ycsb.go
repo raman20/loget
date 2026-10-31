@@ -88,6 +88,7 @@ func cmdYCSB(args []string) {
 	fs.DurationVar(&boltBatchDelay, "bolt-batch-delay", 0, "bbolt only: 0 = db.Update per write; >0 = db.Batch with this MaxBatchDelay")
 	cpuprof := fs.String("cpuprofile", "", "write a CPU profile of the measured closed-loop phase to this file (use with a single workload and client count)")
 	compactBetween := fs.Bool("compact-between", false, "loget only: Compact (grace 0) after each workload, as serve --compact-every would")
+	profWl := fs.String("cpuprofile-workload", "", "with -cpuprofile: profile only this workload (default: the only one)")
 	memprof := fs.String("memprofile", "", "write heap profiles to <prefix>-<phase>.pb.gz after load and after each workload")
 	fs.IntVar(&valueCacheBytes, "value-cache", 0, "loget only: value cache bytes (0 = the library default; -1 = off)")
 	fs.BoolVar(&indexInMemory, "index-in-memory", false, "loget only: keep the whole KV index on the Go heap (no run files)")
@@ -179,13 +180,14 @@ func cmdYCSB(args []string) {
 				}
 			}
 			runClosed(c, *warm, mk(1))
-			if prof != nil {
+			profiled := prof != nil && (*profWl == "" || *profWl == wl.Name)
+			if profiled {
 				if err := pprof.StartCPUProfile(prof); err != nil {
 					fatal(err) // only one closed-loop cell can be profiled per run
 				}
 			}
 			closed := runClosed(c, *dur, mk(2))
-			if prof != nil {
+			if profiled {
 				pprof.StopCPUProfile()
 			}
 			rate := closed.OpsPerSec * *frac

@@ -86,8 +86,12 @@ positional argument is ignored. The protocol is model-checked in
 ## Memory and cache sizing
 
 What lives in RAM (per open database):
-- every KV key and its version history (MVCC, 40 bytes per version plus
-  the key; kept until `Compact`), with values of up to 64 B inline;
+- every KV key and its version history (MVCC; kept until `Compact`),
+  with values of up to 64 B inline. Since design 21 most of it is in
+  memory-mapped run files in the index directory, not the Go heap: only
+  the newest ~65k versions, runs under 1 MiB and ~0.5 B/key of block
+  offsets stay on the heap. Mapped pages count as file-backed RSS, which
+  the kernel can reclaim; see "Index directory" below;
 - the state of any derived index you register (`WithIndex`);
 - the **value cache** for KV values over 64 B, which are otherwise read
   from the log (`pread` locally, ranged GET on S3) and CRC-checked.
@@ -98,10 +102,22 @@ RSS grows by about its size once it fills. Go API options:
 | Option | Default | Effect |
 |---|---|---|
 | `WithValueCacheBytes(n)` | 1/16 of the memory limit (cgroup v2 `memory.max`, else MemTotal), 16–256 MiB | cache size; negative disables the cache |
+| `WithIndexDir(dir)` / `--index-dir` / `LOGET_INDEX_DIR` | OS temp dir (`$TMPDIR`, else `/tmp`) | where the KV index's run files go (unlinked at creation, never reused across restarts). A default dir that is unusable is logged and the index stays on the heap; an explicit one that is unusable fails Open |
+| `WithIndexInMemory(true)` | false | keep the whole KV index on the Go heap (the behaviour before design 21; non-Unix builds always do) |
 | `WithInlineMax(n)` | 64 B | KV values up to `n` bytes stay in RAM; negative keeps none inline |
 | `WithSnapshotEvery(n)` | 0 (off) | snapshot (KV plus a section per derived index that can snapshot) and segment-index checkpoint every `n` commits, written synchronously. Open then reads each segment once instead of twice and restores the indexes from the snapshot, replaying only the tail (see "Open time") |
 | `WithReadAhead(n)` | 8 | segment reads kept in flight while replaying (open, time travel, index builds); 1 = sequential |
 | `WithCommitPolicy(CommitPolicy{MaxDelay, TargetBytes})` | no wait | a group commit waits up to `MaxDelay` for more transactions, until it holds `TargetBytes` (default 1 MiB) or `MaxBatch` (256) of them. Fewer, larger segment PUTs for more latency; see below |
+
+**Index directory.** Put it on a local disk, not tmpfs (`/tmp` is tmpfs on some
+distributions and containers): on tmpfs the mapped pages are shared memory, cannot be written
+back, and nothing is saved compared with the heap. Disk use is about the
+size of the index (tens of bytes per key version plus inline values;
+~320 MiB at 10M keys × 1 version). A full or failing disk is not fatal:
+the affected index falls back to the heap and
+`loget_kv_index_file_errors_total` counts it. Tradeoffs measured in
+[design/21-disk-key-index.md](design/21-disk-key-index.md): lower peak
+RSS, some read throughput lost.
 
 **Open time.** Open recovers each log (reads its segments to rebuild the
 segment index and check the hash chain) and then replays them into the
@@ -369,6 +385,7 @@ only grows, so run `gc --shrink` during maintenance windows.
   `loget_compaction_errors_total{kind}`,
   `loget_compaction_pause_seconds`, `loget_snapshots_total`,
   `loget_snapshot_errors_total`, `loget_value_cache_*`,
+  `loget_kv_index_file_errors_total`,
   `loget_branches`, `loget_head_lsn{branch="main"}`,
   `loget_writer_halted`, `loget_http_requests_total{route,code}`,
   `loget_http_request_duration_seconds{route}`,
