@@ -96,3 +96,24 @@ func TestFault(t *testing.T) {
 		}
 	}
 }
+
+// A run file never has a directory entry once Create returns, and on
+// Linux never at all (O_TMPFILE), so a SIGKILL leaves nothing behind.
+func TestCreateLeavesNoEntry(t *testing.T) {
+	dir := t.TempDir()
+	d, err := New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := d.Create()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Write([]byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if ents, err := os.ReadDir(dir); err != nil || len(ents) != 0 {
+		t.Fatalf("%d entries, %v", len(ents), err)
+	}
+	f.Release()
+}

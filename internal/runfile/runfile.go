@@ -65,12 +65,8 @@ func (d *Dir) Create() (*File, error) {
 	if err := d.fault("create"); err != nil {
 		return nil, err
 	}
-	f, err := os.CreateTemp(d.path, "loget-kv-*.run")
+	f, err := createAnon(d.path)
 	if err != nil {
-		return nil, err
-	}
-	if err := os.Remove(f.Name()); err != nil {
-		_ = f.Close()
 		return nil, err
 	}
 	rf := &File{d: d, f: f}
@@ -141,4 +137,19 @@ func (f *File) Release() {
 		f.f = nil
 	}
 	runtime.SetFinalizer(f, nil)
+}
+
+// createUnlinked creates a file in dir and removes its name. A process
+// killed between the two leaves the file behind; createAnon avoids that
+// window where the OS can (Linux O_TMPFILE).
+func createUnlinked(dir string) (*os.File, error) {
+	f, err := os.CreateTemp(dir, "loget-kv-*.run")
+	if err != nil {
+		return nil, err
+	}
+	if err := os.Remove(f.Name()); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return f, nil
 }
