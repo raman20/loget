@@ -191,7 +191,7 @@ func (db *DB) readSnapshot(ctx context.Context, l *logState, key string) (*snaps
 	if err := l.checkSnapshot(ctx, key, h); err != nil {
 		return nil, err
 	}
-	kv, err := index.LoadKV(kvb, db.opts.InlineMax)
+	kv, err := index.LoadKVOptions(kvb, db.kvOptions())
 	if err != nil {
 		return nil, err
 	}

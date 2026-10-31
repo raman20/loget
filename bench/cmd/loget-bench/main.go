@@ -18,6 +18,7 @@ suites:
   compact  storage, open time and heap before/after compaction (overwrite-heavy)
   commit   commit latency tails on the journal (8 MiB file growth steps)
   gc       disk size per cycle under overwrite + branch + rewind churn: compact vs gc vs gc+shrink
+  open     open time and memory of an existing database (ycsb -keep), then random reads
   calib    harness + VM noise floor (no-op latency)
   report   render results/*.json as markdown
 
@@ -44,6 +45,8 @@ func main() {
 		cmdCommit(args)
 	case "calib":
 		cmdCalib(args)
+	case "open":
+		cmdOpen(args)
 	case "report":
 		cmdReport(args)
 	default:

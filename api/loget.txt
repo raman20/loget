@@ -167,6 +167,9 @@ func WithClock(f func() int64) Option
 func WithCommitPolicy(p CommitPolicy) Option
 func WithHolder(s string) Option
 func WithIndex(k index.Kind) Option
+func WithIndexDir(dir string) Option
+func WithIndexFiles(f index.RunFiles) Option
+func WithIndexInMemory(on bool) Option
 func WithInlineMax(n int) Option
 func WithKEK(k []byte) Option
 func WithKeyProvider(p KeyProvider) Option
@@ -189,6 +192,9 @@ type Options struct {
 	Logf func(format string, args ...any)
 	InlineMax int
 	ValueCacheBytes int
+	IndexDir string
+	IndexInMemory bool
+	IndexFiles index.RunFiles
 	RepairTail bool
 	Indexes []index.Kind
 type Record struct {
@@ -224,6 +230,7 @@ type Stats struct {
 	ValueCacheHits   uint64    `json:"value_cache_hits"`
 	ValueCacheMisses uint64    `json:"value_cache_misses"`
 	ValueCacheBytes  int64     `json:"value_cache_bytes"`
+	KVIndexFileErrors uint64 `json:"kv_index_file_errors"`
 	Heads map[string]uint64 `json:"heads"`
 	Halted string `json:"halted,omitempty"`
 type Tx struct {

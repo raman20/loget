@@ -27,6 +27,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -36,6 +37,8 @@ import (
 	"github.com/raman20/loget"
 	"github.com/raman20/loget/examples/counter"
 	"github.com/raman20/loget/format"
+	"github.com/raman20/loget/index"
+	"github.com/raman20/loget/internal/runfile"
 	"github.com/raman20/loget/store"
 )
 
@@ -59,6 +62,7 @@ type Result struct {
 	Compacts         int
 	GCs              int
 	Faults           int
+	IndexFileFaults  int // injected KV index run-file failures (every 4th seed keeps runs in files)
 	TraceHash        [32]byte
 }
 
@@ -97,6 +101,10 @@ type sim struct {
 	lsns   []uint64 // LSNs of the ids last returned by recovered
 	res    Result
 	trace  []string
+	// files: the KV index run files (nil = heap), in indexDir
+	files      index.RunFiles
+	indexDir   string
+	fileFaults atomic.Int64
 }
 
 type txPrefix struct {
@@ -129,6 +137,48 @@ func (s *sim) fail(f string, a ...any) error {
 
 func (s *sim) log(f string, a ...any) { s.trace = append(s.trace, fmt.Sprintf(f, a...)) }
 
+// indexFiles puts every KV run in a run file whose operations fail with a
+// per-seed probability (0, 2% or 20%).
+func (s *sim) indexFiles() error {
+	if !runfile.Supported {
+		return nil
+	}
+	dir, err := os.MkdirTemp("", "loget-sim-index-")
+	if err != nil {
+		return err
+	}
+	d, err := runfile.New(dir)
+	if err != nil {
+		os.RemoveAll(dir)
+		return err
+	}
+	p := []float64{0, 0.02, 0.2}[s.seed/4%3]
+	var mu sync.Mutex
+	rng := rand.New(rand.NewSource(s.seed ^ 0x1dec5))
+	d.Fault = func(op string) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if rng.Float64() < p {
+			s.fileFaults.Add(1)
+			return fmt.Errorf("sim: injected run-file %s fault", op)
+		}
+		return nil
+	}
+	s.files, s.indexDir = simFiles{d}, dir
+	return nil
+}
+
+// simFiles adapts runfile.Dir to index.RunFiles.
+type simFiles struct{ d *runfile.Dir }
+
+func (f simFiles) Create() (index.RunFile, error) {
+	rf, err := f.d.Create()
+	if err != nil {
+		return nil, err
+	}
+	return rf, nil
+}
+
 func (s *sim) open() (*loget.DB, error) {
 	var last error
 	on, probs := s.st.On, s.st.P
@@ -149,7 +199,8 @@ func (s *sim) open() (*loget.DB, error) {
 			loget.WithLogf(func(string, ...any) {}), loget.WithIndex(counter.Kind()),
 			// even seeds keep every value as a log position (none inline),
 			// and every third seed reads them without the value cache
-			loget.WithInlineMax(int(s.seed%2)*64-1), loget.WithValueCacheBytes(map[bool]int{true: -1}[s.seed%3 == 0]))
+			loget.WithInlineMax(int(s.seed%2)*64-1), loget.WithValueCacheBytes(map[bool]int{true: -1}[s.seed%3 == 0]),
+			loget.WithIndexFiles(s.files))
 		if err == nil {
 			return db, nil
 		}
@@ -179,6 +230,12 @@ func Run(seed int64, cfg Config) (Result, error) {
 	s.rnd = &lockedRand{r: rand.New(rand.NewSource(seed ^ 0x5eed))}
 	s.mem = store.NewMem()
 	s.st = store.NewFaulty(s.mem, seed*7919+1, cfg.Probs)
+	if seed%4 == 1 {
+		if err := s.indexFiles(); err != nil {
+			return s.res, err
+		}
+		defer os.RemoveAll(s.indexDir)
+	}
 	var err error
 	if s.db, err = s.open(); err != nil {
 		return s.res, s.fail("initial open: %v", err)
@@ -209,6 +266,12 @@ func Run(seed int64, cfg Config) (Result, error) {
 		return s.res, err
 	}
 	s.db.Close()
+	s.res.IndexFileFaults = int(s.fileFaults.Load())
+	if s.files != nil {
+		if ents, err := os.ReadDir(s.indexDir); err != nil || len(ents) != 0 {
+			return s.res, s.fail("index dir: %d files left, %v", len(ents), err)
+		}
+	}
 	h := sha256.New()
 	for _, t := range s.trace {
 		h.Write([]byte(t))

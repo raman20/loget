@@ -59,6 +59,22 @@ type Options struct {
 	// 0 = default: 1/16 of the memory limit (cgroup v2, else MemTotal),
 	// between 16 and 256 MiB; negative = no cache.
 	ValueCacheBytes int
+	// IndexDir is where the KV index keeps its large runs (design 21):
+	// memory-mapped files, unlinked as soon as they are created, so the
+	// directory never shows them and a crash leaves nothing behind. The
+	// pages are file-backed, so the kernel can evict them under memory
+	// pressure instead of the index holding them on the Go heap. Use a
+	// local disk: on tmpfs the pages are RAM again. "" = os.TempDir();
+	// if that is unusable the index stays on the heap (logged). An
+	// explicit directory that is unusable fails Open. CLI: --index-dir.
+	IndexDir string
+	// IndexInMemory keeps the whole KV index on the Go heap (no run
+	// files), as before design 21.
+	IndexInMemory bool
+	// IndexFiles, if set, supplies the run files and puts every run in
+	// one, however small (simulations and tests inject faults with it).
+	// Overrides IndexDir.
+	IndexFiles index.RunFiles
 	// RepairTail lets open repair a damaged final segment by keeping its
 	// valid prefix. The damaged object stays in place; a create-only
 	// repair note (log/<id>/<seq>.repair) records which prefix is kept.
@@ -86,6 +102,11 @@ func WithInlineMax(n int) Option             { return func(o *Options) { o.Inlin
 func WithValueCacheBytes(n int) Option       { return func(o *Options) { o.ValueCacheBytes = n } }
 func WithRepairTail(on bool) Option          { return func(o *Options) { o.RepairTail = on } }
 func WithReadAhead(n int) Option             { return func(o *Options) { o.ReadAhead = n } }
+func WithIndexDir(dir string) Option         { return func(o *Options) { o.IndexDir = dir } }
+func WithIndexInMemory(on bool) Option       { return func(o *Options) { o.IndexInMemory = on } }
+
+// WithIndexFiles supplies the KV index run files (Options.IndexFiles).
+func WithIndexFiles(f index.RunFiles) Option { return func(o *Options) { o.IndexFiles = f } }
 
 const (
 	defaultReadAhead  = 8
@@ -118,7 +139,9 @@ type DB struct {
 	views   map[string]*view   // live views of writable logs
 	writers map[string]*writer // by log id
 	vcache  *valueCache
-	met     metrics
+	// runFiles holds the KV index's large runs (nil = Go heap; design 21).
+	runFiles index.RunFiles
+	met      metrics
 	// bw caches branch name -> writer for the read path; nil = rebuild.
 	// Reset (under db.mu held exclusively) whenever refs, writers or
 	// closed change, so readers never need db.mu on a hit.
@@ -225,7 +248,11 @@ func OpenStore(ctx context.Context, st store.Store, opts ...Option) (*DB, error)
 	if err != nil {
 		return nil, err
 	}
-	db := &DB{st: &holdStore{Store: st}, opts: o, reg: reg, vcache: newValueCache(o.ValueCacheBytes), logs: map[string]*logState{}, views: map[string]*view{}, writers: map[string]*writer{}}
+	files, err := openRunFiles(o)
+	if err != nil {
+		return nil, err
+	}
+	db := &DB{runFiles: files, st: &holdStore{Store: st}, opts: o, reg: reg, vcache: newValueCache(o.ValueCacheBytes), logs: map[string]*logState{}, views: map[string]*view{}, writers: map[string]*writer{}}
 	if err := db.start(ctx, st); err != nil {
 		// Writers of branches opened before the failure are running, and
 		// the value cache holds memory: stop both without further writes.

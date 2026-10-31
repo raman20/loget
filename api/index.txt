@@ -30,6 +30,7 @@ func (l *KV) Snapshot() []byte
 type KVOptions struct {
 	Inline int
 	Files RunFiles
+	MinFileRun int
 	OnFileError func(error)
 type Kind struct {
 	Name string

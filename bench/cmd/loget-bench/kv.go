@@ -40,6 +40,11 @@ func openKV(system, dir string, fsync bool) (KV, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
+	return openSystem(system, dir, fsync)
+}
+
+// openSystem opens system on dir as it is (a fresh or an existing database).
+func openSystem(system, dir string, fsync bool) (KV, error) {
 	switch system {
 	case "loget", "loget-files", "loget-journal":
 		return openFresh(dir, fsync, logetLayout(system))
@@ -82,6 +87,10 @@ func logetLayout(system string) store.Layout {
 // valueCacheBytes overrides LogEt's default value cache (0 = default).
 var valueCacheBytes int
 
+// indexInMemory keeps LogEt's whole KV index on the Go heap (no run files,
+// as before design 21).
+var indexInMemory bool
+
 func openLogEt(dir string, fsync bool, layout store.Layout) (*loget.DB, error) {
 	var s store.Store
 	var err error
@@ -104,6 +113,9 @@ func openLogEt(dir string, fsync bool, layout store.Layout) (*loget.DB, error) {
 	opts := []loget.Option{loget.WithLogf(func(string, ...any) {})}
 	if valueCacheBytes != 0 {
 		opts = append(opts, loget.WithValueCacheBytes(valueCacheBytes))
+	}
+	if indexInMemory {
+		opts = append(opts, loget.WithIndexInMemory(true))
 	}
 	return loget.OpenStore(context.Background(), st, opts...)
 }

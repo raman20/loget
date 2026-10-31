@@ -57,7 +57,8 @@ type KV struct {
 	runs      []*run    // newest first
 	mgs       []*merger // merges in progress, of disjoint adjacent runs
 	inline    int       // values longer than this are kept as positions
-	files     RunFiles  // runs of at least minFileRun bytes go here (nil = heap)
+	files     RunFiles  // runs of at least minFile bytes go here (nil = heap)
+	minFile   int
 	onFileErr func(error)
 }
 
@@ -67,9 +68,11 @@ type KVOptions struct {
 	// ones (whose position in the log is known) as positions (NewKVInline).
 	Inline int
 	// Files, if set, keeps runs (the immutable, compressed part of the
-	// index) of at least 1 MiB in run files instead of the Go heap
-	// (design 21).
+	// index) of at least MinFileRun bytes in run files instead of the Go
+	// heap (design 21).
 	Files RunFiles
+	// MinFileRun: smaller runs stay on the heap. 0 = 1 MiB.
+	MinFileRun int
 	// OnFileError is called when a run file cannot be created, written or
 	// mapped; the KV then keeps its runs on the heap from that point on.
 	OnFileError func(error)
@@ -139,13 +142,17 @@ func NewKVInline(max int) *KV { return NewKVOptions(KVOptions{Inline: max}) }
 
 // NewKVOptions returns a KV index configured by o.
 func NewKVOptions(o KVOptions) *KV {
-	return &KV{m: map[string]vers{}, inline: max(o.Inline, 0), hotMax: hotMax, recentMax: recentMax, files: o.Files, onFileErr: o.OnFileError}
+	l := &KV{m: map[string]vers{}, inline: max(o.Inline, 0), hotMax: hotMax, recentMax: recentMax, files: o.Files, minFile: o.MinFileRun, onFileErr: o.OnFileError}
+	if l.minFile <= 0 {
+		l.minFile = minFileRun
+	}
+	return l
 }
 
 // builder returns a builder for a run of about est bytes: a run file if
 // the KV has a directory and the run is not small, else the heap.
 func (l *KV) builder(est int) *builder {
-	if l.files != nil && est >= minFileRun {
+	if l.files != nil && est >= l.minFile {
 		w, err := newFileBuilder(l.files)
 		if err == nil {
 			return w

@@ -13,6 +13,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -93,6 +94,8 @@ Key-encryption key: --kek-file F or LOGET_KEK (64 hex chars or base64 of
 A damaged final log segment makes open fail (ErrCorrupt); --repair-tail
 (with serve or any local command) keeps its valid prefix instead, leaving
 the damaged object in place with a repair note. Prefer restoring from a backup.
+--index-dir D (or LOGET_INDEX_DIR) is where the KV index maps its large runs
+(unlinked files; default the system temp dir); use a local disk, not tmpfs.
 `
 
 type cli struct {
@@ -429,6 +432,9 @@ func keyOpts(flags map[string]string) []loget.Option {
 	o := []loget.Option{loget.WithHolder(fmt.Sprintf("loget %s, %s, %s", buildVersion(), strings.Join(os.Args[1:2], ""), loget.HolderName()))}
 	if flags["repair-tail"] != "" {
 		o = append(o, loget.WithRepairTail(true))
+	}
+	if d := cmp.Or(flags["index-dir"], os.Getenv("LOGET_INDEX_DIR")); d != "" {
+		o = append(o, loget.WithIndexDir(d))
 	}
 	if f := flags["kek-file"]; f != "" {
 		return append(o, loget.WithKeyProvider(loget.KeyFromFile(f)))

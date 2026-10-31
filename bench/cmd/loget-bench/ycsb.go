@@ -64,6 +64,7 @@ type ycsbParams struct {
 	GOGC           string  `json:"GOGC,omitempty"`
 	GOMEMLIMIT     string  `json:"GOMEMLIMIT,omitempty"`
 	CompactBetween bool    `json:"compact_between_workloads,omitempty"`
+	IndexInMemory  bool    `json:"index_in_memory,omitempty"`
 }
 
 func keyName(i uint64) string { return fmt.Sprintf("user%019d", i) }
@@ -89,6 +90,8 @@ func cmdYCSB(args []string) {
 	compactBetween := fs.Bool("compact-between", false, "loget only: Compact (grace 0) after each workload, as serve --compact-every would")
 	memprof := fs.String("memprofile", "", "write heap profiles to <prefix>-<phase>.pb.gz after load and after each workload")
 	fs.IntVar(&valueCacheBytes, "value-cache", 0, "loget only: value cache bytes (0 = the library default; -1 = off)")
+	fs.BoolVar(&indexInMemory, "index-in-memory", false, "loget only: keep the whole KV index on the Go heap (no run files)")
+	keep := fs.Bool("keep", false, "keep the data directory (for the open suite)")
 	fs.Parse(args)
 	clients := parseInts(*clientsF)
 
@@ -212,9 +215,11 @@ func cmdYCSB(args []string) {
 	res.Params = ycsbParams{System: *system, Fsync: *fsync, Keys: *keys, ValueBytes: *vsize, Workloads: *wls, Clients: clients,
 		Warmup: warm.String(), Duration: dur.String(), OpenFrac: *frac, OpenCap: *openCap, Seed: *seed, Theta: *theta, ValueCache: valueCacheBytes,
 		LoadSecs: round(loadSecs, 2), LoadRate: round(float64(*keys)/loadSecs, 0), DiskAfter: diskUsage(dir), PeakRSS: peakRSS(), Memory: memS.result(), PageCache: pc,
-		GOGC: os.Getenv("GOGC"), GOMEMLIMIT: os.Getenv("GOMEMLIMIT"), CompactBetween: *compactBetween}
+		GOGC: os.Getenv("GOGC"), GOMEMLIMIT: os.Getenv("GOMEMLIMIT"), CompactBetween: *compactBetween, IndexInMemory: indexInMemory}
 	writeResult(*out, fmt.Sprintf("ycsb-%s-fsync-%v", *system, *fsync), res)
-	wipe(dir)
+	if !*keep {
+		wipe(dir)
+	}
 }
 
 func parseInts(s string) []int {

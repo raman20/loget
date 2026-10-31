@@ -254,6 +254,7 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	p.histogram("loget_compaction_pause_seconds", "Commit pause per compaction or GC run.", st.CompactionPause)
 	p.counter("loget_snapshots_total", "KV snapshots written.", st.Snapshots)
 	p.counter("loget_snapshot_errors_total", "KV snapshots that failed (non-fatal).", st.SnapshotErrors)
+	p.counter("loget_kv_index_file_errors_total", "KV index run files that failed; each moved one index to the heap.", st.KVIndexFileErrors)
 	p.counter("loget_value_cache_hits_total", "Value cache hits.", st.ValueCacheHits)
 	p.counter("loget_value_cache_misses_total", "Value cache misses.", st.ValueCacheMisses)
 	p.gauge("loget_value_cache_capacity_bytes", "Value cache capacity.", float64(st.ValueCacheBytes))

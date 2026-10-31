@@ -1,8 +1,7 @@
 package index
 
-// Runs of at least minFileRun bytes go to run files when the KV has them
-// (design 21); smaller ones stay on the heap. A var so tests can put every
-// run in a file.
+// minFileRun is the default KVOptions.MinFileRun. A var so tests can put
+// every run in a file.
 var minFileRun = 1 << 20
 
 // fileBuf is how many bytes a file builder buffers before writing.

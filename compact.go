@@ -336,7 +336,7 @@ func (db *DB) writeBase(ctx context.Context, l *logState, v *view, head uint64, 
 	}
 	key := fmt.Sprintf("base/%s/%020d-e%d-%s", l.meta.ID, head, db.epoch, hex.EncodeToString(nonce))
 	id := l.meta.ID
-	kv := index.NewKVInline(db.opts.InlineMax)
+	kv := index.NewKVOptions(db.kvOptions())
 	cw := &chunkWriter{db: db, key: key}
 	v.mu.RLock()
 	defer v.mu.RUnlock()
@@ -499,7 +499,7 @@ func (db *DB) loadBase(ctx context.Context, b *logState) (*baseImage, error) {
 	if n != uint64(len(body)) {
 		return nil, bad("bad length")
 	}
-	kv, err := index.LoadKVBase(body, db.opts.InlineMax)
+	kv, err := index.LoadKVBaseOptions(body, db.kvOptions())
 	if err != nil {
 		return nil, bad(err.Error())
 	}

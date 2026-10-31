@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/raman20/loget/internal/runfile"
 	"github.com/raman20/loget/store"
 )
 
@@ -24,7 +25,15 @@ func crashChild(loc string) {
 	if err != nil {
 		panic(err)
 	}
-	db, err := OpenStore(ctx, st, WithLogf(func(string, ...any) {}), WithSnapshotEvery(50), WithIndex(tallyKind()))
+	opts := []Option{WithLogf(func(string, ...any) {}), WithSnapshotEvery(50), WithIndex(tallyKind())}
+	if d := os.Getenv("LOGET_CRASH_INDEXDIR"); d != "" {
+		rd, err := runfile.New(d)
+		if err != nil {
+			panic(err)
+		}
+		opts = append(opts, WithIndexFiles(runFiles{rd})) // every run in a file
+	}
+	db, err := OpenStore(ctx, st, opts...)
 	if err != nil {
 		fmt.Println("OPENERR", err)
 		os.Exit(3)
@@ -99,6 +108,15 @@ func TestCrashKill9CompactJournal(t *testing.T) {
 	crashKill9(t, "journal://"+t.TempDir(), "LOGET_CRASH_COMPACT=1")
 }
 
+// Same, with every KV run in a mapped run file: the kill leaves no file
+// behind and recovery (reading runs from files) keeps the invariants.
+func TestCrashKill9IndexFiles(t *testing.T) {
+	if !runfile.Supported {
+		t.Skip("run files need mmap")
+	}
+	crashKill9(t, "journal://"+t.TempDir(), "LOGET_CRASH_COMPACT=1", "LOGET_CRASH_INDEXDIR="+t.TempDir())
+}
+
 // crashKill9 repeatedly SIGKILLs a committing child process on the store at
 // loc (a store URL or bare path) and checks the recovered state.
 func crashKill9(t *testing.T, dir string, env ...string) {
@@ -140,13 +158,21 @@ func crashKill9(t *testing.T, dir string, env ...string) {
 		cmd.Process.Kill() // SIGKILL mid-write
 		cmd.Wait()
 		<-done
+		var recOpts []Option
+		for _, e := range env {
+			if d, ok := strings.CutPrefix(e, "LOGET_CRASH_INDEXDIR="); ok {
+				noFiles(t, d)
+				fs, _ := testIndexFiles(t, d, nil)
+				recOpts = append(recOpts, WithIndexFiles(fs))
+			}
+		}
 
 		// recover in-process and check the invariants
 		st, err := store.Open(dir)
 		if err != nil {
 			t.Fatalf("iter %d: store: %v", it, err)
 		}
-		db, err := OpenStore(ctx, st, quiet(), WithIndex(tallyKind()))
+		db, err := OpenStore(ctx, st, append([]Option{quiet(), WithIndex(tallyKind())}, recOpts...)...)
 		if err != nil {
 			t.Fatalf("iter %d: reopen: %v", it, err)
 		}

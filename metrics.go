@@ -79,6 +79,7 @@ type metrics struct {
 	gcs, gcErrors                    atomic.Uint64
 	compactLat                       LatencyHistogram
 	snapshots, snapshotErrors        atomic.Uint64
+	kvFileErrors                     atomic.Uint64
 	halted                           atomic.Pointer[error] // first writer halt
 }
 
@@ -106,6 +107,10 @@ type Stats struct {
 	ValueCacheHits   uint64    `json:"value_cache_hits"`
 	ValueCacheMisses uint64    `json:"value_cache_misses"`
 	ValueCacheBytes  int64     `json:"value_cache_bytes"` // capacity
+	// KVIndexFileErrors: KV index run files that could not be created,
+	// written or mapped (Options.IndexDir); each moved one index to the
+	// Go heap.
+	KVIndexFileErrors uint64 `json:"kv_index_file_errors"`
 	// Heads is the head LSN of every branch.
 	Heads map[string]uint64 `json:"heads"`
 	// Halted is the error that stopped a writer ("" if none); commits on
@@ -121,7 +126,7 @@ func (db *DB) Stats() Stats {
 		CommitLatency: m.commitLat.Snapshot(), Segments: m.segments.Load(), SegmentBytes: m.segmentBytes.Load(),
 		SegmentWrite: m.segmentLat.Snapshot(), Compactions: m.compactions.Load(), CompactionErrors: m.compactErrors.Load(),
 		GCs: m.gcs.Load(), GCErrors: m.gcErrors.Load(), CompactionPause: m.compactLat.Snapshot(),
-		Snapshots: m.snapshots.Load(), SnapshotErrors: m.snapshotErrors.Load(),
+		Snapshots: m.snapshots.Load(), SnapshotErrors: m.snapshotErrors.Load(), KVIndexFileErrors: m.kvFileErrors.Load(),
 		Heads: db.Branches(),
 	}
 	s.ValueCacheHits, s.ValueCacheMisses, s.ValueCacheBytes = db.vcache.counts()

@@ -54,7 +54,7 @@ func (v *view) apply(e *index.Entry) {
 func (db *DB) buildView(ctx context.Context, l *logState, upto uint64, snap *snapshot) (*view, error) {
 	env := db.env
 	kinds := db.reg.Derived()
-	v := &view{log: l, env: env, kv: index.NewKVInline(db.opts.InlineMax), derived: make([]index.Index, len(kinds))}
+	v := &view{log: l, env: env, kv: index.NewKVOptions(db.kvOptions()), derived: make([]index.Index, len(kinds))}
 	var bimg *baseImage
 	if b := l.based(); b != nil {
 		if upto < b.meta.Base.LSN {
