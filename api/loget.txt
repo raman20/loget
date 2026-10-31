@@ -45,12 +45,13 @@ type BackupReport struct {
 	CopiedB int64 `json:"copied_bytes"`
 	Removed int   `json:"removed"`
 type BaseMeta struct {
-	LSN    uint64 `json:"lsn"`
-	Seq    uint64 `json:"seq"`
-	Key    string `json:"key"`
-	Chunks int    `json:"chunks"`
-	Chain  string `json:"chain"`
-	TS     int64  `json:"ts"`
+	LSN    uint64         `json:"lsn"`
+	Seq    uint64         `json:"seq"`
+	Key    string         `json:"key"`
+	Chunks int            `json:"chunks"`
+	Chain  string         `json:"chain"`
+	TS     int64          `json:"ts"`
+	Run    *index.RunMeta `json:"run,omitempty"`
 type Branch struct {
 func (b *Branch) Head() (uint64, error)
 func (b *Branch) Name() string
@@ -69,6 +70,14 @@ type Certificate struct {
 	TS          int64    `json:"ts"`
 	PublicKey   string   `json:"public_key"`
 	Signature   string   `json:"signature,omitempty"`
+type CkptMeta struct {
+	LSN   uint64    `json:"lsn"`
+	Floor uint64    `json:"floor"`
+	Key   string    `json:"key"`
+	Runs  []CkptRun `json:"runs"`
+type CkptRun struct {
+	Key    string `json:"key"`
+	Pieces int    `json:"pieces"`
 type CommitPolicy struct {
 	MaxDelay    time.Duration
 	TargetBytes int
@@ -129,6 +138,7 @@ type Garbage struct {
 	Below  uint64 `json:"below,omitempty"`
 	Key    string `json:"key,omitempty"`
 	Chunks int    `json:"chunks,omitempty"`
+	Pieces int    `json:"pieces,omitempty"`
 	After  int64  `json:"after"`
 type Histogram struct {
 	Counts []uint64 `json:"counts"`
@@ -164,6 +174,7 @@ type LogMeta struct {
 	SnapLSN   uint64 `json:"snap_lsn,omitempty"`
 	SnapKey   string `json:"snap_key,omitempty"`
 	Base *BaseMeta `json:"base,omitempty"`
+	Ckpt *CkptMeta `json:"ckpt,omitempty"`
 type Manifest struct {
 	Format  int                 `json:"format"`
 	ID      uint64              `json:"id"`
@@ -176,6 +187,7 @@ type Manifest struct {
 	Garbage []Garbage           `json:"garbage,omitempty"`
 type Op = format.Op
 type Option func(*Options)
+func WithCheckpointBytes(n int64) Option
 func WithClock(f func() int64) Option
 func WithCommitPolicy(p CommitPolicy) Option
 func WithHolder(s string) Option
@@ -199,6 +211,7 @@ type Options struct {
 	KEK []byte
 	Keys KeyProvider
 	SnapshotEvery int
+	CheckpointBytes int64
 	ReadAhead int
 	MaxBatch int
 	Commit CommitPolicy
@@ -237,12 +250,13 @@ type Stats struct {
 	CompactionErrors uint64    `json:"compaction_errors"`
 	GCs              uint64    `json:"gcs"`
 	GCErrors         uint64    `json:"gc_errors"`
-	CompactionPause  Histogram `json:"compaction_pause"`
-	Snapshots        uint64    `json:"snapshots"`
-	SnapshotErrors   uint64    `json:"snapshot_errors"`
-	ValueCacheHits   uint64    `json:"value_cache_hits"`
-	ValueCacheMisses uint64    `json:"value_cache_misses"`
-	ValueCacheBytes  int64     `json:"value_cache_bytes"`
+	CompactionPause Histogram `json:"compaction_pause"`
+	Snapshots           uint64 `json:"snapshots"`
+	SnapshotErrors      uint64 `json:"snapshot_errors"`
+	CheckpointFallbacks uint64 `json:"checkpoint_fallbacks"`
+	ValueCacheHits      uint64 `json:"value_cache_hits"`
+	ValueCacheMisses    uint64 `json:"value_cache_misses"`
+	ValueCacheBytes     int64  `json:"value_cache_bytes"`
 	KVIndexFileErrors uint64 `json:"kv_index_file_errors"`
 	Heads map[string]uint64 `json:"heads"`
 	Halted string `json:"halted,omitempty"`

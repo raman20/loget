@@ -115,7 +115,8 @@ func TestRecoverIgnoresStaleList(t *testing.T) {
 // A segment missing in the middle is a hole: ErrCorrupt, never a shorter log.
 func TestRecoverDetectsHole(t *testing.T) {
 	mem := store.NewMem()
-	db := mustOpen(t, mem)
+	db := mustOpen(t, mem, WithCheckpointBytes(-1)) // a checkpoint at the head means open lists no segment before it
+
 	for i := 0; i < 5; i++ {
 		db.Put(ctx, fmt.Sprintf("k%d", i), []byte("v"))
 	}

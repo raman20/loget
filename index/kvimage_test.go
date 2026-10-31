@@ -162,10 +162,12 @@ func TestLoadKVRunsRejects(t *testing.T) {
 		"bad count":   mut(func(s *RunSource, _ []byte) { s.Meta.N++ }),
 		"bad len":     mut(func(s *RunSource, _ []byte) { s.Meta.Len-- }),
 		"no sums":     mut(func(s *RunSource, _ []byte) { s.Meta.Sums = nil }),
+		"no piece":    mut(func(s *RunSource, _ []byte) { s.Meta.Piece = 0 }),
+		"big piece":   mut(func(s *RunSource, _ []byte) { s.Meta.Piece = maxPieceBytes + 1 }),
 		// a damaged entry with matching checksums: the structural check
 		"bad entry (sum ok)": mut(func(s *RunSource, b []byte) {
 			b[0] = 5 // the first key shares a prefix with nothing
-			s.Meta = RunMeta{Len: s.Meta.Len, N: s.Meta.N, Vers: s.Meta.Vers}
+			s.Meta = RunMeta{Len: s.Meta.Len, N: s.Meta.N, Vers: s.Meta.Vers, Piece: s.Meta.Piece}
 			for p := 0; p < len(b); p += PieceBytes {
 				s.Meta.Sums = append(s.Meta.Sums, crc32.Checksum(b[p:min(p+PieceBytes, len(b))], Castagnoli))
 			}

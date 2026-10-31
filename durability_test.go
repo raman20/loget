@@ -191,8 +191,13 @@ func TestVerifyScrub(t *testing.T) {
 	if err != nil || !r.OK || !r.Scrubbed || r.Objects == 0 || r.Snapshots == 0 {
 		t.Fatalf("clean verify: %+v %v", r, err)
 	}
-	sk := db.Manifest().Logs["L1"].SnapKey
-	st.Raw(func(o map[string][]byte) { o[sk][len(o[sk])/2] ^= 1 })
+	c := db.Manifest().Logs["L1"].Ckpt
+	if c == nil || len(c.Runs) == 0 {
+		t.Fatalf("no index checkpoint: %+v", c)
+	}
+	sk := ckptDescObj(c.Key)
+	piece := ckptPieceKey(c.Runs[0].Key, 0) // damage a run piece: its CRC catches it
+	st.Raw(func(o map[string][]byte) { o[piece][len(o[piece])/2] ^= 1 })
 	r, err = db.Verify(ctx)
 	if err != nil || !strings.Contains(strings.Join(r.Warnings, ";"), sk) {
 		t.Fatalf("damaged snapshot not reported: %+v %v", r, err)

@@ -21,6 +21,9 @@ type view struct {
 	env     index.Env
 	kv      *index.KV     // the record store
 	derived []index.Index // in registry order (db.reg.Derived())
+	// ckMu serialises index checkpoints of this view (ckpt.go): a run's
+	// stored key is set by one and read by the next.
+	ckMu sync.Mutex
 }
 
 // indexes returns every index of the view, the record store first.
@@ -47,7 +50,8 @@ func (v *view) apply(e *index.Entry) {
 }
 
 // buildView folds the lineage of log up to `upto`. The record store
-// starts from the newest of the snapshot and the compaction base. Each
+// starts from the snapshot (an index checkpoint) if it is at or after the
+// compaction base, else from the base. Each
 // derived index starts from its snapshot section if it has one, or else
 // from the base's records in its spaces, and then folds the rest of the
 // log.
@@ -55,21 +59,30 @@ func (db *DB) buildView(ctx context.Context, l *logState, upto uint64, snap *sna
 	env := db.env
 	kinds := db.reg.Derived()
 	v := &view{log: l, env: env, kv: index.NewKVOptions(db.kvOptions()), derived: make([]index.Index, len(kinds))}
+	b := l.based()
+	if b != nil && upto < b.meta.Base.LSN {
+		return nil, fmt.Errorf("%w: LSN %d < base %d", ErrCompacted, upto, b.meta.Base.LSN)
+	}
+	if snap != nil && (snap.lsn > upto || b != nil && snap.lsn < b.meta.Base.LSN) {
+		snap = nil
+	}
+	// The base is read only when needed (design 24): for the record
+	// store without a newer checkpoint, or for a derived index without
+	// a section.
 	var bimg *baseImage
-	if b := l.based(); b != nil {
-		if upto < b.meta.Base.LSN {
-			return nil, fmt.Errorf("%w: LSN %d < base %d", ErrCompacted, upto, b.meta.Base.LSN)
+	loadBase := func() error {
+		if bimg != nil {
+			return nil
 		}
 		var err error
-		if bimg, err = db.loadBase(ctx, b); err != nil {
+		bimg, err = db.loadBase(ctx, b)
+		return err
+	}
+	if b != nil && snap == nil {
+		if err := loadBase(); err != nil {
 			return nil, err
 		}
-		if snap == nil || snap.lsn < bimg.lsn {
-			snap = &snapshot{lsn: bimg.lsn, kv: bimg.kv, drop: db.keys.shreddedList()}
-		}
-	}
-	if snap == nil || snap.lsn > upto {
-		snap = nil
+		snap = &snapshot{lsn: bimg.lsn, kv: bimg.kv, drop: db.keys.shreddedList()}
 	}
 	var from uint64 // the record store holds LSNs ≤ from
 	if snap != nil {
@@ -91,7 +104,10 @@ func (db *DB) buildView(ctx context.Context, l *logState, upto uint64, snap *sna
 			}
 		}
 		v.derived[i] = k.New()
-		if bimg != nil {
+		if b != nil {
+			if err := loadBase(); err != nil {
+				return nil, err
+			}
 			fromBase, froms[i] = append(fromBase, i), bimg.lsn
 		}
 	}

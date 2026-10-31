@@ -96,7 +96,8 @@ func TestPutExactlyOnceOutcomes(t *testing.T) {
 // segment of L1 in half. It returns that segment's key and damaged bytes.
 func tornTail(t *testing.T, st *store.Mem) (string, []byte) {
 	t.Helper()
-	db := mustOpen(t, st)
+	db := mustOpen(t, st, WithCheckpointBytes(-1)) // a Close checkpoint would cover the torn segment
+
 	for i := 0; i < 10; i++ {
 		if err := db.Put(ctx, fmt.Sprint("k", i), []byte("v")); err != nil {
 			t.Fatal(err)
@@ -136,7 +137,8 @@ func (n noDeletes) Delete(ctx context.Context, k string) error {
 func TestRepairTailNeverRewrites(t *testing.T) {
 	st := store.NewMem()
 	seg, torn := tornTail(t, st)
-	db, err := OpenStore(ctx, noDeletes{st, t}, quiet(), WithRepairTail(true))
+	// no Close checkpoints: open would not read the damaged segment again
+	db, err := OpenStore(ctx, noDeletes{st, t}, quiet(), WithRepairTail(true), WithCheckpointBytes(-1))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +153,7 @@ func TestRepairTailNeverRewrites(t *testing.T) {
 		t.Fatal("damaged segment was rewritten")
 	}
 	// the note makes the repair permanent: no flag needed any more
-	db = mustOpen(t, st)
+	db = mustOpen(t, st, WithCheckpointBytes(-1))
 	for _, k := range []string{"k8", "after"} {
 		if _, err := db.Get(ctx, k); err != nil {
 			t.Fatalf("%s after repair: %v", k, err)

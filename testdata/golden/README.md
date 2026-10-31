@@ -5,6 +5,10 @@ Golden databases for TestGoldenRead / TestGoldenBytes (docs/compatibility.md).
   (docs/rebrand/README.md), so freshDB data is not readable by design.
   The first LogEt release adds `vX.Y.Z/` here.
 
+- `d557e72/`, `d557e72-compacted/`: unreleased, the format before design
+  24 (LGSNAP2 snapshots, single-object `.base` bases, manifest format 2),
+  kept so TestGoldenRead keeps those readable.
+
 - `main/`, `main-compacted/`: written by TestGoldenBytes with
   `LOGET_UPDATE_GOLDEN=1` (only for an intended format change).
 

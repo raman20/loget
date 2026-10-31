@@ -30,14 +30,22 @@ type Options struct {
 	KEK []byte
 	// Keys, if set, supplies the KEK at open (overrides KEK).
 	Keys KeyProvider
-	// SnapshotEvery writes a snapshot and a segment-index checkpoint every
-	// N commits per log (<= 0 = never, the default). Open then recovers
-	// the log from the checkpoint (reading only the segments after it)
-	// and restores the record store and every derived index that can
-	// snapshot itself (index.Kind.Restore). A derived index that cannot is
-	// rebuilt by reading every segment once. Snapshots are written
-	// synchronously in the commit path and copy the whole state.
+	// SnapshotEvery writes an index checkpoint and a segment-index
+	// checkpoint every N commits per log, synchronously in the commit path
+	// (<= 0 = never, the default; then CheckpointBytes decides). Open
+	// recovers the log from the segment-index checkpoint (reading only the
+	// segments after it) and restores the record store from the stored
+	// runs and every derived index that can snapshot itself
+	// (index.Kind.Restore). A derived index that cannot is rebuilt by
+	// reading every segment once. An index checkpoint stores only the
+	// runs no earlier checkpoint stored (design 24).
 	SnapshotEvery int
+	// CheckpointBytes starts an index checkpoint in the background once a
+	// log has written this many segment bytes since the last one, unless
+	// SnapshotEvery is set; Close also checkpoints every log with commits
+	// past its checkpoint. 0 = default (512 MiB); negative = never (open
+	// then replays from the base or a SnapshotEvery checkpoint).
+	CheckpointBytes int64
 	// ReadAhead is how many segment reads a replay (open, time travel,
 	// index builds) keeps in flight. 0 = default (8); 1 = one at a time.
 	ReadAhead int
@@ -97,6 +105,7 @@ func WithKEK(k []byte) Option         { return func(o *Options) { o.KEK = k } }
 func WithCommitPolicy(p CommitPolicy) Option { return func(o *Options) { o.Commit = p } }
 
 func WithSnapshotEvery(n int) Option         { return func(o *Options) { o.SnapshotEvery = n } }
+func WithCheckpointBytes(n int64) Option     { return func(o *Options) { o.CheckpointBytes = n } }
 func WithLogf(f func(string, ...any)) Option { return func(o *Options) { o.Logf = f } }
 func WithInlineMax(n int) Option             { return func(o *Options) { o.InlineMax = n } }
 func WithValueCacheBytes(n int) Option       { return func(o *Options) { o.ValueCacheBytes = n } }
@@ -112,6 +121,9 @@ const (
 	defaultReadAhead  = 8
 	defaultInlineMax  = 64
 	defaultValueCache = 256 << 20
+	// defaultCheckpointBytes: an index checkpoint per this much log
+	// written (design 24).
+	defaultCheckpointBytes = 512 << 20
 )
 
 // DB is an open database. One process holds the write lease (epoch); a newer
@@ -231,6 +243,9 @@ func OpenStore(ctx context.Context, st store.Store, opts ...Option) (*DB, error)
 	}
 	if o.ReadAhead <= 0 {
 		o.ReadAhead = defaultReadAhead
+	}
+	if o.CheckpointBytes == 0 {
+		o.CheckpointBytes = defaultCheckpointBytes
 	}
 	if o.Logf == nil {
 		o.Logf = log.Printf
@@ -428,6 +443,10 @@ func (db *DB) loadLog(ctx context.Context, id string, writable bool) (*logState,
 	}
 	if err := db.recoverLog(ctx, l, writable); err != nil {
 		return nil, err
+	}
+	if meta.Ckpt != nil && meta.Ckpt.LSN > l.head() {
+		// as for snapshots below: written after its LSN was durable
+		return nil, fmt.Errorf("%w: log %s ends at LSN %d but its index checkpoint is at LSN %d: newest segments are missing", ErrCorrupt, id, l.head(), meta.Ckpt.LSN)
 	}
 	if meta.SnapLSN > l.head() {
 		// The snapshot was written after a commit at SnapLSN was durable:

@@ -1,12 +1,8 @@
 package loget
 
 import (
-	"errors"
 	"fmt"
-	"strings"
 	"testing"
-
-	"github.com/raman20/loget/store"
 )
 
 func TestSnapshotRoundTrip(t *testing.T) {
@@ -44,63 +40,4 @@ func FuzzDecodeSnapshot(f *testing.F) {
 			t.Fatalf("accepted bytes that do not re-encode identically")
 		}
 	})
-}
-
-// A snapshot is used only if it is bound to this log's history: another
-// log's snapshot, or one whose hash chain differs, is ignored (replay).
-func TestSnapshotBinding(t *testing.T) {
-	st := store.NewMem()
-	var logs []string
-	db := mustOpen(t, st, WithSnapshotEvery(2), WithLogf(func(f string, a ...any) {
-		if strings.Contains(f, "ignoring snapshot") {
-			logs = append(logs, f)
-		}
-	}))
-	for i := 0; i < 4; i++ {
-		db.Put(ctx, "k", []byte{byte('a' + i)})
-	}
-	key := db.Manifest().Logs["L1"].SnapKey
-	db.Close()
-	if key == "" {
-		t.Fatal("no snapshot")
-	}
-	open := func() string {
-		logs = nil
-		db, err := OpenStore(ctx, st, WithLogf(func(f string, a ...any) {
-			if strings.Contains(f, "ignoring snapshot") {
-				logs = append(logs, f)
-			}
-		}))
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer db.Close()
-		if v, err := db.Get(ctx, "k"); err != nil || string(v) != "d" {
-			t.Fatalf("k = %q %v", v, err)
-		}
-		return strings.Join(logs, ";")
-	}
-	if got := open(); got != "" {
-		t.Fatalf("good snapshot ignored: %s", got)
-	}
-	orig, _ := st.Get(ctx, key)
-	h, kv, tp, _ := decodeSnapshot(orig)
-	for name, bad := range map[string]snapHeader{
-		"other chain": {log: h.log, lsn: h.lsn, chain: [32]byte{9}},
-		"other log":   {log: "L9", lsn: h.lsn, chain: h.chain},
-		"other lsn":   {log: h.log, lsn: h.lsn - 1, chain: h.chain},
-	} {
-		st.Raw(func(m map[string][]byte) { m[key] = encodeSnapshot(bad, kv, tp) })
-		if got := open(); !strings.Contains(got, "ignoring snapshot") {
-			t.Errorf("%s: snapshot used", name)
-		}
-	}
-	// v1 (unbound) snapshots are ignored
-	st.Raw(func(m map[string][]byte) { m[key] = append([]byte{8, 0, 0, 0, 0, 0, 0, 0}, orig[8:]...) })
-	if got := open(); !strings.Contains(got, "ignoring snapshot") {
-		t.Error("v1 snapshot used")
-	}
-	if _, _, _, err := decodeSnapshot(nil); !errors.Is(err, errSnapshot) {
-		t.Fatal(err)
-	}
 }

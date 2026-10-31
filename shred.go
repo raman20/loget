@@ -123,7 +123,7 @@ type VerifyReport struct {
 	EncryptedValues int               `json:"encrypted_values"`
 	Unreadable      int               `json:"unreadable_shredded_values"`
 	SweptDEKs       int               `json:"swept_late_deks,omitempty"`
-	Snapshots       int               `json:"snapshots"`
+	Snapshots       int               `json:"snapshots"` // old snapshots plus index checkpoints
 	// Format is the current manifest's format (1, or 2 once compacted).
 	Format int `json:"manifest_format"`
 	// Objects and Bytes count what the store-level scrub read back (every
@@ -266,6 +266,17 @@ func (db *DB) Verify(ctx context.Context) (*VerifyReport, error) {
 			if err != nil { // snapshots are a cache: open ignores a bad one and replays
 				r.Warnings = append(r.Warnings, fmt.Sprintf("snapshot %s is unusable (%v; open replays the log instead)", k, err))
 			}
+		}
+	}
+	// Index checkpoints (design 24): load each one as open would.
+	for _, id := range sortedMapKeys(last.Logs) {
+		c, l := last.Logs[id].Ckpt, fresh.logs[id]
+		if c == nil || l == nil {
+			continue
+		}
+		r.Snapshots++
+		if _, err := fresh.readIndexCkpt(ctx, l, c); err != nil { // a cache too
+			r.Warnings = append(r.Warnings, fmt.Sprintf("index checkpoint %s is unusable (%v; open replays the log instead)", ckptDescObj(c.Key), err))
 		}
 	}
 	// Store-level scrub: read every object back.

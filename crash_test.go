@@ -6,12 +6,14 @@ import (
 	"math/rand"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/raman20/loget/index"
 	"github.com/raman20/loget/internal/runfile"
 	"github.com/raman20/loget/store"
 )
@@ -32,6 +34,12 @@ func crashChild(loc string) {
 			panic(err)
 		}
 		opts = append(opts, WithIndexFiles(runFiles{rd})) // every run in a file
+	}
+	if os.Getenv("LOGET_CRASH_CKPT") != "" {
+		// background index checkpoints every few KiB in small pieces:
+		// SIGKILL lands mid-checkpoint too (design 24)
+		index.PieceBytes = 512
+		opts = append(opts, WithSnapshotEvery(0), WithCheckpointBytes(4<<10))
 	}
 	db, err := OpenStore(ctx, st, opts...)
 	if err != nil {
@@ -110,6 +118,12 @@ func TestCrashKill9CompactJournal(t *testing.T) {
 
 // Same, with every KV run in a mapped run file: the kill leaves no file
 // behind and recovery (reading runs from files) keeps the invariants.
+// Kills during background index checkpoints (and compactions): recovery
+// from whatever checkpoint survived equals a full replay.
+func TestCrashKill9Ckpt(t *testing.T) {
+	crashKill9(t, "fs://"+t.TempDir(), "LOGET_CRASH_COMPACT=1", "LOGET_CRASH_CKPT=1")
+}
+
 func TestCrashKill9IndexFiles(t *testing.T) {
 	if !runfile.Supported {
 		t.Skip("run files need mmap")
@@ -128,7 +142,8 @@ func crashKill9(t *testing.T, dir string, env ...string) {
 		iters, _ = strconv.Atoi(s)
 	}
 	acked := make([]int, crashG)
-	based := 0 // recoveries that started from a compaction base
+	based := 0  // recoveries that started from a compaction base
+	ckpted := 0 // recoveries with an index checkpoint in the manifest
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	for it := 0; it < iters; it++ {
 		cmd := exec.Command(os.Args[0], "-test.run=^$")
@@ -226,6 +241,9 @@ func crashKill9(t *testing.T, dir string, env ...string) {
 			if lm.Base != nil {
 				based++
 			}
+			if lm.Ckpt != nil {
+				ckpted++
+			}
 		}
 		d1, _, _ := db.IndexDigests("main")
 		d2, _ := db.RebuildDigests("main")
@@ -236,6 +254,9 @@ func crashKill9(t *testing.T, dir string, env ...string) {
 	}
 	if len(env) > 0 && based == 0 {
 		t.Fatal("no recovery started from a compaction base")
+	}
+	if slices.Contains(env, "LOGET_CRASH_CKPT=1") && ckpted == 0 {
+		t.Fatal("no recovery started from an index checkpoint")
 	}
 	total := 0
 	for _, a := range acked {

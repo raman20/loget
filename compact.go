@@ -264,7 +264,7 @@ func (db *DB) compactLocked(ctx context.Context, o GCOptions, gc bool, stats *Co
 	}
 	stale := map[string]uint64{} // log -> head
 	for id, lm := range db.man.Logs {
-		if lm.Base != nil || rebased[id] || lm.SnapKey == "" {
+		if lm.Base != nil || rebased[id] || lm.SnapKey == "" && lm.Ckpt == nil {
 			continue
 		}
 		for x := db.man.Logs[lm.Parent]; x != nil && lm.Parent != ""; x = db.man.Logs[x.Parent] {
@@ -284,16 +284,26 @@ func (db *DB) compactLocked(ctx context.Context, o GCOptions, gc bool, stats *Co
 	pruned := len(db.man.Reflog) - len(reflog)
 	after := db.opts.Clock() + int64(o.Grace)
 	err = db.commitManifest(ctx, func(m *Manifest) error {
-		m.Format = manifestFormatBase
+		m.Format = max(m.Format, manifestFormatRunBase)
+		// A checkpoint's runs point into segments a new base replaces
+		// (and are bound to the old base): it goes with them.
+		dropCkpt := func(id string) {
+			if c := m.Logs[id].Ckpt; c != nil {
+				m.Garbage = append(m.Garbage, ckptGarbage(id, c, nil, after)...)
+				m.Logs[id].Ckpt = nil
+			}
+		}
 		for id, head := range stale {
 			m.Logs[id].SnapLSN, m.Logs[id].SnapKey = 0, ""
 			m.Garbage = append(m.Garbage, Garbage{Kind: "snaps", Log: id, Below: head + 1, After: after})
+			dropCkpt(id)
 		}
 		for _, b := range bs {
 			lm := m.Logs[b.id]
 			if old := lm.Base; old != nil {
-				m.Garbage = append(m.Garbage, Garbage{Kind: "base", Log: b.id, Key: old.Key, Chunks: old.Chunks, After: after})
+				m.Garbage = append(m.Garbage, baseGarbage(b.id, old, after))
 			}
+			dropCkpt(b.id)
 			m.Garbage = append(m.Garbage,
 				Garbage{Kind: "segs", Log: b.id, Below: b.base.Seq, After: after},
 				// a snapshot's versions point into segments the base
@@ -306,8 +316,9 @@ func (db *DB) compactLocked(ctx context.Context, o GCOptions, gc bool, stats *Co
 		for _, id := range drop {
 			lm := m.Logs[id]
 			if lm.Base != nil {
-				m.Garbage = append(m.Garbage, Garbage{Kind: "base", Log: id, Key: lm.Base.Key, Chunks: lm.Base.Chunks, After: after})
+				m.Garbage = append(m.Garbage, baseGarbage(id, lm.Base, after))
 			}
+			dropCkpt(id)
 			m.Garbage = append(m.Garbage,
 				Garbage{Kind: "segs", Log: id, Below: math.MaxUint64, After: after},
 				Garbage{Kind: "snaps", Log: id, Below: math.MaxUint64, After: after})
@@ -325,6 +336,15 @@ func (db *DB) compactLocked(ctx context.Context, o GCOptions, gc bool, stats *Co
 	return true, nil
 }
 
+// baseGarbage lists base b's objects as garbage.
+func baseGarbage(id string, b *BaseMeta, after int64) Garbage {
+	g := Garbage{Kind: "base", Log: id, Key: b.Key, Chunks: b.Chunks, After: after}
+	if b.Run != nil {
+		g.Pieces = len(b.Run.Sums)
+	}
+	return g
+}
+
 // writeBase writes the base of log l at head from its view v.
 // at is nil for a base at the log's head; for a retention cut below the
 // head it gives the segment after the cut and the cut frame's time.
@@ -335,12 +355,15 @@ func (db *DB) writeBase(ctx context.Context, l *logState, v *view, head uint64, 
 	}
 	key := fmt.Sprintf("base/%s/%020d-e%d-%s", l.meta.ID, head, db.epoch, hex.EncodeToString(nonce))
 	id := l.meta.ID
-	inline := index.NewKVOptions(db.kvOptions()).Inline()
-	bi := db.newBaseStream(inline)
+	o := db.kvOptions()
+	inline := index.NewKVOptions(o).Inline()
+	// The base is one run (design 24), built in key order in a run file
+	// (or on the heap) and stored in pieces: no single object holds it.
+	rw := index.NewRunWriter(o, 0)
 	done := false
 	defer func() {
 		if !done {
-			bi.abandon()
+			rw.Abort()
 		}
 	}()
 	cw := &chunkWriter{db: db, key: key}
@@ -387,7 +410,7 @@ func (db *DB) writeBase(ctx context.Context, l *logState, v *view, head uint64, 
 			nv.Val = val // Latest's copy, or ours: encoded before the next key
 		}
 		stats.Keys++
-		return bi.add(space, k, nv)
+		return rw.Add(space, k, nv)
 	})
 	if err != nil {
 		return nil, err
@@ -417,18 +440,23 @@ func (db *DB) writeBase(ctx context.Context, l *logState, v *view, head uint64, 
 			}
 		}
 	}
-	img, release, err := bi.finish(head)
+	cut, err := rw.Finish()
 	done = true
 	if err != nil {
 		return nil, err
 	}
-	err = putExactlyOnce(ctx, db.st, baseObj(key), img)
-	release()
-	if err != nil {
-		return nil, err
+	run := &index.RunMeta{} // no live key: an empty base
+	if cut != nil {
+		defer cut.Release()
+		cr := cut.Runs[0]
+		m := cr.Meta()
+		run = &m
+		if err := db.putRun(ctx, key, cr.Bytes(), m.Piece); err != nil {
+			return nil, err
+		}
 	}
-	stats.BaseBytes += int64(len(img)) + cw.bytes
-	return &BaseMeta{LSN: head, Seq: seq, Key: key, Chunks: cw.n, Chain: hex.EncodeToString(chain[:]), TS: ts}, nil
+	stats.BaseBytes += run.Len + cw.bytes
+	return &BaseMeta{LSN: head, Seq: seq, Key: key, Chunks: cw.n, Chain: hex.EncodeToString(chain[:]), TS: ts, Run: run}, nil
 }
 
 // chunkWriter packs base values into chunk objects of about chunkMax.
@@ -477,6 +505,24 @@ type baseImage struct {
 // loadBase reads and checks the base of based log b.
 func (db *DB) loadBase(ctx context.Context, b *logState) (*baseImage, error) {
 	bm := b.meta.Base
+	if bm.Run != nil { // run pieces (design 24)
+		var runs []ckptRunDesc
+		if bm.Run.Len > 0 {
+			runs = append(runs, ckptRunDesc{key: bm.Key, meta: *bm.Run})
+		}
+		src := db.runSources(ctx, runs)
+		for i := range src {
+			src[i].Key = "" // not a checkpoint's run: a checkpoint stores it anew
+		}
+		kv, err := index.LoadKVRuns(db.kvOptions(), src)
+		if err != nil {
+			if errors.Is(err, index.ErrBadRun) {
+				err = fmt.Errorf("%w: %w", ErrCorrupt, err)
+			}
+			return nil, fmt.Errorf("loget: log %s base %s: %w", b.meta.ID, bm.Key, err)
+		}
+		return &baseImage{log: b, lsn: bm.LSN, kv: kv}, nil
+	}
 	data, err := db.st.Get(ctx, baseObj(bm.Key))
 	if err != nil {
 		return nil, fmt.Errorf("loget: log %s base %s: %w", b.meta.ID, bm.Key, err)
@@ -616,9 +662,18 @@ func (db *DB) deleteGarbage(ctx context.Context, g Garbage) (int, error) {
 			}
 		}
 	case "base":
-		keys = append(keys, baseObj(g.Key))
+		keys = append(keys, baseObj(g.Key)) // absent for a run base: deleting it is a no-op
 		for i := 0; i < g.Chunks; i++ {
 			keys = append(keys, chunkKey(g.Key, i))
+		}
+		for i := 0; i < g.Pieces; i++ {
+			keys = append(keys, ckptPieceKey(g.Key, i))
+		}
+	case "ckpt":
+		keys = append(keys, ckptDescObj(g.Key))
+	case "run":
+		for i := 0; i < g.Chunks; i++ {
+			keys = append(keys, ckptPieceKey(g.Key, i))
 		}
 	default:
 		return 0, fmt.Errorf("unknown garbage kind %q", g.Kind)
@@ -688,6 +743,46 @@ func (db *DB) sweepOrphans(ctx context.Context, man *Manifest) (int, error) {
 	for _, g := range man.Garbage {
 		ids[g.Log] = true // dropped by GC: its orphans too
 	}
+	ckLive := map[string]bool{} // checkpoint objects named or listed
+	for _, lm := range man.Logs {
+		if lm.Ckpt != nil {
+			for _, k := range ckptObjects(lm.Ckpt) {
+				ckLive[k] = true
+			}
+		}
+	}
+	for _, g := range man.Garbage {
+		switch g.Kind {
+		case "ckpt":
+			ckLive[ckptDescObj(g.Key)] = true
+		case "run":
+			for i := 0; i < g.Chunks; i++ {
+				ckLive[ckptPieceKey(g.Key, i)] = true
+			}
+		}
+	}
+	for _, id := range sortedMapKeys(ids) {
+		// Checkpoint objects of an older epoch that the manifest neither
+		// names nor lists: a checkpoint whose commit lost or never came
+		// (spec/LogEtCkpt.tla, SweepOrphan). Our own epoch's may still be
+		// committed by a running checkpoint.
+		keys, err := db.st.List(ctx, ckptPrefix(id))
+		if err != nil {
+			return n, err
+		}
+		for _, k := range keys {
+			if ep, ok := ckptEpoch(k); !ok || ep >= db.epoch || ckLive[k] {
+				continue
+			}
+			if db.stopped() {
+				return n, ErrClosed
+			}
+			if err := db.st.Delete(ctx, k); err != nil && !errors.Is(err, store.ErrNotFound) {
+				return n, err
+			}
+			n++
+		}
+	}
 	for _, id := range sortedMapKeys(ids) {
 		keys, err := db.st.List(ctx, "base/"+id+"/")
 		if err != nil {
@@ -718,8 +813,10 @@ func baseKeyOf(obj string) (string, bool) {
 	if k, ok := strings.CutSuffix(obj, ".base"); ok {
 		return k, true
 	}
-	if k, ok := strings.CutSuffix(obj, ".val"); ok && len(k) > 7 && k[len(k)-7] == '.' {
-		return k[:len(k)-7], true
+	for _, suf := range []string{".val", ".run"} { // value chunk, run piece
+		if k, ok := strings.CutSuffix(obj, suf); ok && len(k) > 7 && k[len(k)-7] == '.' {
+			return k[:len(k)-7], true
+		}
 	}
 	return "", false
 }

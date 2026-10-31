@@ -79,6 +79,7 @@ type metrics struct {
 	gcs, gcErrors                    atomic.Uint64
 	compactLat                       LatencyHistogram
 	snapshots, snapshotErrors        atomic.Uint64
+	ckptFallbacks                    atomic.Uint64
 	kvFileErrors                     atomic.Uint64
 	halted                           atomic.Pointer[error] // first writer halt
 }
@@ -101,12 +102,16 @@ type Stats struct {
 	GCs              uint64    `json:"gcs"`
 	GCErrors         uint64    `json:"gc_errors"`
 	// CompactionPause: how long commits were paused by each compaction or GC.
-	CompactionPause  Histogram `json:"compaction_pause"`
-	Snapshots        uint64    `json:"snapshots"`
-	SnapshotErrors   uint64    `json:"snapshot_errors"`
-	ValueCacheHits   uint64    `json:"value_cache_hits"`
-	ValueCacheMisses uint64    `json:"value_cache_misses"`
-	ValueCacheBytes  int64     `json:"value_cache_bytes"` // capacity
+	CompactionPause Histogram `json:"compaction_pause"`
+	// Snapshots: index checkpoints written (design 24); SnapshotErrors:
+	// ones that failed (non-fatal); CheckpointFallbacks: opens that found
+	// a checkpoint unusable and replayed instead.
+	Snapshots           uint64 `json:"snapshots"`
+	SnapshotErrors      uint64 `json:"snapshot_errors"`
+	CheckpointFallbacks uint64 `json:"checkpoint_fallbacks"`
+	ValueCacheHits      uint64 `json:"value_cache_hits"`
+	ValueCacheMisses    uint64 `json:"value_cache_misses"`
+	ValueCacheBytes     int64  `json:"value_cache_bytes"` // capacity
 	// KVIndexFileErrors: KV index run files that could not be created,
 	// written or mapped (Options.IndexDir); each moved one index to the
 	// Go heap.
@@ -126,7 +131,7 @@ func (db *DB) Stats() Stats {
 		CommitLatency: m.commitLat.Snapshot(), Segments: m.segments.Load(), SegmentBytes: m.segmentBytes.Load(),
 		SegmentWrite: m.segmentLat.Snapshot(), Compactions: m.compactions.Load(), CompactionErrors: m.compactErrors.Load(),
 		GCs: m.gcs.Load(), GCErrors: m.gcErrors.Load(), CompactionPause: m.compactLat.Snapshot(),
-		Snapshots: m.snapshots.Load(), SnapshotErrors: m.snapshotErrors.Load(), KVIndexFileErrors: m.kvFileErrors.Load(),
+		Snapshots: m.snapshots.Load(), SnapshotErrors: m.snapshotErrors.Load(), CheckpointFallbacks: m.ckptFallbacks.Load(), KVIndexFileErrors: m.kvFileErrors.Load(),
 		Heads: db.Branches(),
 	}
 	s.ValueCacheHits, s.ValueCacheMisses, s.ValueCacheBytes = db.vcache.counts()

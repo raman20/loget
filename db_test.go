@@ -105,13 +105,15 @@ func TestRegressionStaleReadsAfterRestart(t *testing.T) {
 // repairs it; a corrupt snapshot is ignored.
 func TestRegressionTornFilesDoNotBlockOpen(t *testing.T) {
 	st := store.NewMem()
-	db := mustOpen(t, st, WithSnapshotEvery(3))
+	// no Close checkpoint: it would cover the segment torn below, and a
+	// checkpoint past the head is corruption (newest segments missing)
+	db := mustOpen(t, st, WithSnapshotEvery(3), WithCheckpointBytes(-1))
 	for i := 0; i < 10; i++ {
 		db.Put(ctx, fmt.Sprint("k", i), []byte("v"))
 	}
 	m := db.Manifest()
 	db.Close()
-	// corrupt the snapshot and tear the last segment in half
+	// corrupt the checkpoint and tear the last segment in half
 	var lastSeg string
 	st.Raw(func(o map[string][]byte) {
 		for k := range o {
@@ -119,7 +121,7 @@ func TestRegressionTornFilesDoNotBlockOpen(t *testing.T) {
 				lastSeg = k
 			}
 		}
-		o[m.Logs["L1"].SnapKey] = []byte("garbage")
+		o[ckptDescObj(m.Logs["L1"].Ckpt.Key)] = []byte("garbage")
 		o[lastSeg] = o[lastSeg][:len(o[lastSeg])/2]
 	})
 	// by default a damaged tail is corruption: refuse, change nothing
@@ -399,8 +401,8 @@ func TestSnapshotEqualsFold(t *testing.T) {
 	db.Close()
 	db = mustOpen(t, st, WithSnapshotEvery(5))
 	defer db.Close()
-	if db.Manifest().Logs["L1"].SnapLSN == 0 {
-		t.Fatal("no snapshot written")
+	if db.Manifest().Logs["L1"].Ckpt == nil {
+		t.Fatal("no checkpoint written")
 	}
 	d1, _, _ := db.IndexDigests("main")
 	d2, _ := db.RebuildDigests("main")

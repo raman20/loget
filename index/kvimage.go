@@ -17,19 +17,33 @@ import (
 // immutable, so a run already stored by one checkpoint is named, not
 // stored again, by the next (the KV keeps its key).
 
-// PieceBytes bounds one stored piece of a run (a var for tests).
+// PieceBytes is the piece size new runs are stored in (a var for tests).
+// A run records its own (RunMeta.Piece), so readers do not depend on it.
 var PieceBytes = 64 << 20
+
+// maxPieceBytes bounds RunMeta.Piece when loading.
+const maxPieceBytes = 1 << 30
 
 // RunMeta describes a stored run.
 type RunMeta struct {
-	Len  int64    `json:"len"`  // entry bytes
-	N    int      `json:"n"`    // keys
-	Vers int      `json:"vers"` // versions
-	Sums []uint32 `json:"sums"` // CRC-32C of each piece, in order
+	Len   int64    `json:"len"`   // entry bytes
+	N     int      `json:"n"`     // keys
+	Vers  int      `json:"vers"`  // versions
+	Piece int      `json:"piece"` // bytes per piece (the last may be shorter)
+	Sums  []uint32 `json:"sums"`  // CRC-32C of each piece, in order
 }
 
-// Pieces returns how many pieces a run of n bytes is stored in.
-func Pieces(n int64) int { return int((n + int64(PieceBytes) - 1) / int64(PieceBytes)) }
+// Pieces returns how many pieces the run is stored in, or -1 if its
+// piece size is not usable.
+func (m RunMeta) Pieces() int {
+	switch {
+	case m.Len <= 0:
+		return 0
+	case m.Piece <= 0 || m.Piece > maxPieceBytes:
+		return -1
+	}
+	return int((m.Len + int64(m.Piece) - 1) / int64(m.Piece))
+}
 
 // SharedRunFile is a RunFile that counts references: Ref adds one,
 // Release drops one and unmaps at the last. A Cut takes a reference on
@@ -115,7 +129,7 @@ func (c *CutRun) SetKey(key string) {
 // Meta returns the run's description; its piece checksums are computed
 // (one pass over the bytes).
 func (c *CutRun) Meta() RunMeta {
-	m := RunMeta{Len: int64(len(c.b)), N: c.r.n, Vers: c.r.vers}
+	m := RunMeta{Len: int64(len(c.b)), N: c.r.n, Vers: c.r.vers, Piece: PieceBytes}
 	for p := 0; p < len(c.b); p += PieceBytes {
 		m.Sums = append(m.Sums, crc32.Checksum(c.b[p:min(p+PieceBytes, len(c.b))], Castagnoli))
 	}
@@ -161,7 +175,7 @@ func LoadKVRuns(o KVOptions, runs []RunSource) (*KV, error) {
 
 func (l *KV) loadRun(src RunSource) (*run, error) {
 	m := src.Meta
-	if m.Len <= 0 || m.N <= 0 || m.Vers < m.N || int64(len(m.Sums)) != int64(Pieces(m.Len)) || m.Len > int64(maxRunBytes) {
+	if m.Len <= 0 || m.N <= 0 || m.Vers < m.N || len(m.Sums) != m.Pieces() || m.Len > int64(maxRunBytes) {
 		return nil, badRun("bad description")
 	}
 	w := l.builder(int(m.Len))
@@ -177,7 +191,7 @@ func (l *KV) loadRun(src RunSource) (*run, error) {
 		if err != nil {
 			return nil, err
 		}
-		want := min(int64(PieceBytes), m.Len-got)
+		want := min(int64(m.Piece), m.Len-got)
 		if int64(len(p)) != want {
 			return nil, badRun("piece " + strconv.Itoa(i) + " has " + strconv.Itoa(len(p)) + " bytes, want " + strconv.FormatInt(want, 10))
 		}

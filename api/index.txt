@@ -3,7 +3,6 @@ var Castagnoli = crc32.MakeTable(crc32.Castagnoli)
 var ErrBadRun = errors.New("index: bad stored run")
 var ErrBadSnapshot = errors.New("index: bad snapshot")
 var PieceBytes = 64 << 20
-func Pieces(n int64) int
 func PrefixEnd(p string) string
 func StripChunks(p []byte) (int, error)
 type BaseEncoder struct {
@@ -76,10 +75,12 @@ func (r *Registry) Register(k Kind) error
 type RunFile interface {
 type RunFiles interface {
 type RunMeta struct {
-	Len  int64    `json:"len"`
-	N    int      `json:"n"`
-	Vers int      `json:"vers"`
-	Sums []uint32 `json:"sums"`
+	Len   int64    `json:"len"`
+	N     int      `json:"n"`
+	Vers  int      `json:"vers"`
+	Piece int      `json:"piece"`
+	Sums  []uint32 `json:"sums"`
+func (m RunMeta) Pieces() int
 type RunSource struct {
 	Key   string
 	Meta  RunMeta

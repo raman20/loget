@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/raman20/loget/format"
+	"github.com/raman20/loget/index"
 	"github.com/raman20/loget/store"
 )
 
@@ -32,23 +33,30 @@ type Manifest struct {
 // deleted by a sweep once the clock passes After (the grace period that
 // lets readers of older manifests finish).
 type Garbage struct {
-	Kind   string `json:"kind"` // "segs": log/<Log>/ seq < Below; "snaps": snap/<Log>/ lsn < Below; "base": Key + Chunks
+	// "segs": log/<Log>/ seq < Below; "snaps": snap/<Log>/ lsn < Below;
+	// "base": Key + Chunks (+ Pieces run pieces); "ckpt": checkpoint
+	// descriptor Key; "run": checkpoint run Key in Chunks pieces
+	Kind   string `json:"kind"`
 	Log    string `json:"log,omitempty"`
 	Below  uint64 `json:"below,omitempty"`
 	Key    string `json:"key,omitempty"`
 	Chunks int    `json:"chunks,omitempty"`
+	Pieces int    `json:"pieces,omitempty"`
 	After  int64  `json:"after"`
 }
 
 // BaseMeta locates a log's compaction base: the full state at LSN, in
 // object Key plus Chunks value chunks. Segments before Seq are covered.
+// A base written since design 24 is a run stored in pieces (Run set,
+// manifest format 3); older ones are one Key.base object.
 type BaseMeta struct {
-	LSN    uint64 `json:"lsn"`
-	Seq    uint64 `json:"seq"`
-	Key    string `json:"key"`
-	Chunks int    `json:"chunks"`
-	Chain  string `json:"chain"` // hex hash-chain head at LSN
-	TS     int64  `json:"ts"`
+	LSN    uint64         `json:"lsn"`
+	Seq    uint64         `json:"seq"`
+	Key    string         `json:"key"`
+	Chunks int            `json:"chunks"`
+	Chain  string         `json:"chain"` // hex hash-chain head at LSN
+	TS     int64          `json:"ts"`
+	Run    *index.RunMeta `json:"run,omitempty"`
 }
 
 // LogMeta describes one log. A branch is a log whose history is its
@@ -62,6 +70,8 @@ type LogMeta struct {
 	// Base, if set, holds the state at Base.LSN: the log no longer needs
 	// its parent or its segments before Base.Seq (see compact.go).
 	Base *BaseMeta `json:"base,omitempty"`
+	// Ckpt is the newest index checkpoint (ckpt.go, design 24).
+	Ckpt *CkptMeta `json:"ckpt,omitempty"`
 }
 
 type RefChange struct {
@@ -75,17 +85,21 @@ type RefChange struct {
 
 // manifestFormat is what a new database starts with; compaction writes
 // manifestFormatBase (bases and garbage), which older binaries refuse
-// instead of misreading a log whose first segments are gone.
+// instead of misreading a log whose first segments are gone, and
+// manifestFormatRunBase once a base is stored as run pieces (design 24),
+// which binaries before it cannot read. Index checkpoints need no new
+// format: an older binary drops the field and replays.
 const (
-	manifestFormat     = 1
-	manifestFormatBase = 2
+	manifestFormat        = 1
+	manifestFormatBase    = 2
+	manifestFormatRunBase = 3
 )
 
 // Formats describes the on-storage format versions this build reads and
 // writes (`loget version`; docs/compatibility.md).
 func Formats() string {
-	return fmt.Sprintf("manifest %d-%d, segment %d, base %s, journal 1-%d, snapshot 2 (KV2), checkpoint 1",
-		manifestFormat, manifestFormatBase, format.SegVersion, baseMagic[7:], store.JournalVersion)
+	return fmt.Sprintf("manifest %d-%d, segment %d, base %s and run pieces, journal 1-%d, snapshot 2 (KV2, read only), checkpoint 1, index checkpoint %s",
+		manifestFormat, manifestFormatRunBase, format.SegVersion, baseMagic[7:], store.JournalVersion, ckptMagic[6:7])
 }
 
 func manifestKey(id uint64) string { return fmt.Sprintf("manifest/%020d.mf", id) }
@@ -116,9 +130,9 @@ func decodeManifest(b []byte) (*Manifest, error) {
 	if err := json.Unmarshal(b[:len(b)-4], &m); err != nil {
 		return nil, fmt.Errorf("%w: manifest: %v", ErrCorrupt, err)
 	}
-	if m.Format != manifestFormat && m.Format != manifestFormatBase {
-		return nil, fmt.Errorf("%w: manifest format %d (this build reads %d and %d; written by a newer loget? upgrade the binary)",
-			ErrVersion, m.Format, manifestFormat, manifestFormatBase)
+	if m.Format < manifestFormat || m.Format > manifestFormatRunBase {
+		return nil, fmt.Errorf("%w: manifest format %d (this build reads %d to %d; written by a newer loget? upgrade the binary)",
+			ErrVersion, m.Format, manifestFormat, manifestFormatRunBase)
 	}
 	c := m.clone2()
 	if err := c.validate(); err != nil {
@@ -139,6 +153,17 @@ func (m *Manifest) validate() error {
 			return fmt.Errorf("log %q: id %q", id, lm.ID)
 		case lm.Base != nil && lm.Base.Chunks < 0:
 			return fmt.Errorf("log %q: base chunks %d", id, lm.Base.Chunks)
+		case lm.Base != nil && lm.Base.Run != nil && (lm.Base.Run.Len < 0 || len(lm.Base.Run.Sums) != lm.Base.Run.Pieces()):
+			return fmt.Errorf("log %q: base run of %d bytes in %d pieces", id, lm.Base.Run.Len, len(lm.Base.Run.Sums))
+		case lm.Ckpt != nil && lm.Ckpt.Key == "":
+			return fmt.Errorf("log %q: empty checkpoint", id)
+		}
+		if lm.Ckpt != nil {
+			for _, r := range lm.Ckpt.Runs {
+				if r.Key == "" || r.Pieces <= 0 {
+					return fmt.Errorf("log %q: checkpoint run %q in %d pieces", id, r.Key, r.Pieces)
+				}
+			}
 		}
 		// The parent chain must end (loadLog walks it recursively, stopping
 		// at a compaction base: a based log's parent may be gone).

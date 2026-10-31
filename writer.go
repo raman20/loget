@@ -73,6 +73,10 @@ type writer struct {
 	carry       []*commitReq // escalated requests deferred to the next batch
 	recentFloor uint64
 	sinceSnap   int
+	sinceCk     int64         // segment bytes since the last background checkpoint started
+	bg          chan struct{} // closed when the background checkpoint ends; nil: none started
+	bgCtx       context.Context
+	bgCancel    context.CancelFunc
 
 	// reg counts the snapshot LSNs of Update attempts that may still
 	// submit (design 23, part 3), sharded so attempts on many goroutines
@@ -191,6 +195,7 @@ var maxSegBytes = 256 << 20 // var: tests shrink it
 
 func newWriter(db *DB, l *logState, v *view) *writer {
 	w := &writer{db: db, l: l, v: v, ch: make(chan *commitReq, 1024), done: make(chan struct{})}
+	w.bgCtx, w.bgCancel = context.WithCancel(context.Background())
 	w.head = l.head()
 	w.recentFloor = w.head
 	l.mu.RLock()
@@ -251,7 +256,62 @@ func (w *writer) pause() {
 
 func (w *writer) crash() {
 	w.crashed.Store(true)
+	w.bgCancel() // a crashed DB writes nothing more: stop the checkpoint
 	w.stop()
+}
+
+// startCkpt starts a background index checkpoint unless one is running.
+func (w *writer) startCkpt() {
+	if w.bg != nil {
+		select {
+		case <-w.bg:
+		default:
+			return
+		}
+	}
+	w.sinceCk = 0
+	done := make(chan struct{})
+	w.bg = done
+	go func() {
+		defer close(done)
+		w.ckpt(w.bgCtx)
+	}()
+}
+
+func (w *writer) ckpt(ctx context.Context) {
+	if err := w.db.writeIndexCkpt(ctx, w.l, w.v); err != nil {
+		w.db.met.snapshotErrors.Add(1)
+		w.db.logf("loget: index checkpoint of %s failed (non-fatal): %v", w.l.meta.ID, err)
+	}
+}
+
+// referenced reports whether a branch names log id (a retired log, only
+// reachable through the reflog, is not worth a checkpoint).
+func (db *DB) referenced(id string) bool {
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+	for _, r := range db.man.Refs {
+		if r == id {
+			return true
+		}
+	}
+	return false
+}
+
+// finish runs when the loop ends: it waits for a background checkpoint,
+// then, on a clean stop (Close; not a crash, a halt or a compaction
+// pause), checkpoints so the next open replays nothing.
+func (w *writer) finish() {
+	if w.bg != nil {
+		<-w.bg
+	}
+	w.mu.RLock()
+	paused := w.paused
+	w.mu.RUnlock()
+	if !paused && !w.crashed.Load() && w.failed == nil && w.db.opts.CheckpointBytes > 0 && w.db.referenced(w.l.meta.ID) {
+		w.ckpt(w.bgCtx)
+	}
+	w.bgCancel()
 }
 
 // CommitPolicy is the group-commit budget: after taking what is queued, a
@@ -268,6 +328,7 @@ const defaultTargetBytes = 1 << 20
 
 func (w *writer) loop() {
 	defer close(w.done)
+	defer w.finish()
 	var timer *time.Timer
 	if w.db.opts.Commit.MaxDelay > 0 {
 		timer = time.NewTimer(time.Hour)
@@ -560,14 +621,14 @@ func (w *writer) process(batch []*commitReq) {
 	// Snapshots are taken before acking so that, with one client, every
 	// store call happens in a deterministic order (simulation replayability).
 	w.sinceSnap += len(accepted)
-	if w.db.opts.SnapshotEvery > 0 && w.sinceSnap >= w.db.opts.SnapshotEvery {
-		w.sinceSnap = 0
-		if err := w.db.writeSnapshot(ctx, w.l, w.v); err != nil {
-			w.db.met.snapshotErrors.Add(1)
-			w.db.logf("loget: snapshot failed (non-fatal): %v", err)
-		} else {
-			w.db.met.snapshots.Add(1)
+	w.sinceCk += int64(len(seg))
+	if every := w.db.opts.SnapshotEvery; every > 0 {
+		if w.sinceSnap >= every {
+			w.sinceSnap = 0
+			w.ckpt(ctx)
 		}
+	} else if cb := w.db.opts.CheckpointBytes; cb > 0 && w.sinceCk >= cb {
+		w.startCkpt()
 	}
 	for i, r := range accepted {
 		r.done <- commitRes{lsn: entries[i].LSN}

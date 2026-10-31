@@ -144,7 +144,11 @@ func (l *logState) firstSeq() uint64 {
 func (l *logState) checkpointOf() *checkpoint {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
-	if len(l.segs) == 0 {
+	// lastEp and lastTS describe the newest segment written; a checkpoint
+	// stores them for its last indexed segment, so none is taken when a
+	// frameless segment (an open's fence) came after it (a checkpoint at
+	// Close with no commit since open)
+	if len(l.segs) == 0 || l.nextSeq != l.segs[len(l.segs)-1].seq+1 {
 		return nil
 	}
 	return &checkpoint{log: l.meta.ID, startSeq: l.firstSeq(), start: l.base, lastEp: l.lastEp,

@@ -25,8 +25,12 @@ import (
 type keyring struct {
 	st   store.Store
 	rand io.Reader
-	kek  cipher.AEAD
-	sign ed25519.PrivateKey
+	// randMu serializes reads of rand: the writer loop and a background
+	// checkpoint both draw nonces, and a seeded test source is not safe for
+	// concurrent use.
+	randMu sync.Mutex
+	kek    cipher.AEAD
+	sign   ed25519.PrivateKey
 
 	mu       sync.RWMutex
 	deks     map[string]cipher.AEAD // subject hash -> DEK
@@ -136,7 +140,9 @@ func openKeyring(ctx context.Context, st store.Store, rnd io.Reader, kek []byte)
 
 func (k *keyring) randBytes(n int) ([]byte, error) {
 	b := make([]byte, n)
+	k.randMu.Lock()
 	_, err := io.ReadFull(k.rand, b)
+	k.randMu.Unlock()
 	return b, err
 }
 

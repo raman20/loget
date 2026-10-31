@@ -9,7 +9,6 @@ import (
 
 	"github.com/raman20/loget/format"
 	"github.com/raman20/loget/index"
-	"github.com/raman20/loget/store"
 )
 
 // Snapshots checkpoint a log's record store and the state of every
@@ -130,45 +129,28 @@ func decodeSnapshot(b []byte) (h snapHeader, kv []byte, sections map[string][]by
 	return h, kv, sections, nil
 }
 
+// writeSnapshot checkpoints l's indexes (an index checkpoint, ckpt.go:
+// snapshots in the format above are only read now).
 func (db *DB) writeSnapshot(ctx context.Context, l *logState, v *view) error {
-	v.mu.RLock()
-	lsn, kv := v.head, v.kv.Snapshot()
-	sections := map[string][]byte{}
-	for i, k := range db.reg.Derived() {
-		if sn, ok := v.derived[i].(index.Snapshotter); ok && k.Restore != nil {
-			sections[k.SectionName()] = sn.Snapshot()
-		}
-	}
-	v.mu.RUnlock()
-	chain, err := l.chainAt(ctx, lsn)
-	if err != nil {
-		return err
-	}
-	// The segment index goes first: open then reads only the segments
-	// after this point to recover the log, and replays only those on top
-	// of the snapshot. Failing to write it only costs open time.
-	if err := db.writeCheckpoint(ctx, l); err != nil {
-		db.logf("loget: segment-index checkpoint failed (non-fatal): %v", err)
-	}
-	key := snapKey(l.meta.ID, lsn)
-	b := encodeSnapshot(snapHeader{log: l.meta.ID, lsn: lsn, chain: chain}, kv, sections)
-	if err := putExactlyOnce(ctx, db.st, key, b); err != nil && !errors.Is(err, store.ErrExists) {
-		return err
-	}
-	db.mu.Lock()
-	defer db.mu.Unlock()
-	return db.commitManifest(ctx, func(m *Manifest) error {
-		if lm := m.Logs[l.meta.ID]; lm != nil && lm.SnapLSN < lsn && (lm.Base == nil || lm.Base.LSN < lsn) {
-			lm.SnapLSN, lm.SnapKey = lsn, key
-		}
-		return nil
-	})
+	return db.writeIndexCkpt(ctx, l, v)
 }
 
-// loadSnapshot returns l's newest snapshot, or nil to replay the log.
+// loadSnapshot returns l's index checkpoint, else its snapshot (written
+// before design 24), or nil to replay the log.
 func (db *DB) loadSnapshot(ctx context.Context, l *logState) *snapshot {
 	lm := db.man.Logs[l.meta.ID]
-	if lm == nil || lm.SnapKey == "" {
+	if lm == nil {
+		return nil
+	}
+	if lm.Ckpt != nil && !db.fullScan {
+		snap, err := db.readIndexCkpt(ctx, l, lm.Ckpt)
+		if err == nil {
+			return snap
+		}
+		db.met.ckptFallbacks.Add(1)
+		db.logf("loget: ignoring index checkpoint %s (the log is replayed instead): %v", lm.Ckpt.Key, err)
+	}
+	if lm.SnapKey == "" {
 		return nil
 	}
 	snap, err := db.readSnapshot(ctx, l, lm.SnapKey)

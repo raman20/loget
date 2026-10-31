@@ -42,19 +42,28 @@ func TestNewerFormatsRefused(t *testing.T) {
 		k := latest(st, "manifest/")
 		rewrite(st, k, func(b []byte) []byte {
 			m, _ := decodeManifest(b)
-			m.Format = 3
+			m.Format = manifestFormatRunBase + 1
 			return encodeManifest(m)
 		})
 		_, err := OpenStore(ctx, st, quiet())
 		if !errors.Is(err, ErrVersion) || !strings.Contains(err.Error(), "upgrade the binary") {
-			t.Fatalf("manifest format 3: %v", err)
+			t.Fatalf("manifest format %d: %v", manifestFormatRunBase+1, err)
 		}
 		if latest(st, "manifest/") != k {
 			t.Fatal("a refused open wrote a manifest")
 		}
 	})
 	t.Run("base", func(t *testing.T) {
-		st := setup(t, true)
+		// a single-object base (before design 24; bases are now run
+		// pieces gated by manifest format 3): the golden database of
+		// that format
+		st, err := store.NewFS(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.CopyFS(st.Root(), os.DirFS("testdata/golden/d557e72-compacted/db")); err != nil {
+			t.Fatal(err)
+		}
 		ks, _ := st.List(ctx, "base/L1/")
 		var bk string
 		for _, k := range ks {
@@ -66,7 +75,7 @@ func TestNewerFormatsRefused(t *testing.T) {
 			t.Fatal("no base")
 		}
 		rewrite(st, bk, func(b []byte) []byte { b[7] = '2'; return b })
-		_, err := OpenStore(ctx, st, quiet())
+		_, err = OpenStore(ctx, st, quiet())
 		if !errors.Is(err, ErrVersion) {
 			t.Fatalf("base version 2: %v", err)
 		}
