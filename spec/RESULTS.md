@@ -46,6 +46,7 @@ the first run reported 32 with identical state counts.
 | LogEtGC | GC with retention (item 8): two logs (main's log and a rewind child forked at P=1, kept by the reflog), retention window W=1 commits, a base at the cut capped by the dependent child's branch point, reflog pruning, dropping unreachable logs, sweeping, deleting old manifests (Keep=1), 2 processes with crashes, ≤2 epochs, a fenced writer that keeps running (incl. committing into a deleted manifest slot), create-only manifest put + post-create List check; MaxLSN=3, MaxMan=6, process symmetry | 6,582,415 | 1,598,697 | 28 | no error |
 | LogEtGrow | journal preallocation (item 9): 2 appenders, 2 background growers, a file of ≤6 blocks; appends extend synchronously when needed, growers write one zero block at the current size under the writer lock | 97 | 28 | 8 | no error |
 | LogEtShred | DEK per subject, marker → delete → audit entry + certificate; crash between steps; DEK create landing late; sweep; hash chain | 25,570 | 6,481 | 16 | no error (incl. liveness) |
+| LogEtCkpt | index checkpoints and the sharded base (design 24, 2026-11-01): runs as LSN intervals; freeze and merge, piece and descriptor uploads, conditional checkpoint commit, compaction dropping the checkpoint, garbage sweeps with grace, orphan sweep by epoch, 2 processes with crashes, ≤2 epochs, open from a checkpoint, a reader of an older manifest; MaxLSN=2, MaxMans=5, process symmetry. Run with `-workers 2` (3 min 14 s). Larger bounds did not finish and are partial only (below) | 33,127,486 | 6,621,739 | 36 | no error |
 
 ## Properties checked
 
@@ -138,6 +139,8 @@ the first run reported 32 with identical state counts.
 | LogEtGC with the parent's cut ignoring a dependent branch (`LogEtGC_nodeps.cfg`) | `GarbageFinal` violated |
 | LogEtGC deleting the manifest it holds (`Keep = 0`, `LogEtGC_keep0.cfg`) | `TypeOK` violated (no manifest left) |
 | LogEtGrow with the grower writing at a size read before releasing the lock (`LogEtGrow_unlocked.cfg`) | `NoLostRecord` violated in 4 steps |
+| LogEtCkpt without the base-LSN (floor) check at checkpoint commit and open (`LogEtCkpt_nobase.cfg`, MaxLSN=3) | `CkptEqReplay` violated (1,244 states generated, depth 7; the count varies a little with worker interleaving) |
+| LogEtCkpt with the orphan sweep ignoring the epoch rule (`LogEtCkpt_noepoch.cfg`, MaxLSN=3) | `CkptIntact` violated (1,751 states generated, depth 8) |
 | LogEtShred with `Sweep` disabled | `KeyEventuallyGone` violated |
 | LogEtShred with reads ignoring the shred marker | `ShreddedNeverRevealed` violated |
 
@@ -151,3 +154,9 @@ the first run reported 32 with identical state counts.
 - Torn writes are over-approximated as any subset of a batch's frames (the
   real format keeps a prefix).
 - Snapshots, derived indexes (the index framework) and the HTTP layer are not modelled.
+- LogEtCkpt at larger bounds was stopped, not completed: `LogEtCkpt_big.cfg`
+  (MaxLSN=3, MaxMans=7) after 25 min, 58,595,423 distinct states, 29.9M
+  still queued; `LogEtCkpt_e3.cfg` (MaxLSN=2, 3 epochs) after 13.2M distinct.
+  Neither reported a violation, which says nothing about the unexplored rest.
+  LogEtCkpt models runs as LSN intervals, not their bytes: piece CRCs,
+  descriptor decoding and the hash-chain binding are checked by Go tests.
