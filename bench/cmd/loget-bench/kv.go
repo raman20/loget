@@ -90,6 +90,10 @@ var valueCacheBytes int
 // snapshotEvery is LogEt's WithSnapshotEvery (0 = the library default).
 var snapshotEvery int
 
+// checkpointBytes is LogEt's WithCheckpointBytes (0 = the library
+// default, < 0 = no background or close checkpoints).
+var checkpointBytes int64
+
 // indexInMemory keeps LogEt's whole KV index on the Go heap (no run files,
 // as before design 21).
 var indexInMemory bool
@@ -119,6 +123,9 @@ func openLogEt(dir string, fsync bool, layout store.Layout) (*loget.DB, error) {
 	}
 	if snapshotEvery != 0 {
 		opts = append(opts, loget.WithSnapshotEvery(snapshotEvery))
+	}
+	if checkpointBytes != 0 {
+		opts = append(opts, loget.WithCheckpointBytes(checkpointBytes))
 	}
 	if indexInMemory {
 		opts = append(opts, loget.WithIndexInMemory(true))

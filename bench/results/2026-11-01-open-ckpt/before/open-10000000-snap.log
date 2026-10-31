@@ -1,0 +1,5 @@
+02:22:41 mem after open: rss 367 anon 60 file 307 MiB | go-resident 64 heap-live 7 goal 23 | off-heap anon -4 MiB
+02:22:42 mem after reads: rss 384 anon 77 file 307 MiB | go-resident 59 heap-live 12 goal 24 | off-heap anon 18 MiB
+02:22:42 open loget: 7.91s, 200000 reads in 0.71s (0 missing)
+wrote /workspace/loget-tools/item5/before/open-10000000-snap/open-loget.json
+3.6G	/workspace/i5data-snap

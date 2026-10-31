@@ -1,0 +1,88 @@
+{
+  "suite": "open",
+  "env": {
+    "time": "2026-11-01T02:21:20+05:30",
+    "go_version": "go1.27.3",
+    "os": "linux/amd64",
+    "kernel": "6.12.94+",
+    "cpu": "Intel(R) Xeon(R) Processor",
+    "cpus": 8,
+    "mem_total": "16386368 kB",
+    "disk": "/dev/vdb ext4 128G",
+    "loget_commit": "",
+    "command": "/workspace/loget-tools/item5/bench-before2 open -system loget -dir /workspace/i5data-snap/ycsb-loget-true -keys 1000000 -reads 200000 -out /workspace/loget-tools/item5/before/open-1000000-snap",
+    "loadavg_at_start": "2.30 1.96 2.03"
+  },
+  "params": {
+    "system": "loget",
+    "dir": "/workspace/i5data-snap/ycsb-loget-true",
+    "keys": 1000000,
+    "reads": 200000,
+    "open_secs": 1.843,
+    "read_secs": 0.551,
+    "reads_per_sec": 362941,
+    "missing": 0,
+    "peak_rss": "96456 kB",
+    "memory": {
+      "marks": [
+        {
+          "phase": "after open",
+          "rss_mib": 84,
+          "anon_mib": 38,
+          "file_mib": 45,
+          "go_resident_mib": 43,
+          "heap_objects_mib": 11,
+          "heap_free_mib": 23,
+          "gc_goal_mib": 14,
+          "anon_minus_go_mib": -5
+        },
+        {
+          "phase": "after open (after GC)",
+          "rss_mib": 84,
+          "anon_mib": 38,
+          "file_mib": 45,
+          "go_resident_mib": 43,
+          "heap_objects_mib": 6,
+          "heap_free_mib": 28,
+          "gc_goal_mib": 13,
+          "anon_minus_go_mib": -5
+        },
+        {
+          "phase": "after reads",
+          "rss_mib": 94,
+          "anon_mib": 48,
+          "file_mib": 45,
+          "go_resident_mib": 32,
+          "heap_objects_mib": 15,
+          "heap_free_mib": 6,
+          "gc_goal_mib": 22,
+          "anon_minus_go_mib": 16
+        },
+        {
+          "phase": "after reads (after GC)",
+          "rss_mib": 94,
+          "anon_mib": 48,
+          "file_mib": 45,
+          "go_resident_mib": 32,
+          "heap_objects_mib": 10,
+          "heap_free_mib": 11,
+          "gc_goal_mib": 22,
+          "anon_minus_go_mib": 16
+        }
+      ],
+      "note": "sampled every 200 ms; anon_minus_go ≈ LogEt's off-heap value-cache arena + cgo; page cache for pread'd data files is not in RSS for any engine",
+      "peak_by_rss": {
+        "phase": "open",
+        "rss_mib": 82,
+        "anon_mib": 36,
+        "file_mib": 45,
+        "go_resident_mib": 42,
+        "heap_objects_mib": 26,
+        "heap_free_mib": 6,
+        "gc_goal_mib": 39,
+        "anon_minus_go_mib": -6
+      }
+    }
+  },
+  "runs": null
+}

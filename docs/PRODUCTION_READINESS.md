@@ -91,7 +91,7 @@ named), **documented** (accepted limit, written down where users read).
 | S5.3 | The journal file only shrinks offline (`gc --shrink`). The 6 h soak's 9.5 GiB was this: 40.8 M dead records; shrink took 8.57 GB allocated (244 GB apparent) to 0.45 GB in 6 min 54 s | documented, measured; open: online reclaim |
 | S5.6 | Topics without retention keep every message in RAM and in every compaction and snapshot: the 6 h soak's 11.37 M messages were ~1.09 GB of live heap (~95 B each), the bulk of its RSS | documented: retention exists since component C (`--topic-max-age`, `--topic-max-messages`); topics moved to branch `index/topics`; their merge bar includes storage outside RAM ([PIPELINE.md](PIPELINE.md)) |
 | S5.4 | S3 request cost per commit and per open is not measured. | fixed (measured): docs/s3.md — 1 PUT per serial commit, 0.06 with 32 writers, ~2 GETs per segment at open |
-| S5.5 | A snapshot is one object holding the whole key index; above 5 GiB a single S3 PUT fails (multipart is disabled). | open (not reached in tests; design 17) |
+| S5.5 | A snapshot is one object holding the whole key index; above 5 GiB a single S3 PUT fails (multipart is disabled). | mostly addressed (design 24): the key index and compaction bases are stored in ≤ 64 MiB pieces; a checkpoint descriptor still carries every derived index's section in one object. Not tested on S3 at that size |
 
 ## S6 — compatibility
 

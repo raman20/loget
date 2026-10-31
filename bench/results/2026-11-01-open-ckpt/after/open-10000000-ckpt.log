@@ -1,0 +1,6 @@
+4
+03:26:22 mem after open: rss 348 anon 42 file 305 MiB | go-resident 49 heap-live 10 goal 27 | off-heap anon -7 MiB
+03:26:23 mem after reads: rss 367 anon 61 file 305 MiB | go-resident 45 heap-live 15 goal 31 | off-heap anon 16 MiB
+03:26:23 open loget: 3.43s, 200000 reads in 0.78s (0 missing)
+wrote /workspace/loget-tools/item5/after/open-10000000-ckpt/open-loget.json
+1.6G	/workspace/i5data-ckpt

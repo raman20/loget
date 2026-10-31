@@ -9,16 +9,18 @@ reasoning and [formats.md](formats.md) for the byte layouts.
 `loget version` prints the formats the binary reads and writes:
 
 ```
-formats: manifest 1-2, segment 1, base 1, journal 1-2, snapshot 2 (KV2), checkpoint 1
+formats: manifest 1-3, segment 1, base 1 and run pieces, journal 1-2, snapshot 2 (KV2, read only), checkpoint 1, index checkpoint 1
 ```
 
 | object | stamp | unknown version |
 |---|---|---|
-| manifest (`.mf`) | JSON `"format"`: 1, or 2 once compacted | open fails, `ErrVersion` |
+| manifest (`.mf`) | JSON `"format"`: 1; 2 once compacted by a build before design 24; 3 once compacted since (base stored as run pieces) | open fails, `ErrVersion` (a build before design 24 refuses format 3) |
 | segment (`.seg`) | magic `LGETSEG1` + u16 version | open fails, `ErrVersion` |
-| base (`.base`) | magic `LGETBAS1` (last byte = version) | open fails, `ErrVersion` |
+| base (`.base`) | magic `LGETBAS1` (last byte = version); written before design 24, still read | open fails, `ErrVersion` |
+| base run pieces (`.run` under `base/`) | none; described by the manifest's `base.run` (gated by manifest format 3), one CRC-32C per piece | gated by the manifest format |
+| index checkpoint (`.ckpt`, `.run` under `ckpt/`) | magic `LGCKPT1\n` (byte 6 = version); pieces have no header, their CRCs are in the descriptor | ignored with a log line, the log is replayed (cache). Older builds ignore the manifest's `ckpt` field, drop it when they commit, and log "unknown garbage kind" for `ckpt`/`run` garbage entries, which stay listed; the objects are left behind until a newer build's orphan sweep |
 | journal file (`journal.fj`) | magic `LOGETJ2\0` for new files (byte 6 = version; 2 adds batch delete records, design 23). A version 1 file is read and kept at version 1 (deletes stay one record each), so the build that made it can still open it | open fails, `ErrVersion` (a pre-design-23 build refuses a version 2 file) |
-| snapshot (`.snap`) | magic `LGSNAP2\n` (v2, bound to its log and hash chain); `KV2` tag inside, then one section per derived index named `name@version` | ignored, rebuilt from the log (cache); a section of another index version is ignored and that index replays |
+| snapshot (`.snap`) | magic `LGSNAP2\n` (v2, bound to its log and hash chain; no longer written since design 24, still read); `KV2` tag inside, then one section per derived index named `name@version` | ignored, rebuilt from the log (cache); a section of another index version is ignored and that index replays |
 | segment-index checkpoint (`.idx`) | magic `LGETIDX1` (last byte = version) | ignored, the segments are scanned (cache). Older builds ignore `.idx` objects; their GC leaves them behind (a few bytes each) |
 | value chunk (`.val`) | magic `LGETVAL1`, not checked | gated by the manifest format (each value has its own CRC) |
 | keys (`keys/…`), shred certificates, token file | none | gated by the manifest format |
@@ -59,7 +61,13 @@ recognise LogEt objects either.
 | written by → read by | main |
 |---|---|
 | main, uncompacted (files and journal layouts) | yes (golden `main`) |
-| main, compacted (manifest 2) | yes (golden `main-compacted`) |
+| main, compacted (manifest 3) | yes (golden `main-compacted`) |
+| d557e72 (before design 24), uncompacted, with a snapshot | yes (golden `d557e72`) |
+| d557e72, compacted (manifest 2, `.base` object) | yes (golden `d557e72-compacted`) |
+
+A build before design 24 can open a database written since only if it was
+never compacted since (manifest 1); it then replays instead of using
+checkpoints.
 
 The first LogEt release adds its own golden directory and a column here.
 

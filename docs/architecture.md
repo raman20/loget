@@ -99,9 +99,12 @@ reads them back on demand through the **value cache** (`vcache.go`: 64
 shards of byte rings in one off-heap `mmap` arena, default 256 MiB,
 `WithValueCacheBytes`). Every value read from storage is CRC-checked before
 it is returned or cached, and values are copied on the way in and out.
-Index state can be checkpointed to `snap/` (`WithSnapshotEvery`, off by
-default): the KV image plus one section per derived index that can
-snapshot. Checkpoints are an optimisation, never the source of truth.
+Index state is checkpointed to `ckpt/` (design 24; in the background every
+512 MiB of segments, `WithCheckpointBytes`, and at close): the KV record
+store's immutable runs in pieces, reused by later checkpoints, plus one
+section per derived index that can snapshot. Checkpoints are an
+optimisation, never the source of truth; one that does not check out is
+ignored and the log is replayed.
 
 **Branches** (`branch.go`). A branch is a log with a parent and a fork LSN, so
 creating one copies no data. Reads on a branch see the parent's entries up to

@@ -20,12 +20,12 @@ runs, not performance claims.
 
 | # | gap | LogEt today | Pebble / RocksDB / LMDB | impact |
 |---|---|---|---|---|
-| 1 | **Key index mostly in RAM → mapped run files (design 21)** | runs of ≥ 1 MiB live in unlinked, memory-mapped files (file-backed, reclaimable pages); the hot set, small runs and block offsets stay on the heap. 10M × 100 B YCSB: peak RSS 3,546 → 1,916 MiB, end 920 MiB of which 319 MiB file-backed; 1M × 1 KiB: 958 → 640 MiB peak. Open still rebuilds the index: ~33 s at 10M keys without a snapshot | Pebble 740 MiB peak, 53 MiB end at 10M; opens in under 0.2 s | remaining RAM users: OCC recent-commit window during bulk writes, value cache, Go GC headroom; open time |
+| 1 | **Key index mostly in RAM → mapped run files (design 21)** | runs of ≥ 1 MiB live in unlinked, memory-mapped files (file-backed, reclaimable pages); the hot set, small runs and block offsets stay on the heap. 10M × 100 B YCSB: peak RSS 3,546 → 1,916 MiB, end 920 MiB of which 319 MiB file-backed; 1M × 1 KiB: 958 → 640 MiB peak. Open loads the newest index checkpoint (design 24): 3.4 s at 10M keys, 26–28 s replaying | Pebble 740 MiB peak, 53 MiB end at 10M; opens in under 0.2 s | remaining RAM users: OCC recent-commit window during bulk writes, value cache, Go GC headroom; open time |
 | 2 | **Range reads → iterators (design 22)** | `Tx.Iter` with prefix and `[start, end)` bounds, reverse, limit, `After` pagination (HTTP `after=` / `Loget-Next-After`), paged under the read lock so memory stays bounded; OCC conflicts cover only the returned range. Full iterator scan at 10M × 100 B: 498k keys/s, no growth over the resident index (before: 207k keys/s via the slice API, heap peak 4.8 GiB); 100-key prefix scan 6.2k/s at c=1 | Pebble 7.2M keys/s full scan, 39k/s prefix100 at c=1, flat 163 MiB RSS; a live iterator can `SeekGE`/`SeekLT` | one value open per key (no readahead), so scans are 4–15× slower than Pebble; no seek on a live iterator (open a new one with `Start`/`After`) |
 | 3 | **Batches and bulk load** | every write is an OCC transaction (`Update`, auto-retry); one segment and one `fdatasync` per group commit; index ingest 2.0–2.9 µs/key | Pebble `Batch`/`IndexedBatch`, SST ingestion; RocksDB `WriteBatch`, `IngestExternalFile`; LMDB `MDB_APPEND` | no write-only fast path; no bulk import; no per-write durability choice |
 | 4 | **Compaction** | whole-log: writes a base image of live data per log, then deletes garbage after a grace period. Commits pause 11–14 ms; branch operations wait for the whole run; journal file shrinks only offline | Pebble/RocksDB: leveled, incremental, in the background without commit pauses. LMDB: copy-on-write with a free list, no compaction | pauses and O(live data) rewrites per run |
-| 5 | **Open / recovery time** | restores the latest snapshot and replays the tail; without snapshots, replays every segment | replay the WAL into a memtable only | slow opens on big logs without `WithSnapshotEvery` |
-| 6 | **Snapshot lifetime** | time travel to any LSN and zero-copy branches (stronger than all three); but compaction drops history below each branch head (`410`), and a checkpoint snapshot is one object (> 5 GiB fails on AWS S3) | Pebble/RocksDB: in-memory snapshot handles pin versions until released; LMDB: a read txn pins pages | long readers can lose history to compaction |
+| 5 | **Open / recovery time** | loads the newest index checkpoint (stored runs, written in the background every 512 MiB of segments and at close; design 24) and replays the tail: 10M keys 3.4 s / 580 MiB peak (full replay 26–28 s); still O(index size): pieces are copied and hash slots rebuilt | replay the WAL into a memtable only | open time grows with the index; after a crash, the tail since the last checkpoint is replayed |
+| 6 | **Snapshot lifetime** | time travel to any LSN and zero-copy branches (stronger than all three); but compaction drops history below each branch head (`410`), (checkpoints and bases are stored in ≤ 64 MiB pieces since design 24) | Pebble/RocksDB: in-memory snapshot handles pin versions until released; LMDB: a read txn pins pages | long readers can lose history to compaction |
 | 7 | **TTL** | none | RocksDB: TTL DB / compaction filters; Pebble and LMDB: none built in | expiry must be done by the app |
 | 8 | **Compression** | key runs are front-coded; values are not compressed | per-block Snappy/Zstd/LZ4 (Pebble, RocksDB); LMDB none | larger disk and object-store footprint |
 | 9 | **Point reads** | faster than Pebble in YCSB C while the index fits in RAM (1.83M vs 197k ops/s, 8 clients); the runs made the index `Get` 1.1–1.3× slower than the old map | block cache plus bloom filters | small today; will matter once item 1 moves the index to disk |
@@ -54,8 +54,12 @@ Nothing else is added to `main` meanwhile.
    transaction size limits.
 4. **TTL**: per-key expiry that is still a pure function of the log
    (expiry by entry timestamp, never by wall clock at read time).
-5. **Snapshots**: pinned snapshot handles that compaction respects;
-   multi-part checkpoint snapshots for large indexes.
+5. **Open and snapshots**: open without full replay: done (design 24):
+   incremental index checkpoints of stored runs, base stored as run
+   pieces (no 1 GiB / ~15M-key cap); 10M-key open 7.9 s (snapshot) / 5.5 s
+   (base) → 3.4 / 3.3 s, peak RSS 3.2 / 2.2 GiB → 0.58 / 0.39 GiB. Left:
+   pinned snapshot handles that compaction respects; checkpoints naming
+   base pieces; incremental derived-index sections.
 6. **Compaction**: incremental compaction without a commit pause. The
    three problems measured in design 21 (design 23): `writeBase` peaking
    at 6.3 GiB RSS at 10M keys: fixed, the base is streamed (peak 3.2 GiB,
@@ -65,8 +69,8 @@ Nothing else is added to `main` meanwhile.
    largest heap user in bulk writes: fixed, the writer keeps only commits
    an open attempt can conflict with (heap after a 10M load 561 → 19 MiB).
    Final run (design 23 summary): 10M compaction peak 6.4 → 2.5 GiB RSS,
-   1M compaction with ~455k deletes 62 → 6.9 s. Still open: incremental compaction (one base object per log, journal
-   limit 1 GiB).
+   1M compaction with ~455k deletes 62 → 6.9 s. Still open: incremental compaction (whole-log rewrite; the base is
+   stored in pieces since design 24, so the 1 GiB object limit is gone).
 
 Also open for KV, no order yet: tests on AWS S3 and Cloudflare R2 (only
 MinIO is tested), online journal shrink, value compression.

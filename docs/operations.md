@@ -105,7 +105,8 @@ RSS grows by about its size once it fills. Go API options:
 | `WithIndexDir(dir)` / `--index-dir` / `LOGET_INDEX_DIR` | OS temp dir (`$TMPDIR`, else `/tmp`) | where the KV index's run files go (unlinked at creation, never reused across restarts). A default dir that is unusable is logged and the index stays on the heap; an explicit one that is unusable fails Open |
 | `WithIndexInMemory(true)` | false | keep the whole KV index on the Go heap (the behaviour before design 21; non-Unix builds always do) |
 | `WithInlineMax(n)` | 64 B | KV values up to `n` bytes stay in RAM; negative keeps none inline |
-| `WithSnapshotEvery(n)` | 0 (off) | snapshot (KV plus a section per derived index that can snapshot) and segment-index checkpoint every `n` commits, written synchronously. Open then reads each segment once instead of twice and restores the indexes from the snapshot, replaying only the tail (see "Open time") |
+| `WithCheckpointBytes(n)` | 512 MiB | write an index checkpoint (the KV record store's runs in ≤ 64 MiB pieces, a section per derived index that can snapshot, and a segment-index checkpoint) in the background after `n` bytes of segments, and at a clean close; a later checkpoint reuses runs already stored. Open loads it and replays only the tail (see "Open time"). Negative: none, not even at close (open replays) |
+| `WithSnapshotEvery(n)` | 0 (off) | also write an index checkpoint synchronously every `n` commits (background checkpoints are then off; the simulator uses this for determinism) |
 | `WithReadAhead(n)` | 8 | segment reads kept in flight while replaying (open, time travel, index builds); 1 = sequential |
 | `WithCommitPolicy(CommitPolicy{MaxDelay, TargetBytes})` | no wait | a group commit waits up to `MaxDelay` for more transactions, until it holds `TargetBytes` (default 1 MiB) or `MaxBatch` (256) of them. Fewer, larger segment PUTs for more latency; see below |
 
@@ -132,6 +133,13 @@ one 8-core box shared with other jobs, 2026-10-29; mean of 10 opens):
 Raw output: `bench/results/2026-10-29-open/` (measured on freshDB, which
 also rebuilt vector and document indexes from every segment). Without
 snapshots, open still reads every segment.
+
+Since design 24 checkpoints are on by default (every 512 MiB of segments
+and at close). 10M × 100 B keys, local disk, page cache warm: open from the
+checkpoint 3.4 s and 580 MiB peak RSS, from a compaction base 3.3 s and
+385 MiB, full replay (`WithCheckpointBytes(-1)`) 26 s; 1M keys 0.3 s vs
+1.8 s ([design/24-open-checkpoints.md](design/24-open-checkpoints.md)).
+After a crash, the segments since the last checkpoint are replayed.
 
 **Commit policy.** With the default, a batch is whatever queued while the
 previous segment was being written, so with N steady writers about half of
@@ -301,8 +309,9 @@ model: [`spec/LogEtCompact.tla`](../spec/LogEtCompact.tla).
 The base is streamed to an unlinked temporary file in the index directory
 (`IndexDir`, by default the OS temp dir; on the heap with
 `WithIndexInMemory`), so the temp directory needs free space of about one
-base (≈ 60 MiB per million 100 B keys plus keys). A base is one object;
-on the journal store it must stay under 1 GiB (design 23).
+base (≈ 60 MiB per million 100 B keys plus keys). Since design 24 a base
+is stored in pieces of ≤ 64 MiB, so it is no longer bounded by the
+journal's 1 GiB object limit; bases written before are one object.
 
 ```sh
 loget compact                       # embedded, against LOGET_URL or --db; grace 0s

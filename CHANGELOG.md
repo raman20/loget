@@ -7,6 +7,33 @@ break APIs and the on-storage format.
 
 ## [Unreleased]
 
+### Changed (KV item 5: open without full replay, design 24, 2026-11-01)
+
+- Open loads the newest index checkpoint: the record store's runs stored
+  as they are, in pieces of ≤ 64 MiB with a CRC-32C each, named by an
+  `LGCKPT1` descriptor in `ckpt/<log>/` that the manifest points at
+  (`LogMeta.Ckpt`). Only segments after it are replayed. A later
+  checkpoint names runs an earlier one stored. 10M keys: 3.4 s and 580 MiB
+  peak RSS, instead of 7.9 s / 3.2 GiB from a snapshot or 28 s replaying.
+- Checkpoints are written in the background every 512 MiB of segments
+  (`WithCheckpointBytes`, < 0 disables), every `SnapshotEvery` commits if
+  set, and at a clean close. LGSNAP2 snapshots are no longer written but
+  are still read. New metric `CheckpointFallbacks`
+  (`loget_checkpoint_fallbacks_total`).
+- A compaction base is one record-store run stored in pieces, so bases
+  are no longer limited to one 1 GiB object (~15M keys of 100 B). Open from
+  a 10M-key base 5.5 s / 2.2 GiB → 3.3 s / 385 MiB; compaction peak RSS
+  2.5 → 1.9 GiB. Older `.base` bases are still read.
+- `index.RunMeta` records its piece size (`Piece`).
+- Fixed: concurrent reads of the keyring's random source (seen by the race
+  detector with background checkpoints).
+
+### Changed (breaking, KV item 5)
+
+- Compaction writes manifest format 3; builds before design 24 refuse a
+  compacted database with `ErrVersion`. They can still open an
+  uncompacted one (they ignore checkpoints and replay).
+
 ### Changed (KV item 6: compaction memory, design 23, 2026-11-01)
 
 - Compaction streams each base to an unlinked file in the index

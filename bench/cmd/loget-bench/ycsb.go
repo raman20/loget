@@ -91,6 +91,7 @@ func cmdYCSB(args []string) {
 	profWl := fs.String("cpuprofile-workload", "", "with -cpuprofile: profile only this workload (default: the only one)")
 	memprof := fs.String("memprofile", "", "write heap profiles to <prefix>-<phase>.pb.gz after load and after each workload")
 	fs.IntVar(&snapshotEvery, "snapshot-every", 0, "loget only: WithSnapshotEvery (commits per snapshot; 0 = the library default)")
+	fs.Int64Var(&checkpointBytes, "checkpoint-bytes", 0, "loget only: WithCheckpointBytes (segment bytes between background index checkpoints; 0 = the library default, -1 = none, not even at close)")
 	fs.IntVar(&valueCacheBytes, "value-cache", 0, "loget only: value cache bytes (0 = the library default; -1 = off)")
 	fs.BoolVar(&indexInMemory, "index-in-memory", false, "loget only: keep the whole KV index on the Go heap (no run files)")
 	keep := fs.Bool("keep", false, "keep the data directory (for the open suite)")

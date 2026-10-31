@@ -26,7 +26,8 @@ transactions wait on `index/*` branches until KV is done
 Mapping to the usual vocabulary: *Apply* is `Index.Apply`; *Snapshot* is
 `Snapshotter.Snapshot`; *Restore* is `Kind.Restore`; *Checkpoint* is the
 engine writing every index's snapshot section next to the log position
-it covers (`WithSnapshotEvery`, also on close), so open restores the
+it covers (with every index checkpoint: `WithCheckpointBytes`,
+`WithSnapshotEvery`, and at close), so open restores the
 section and replays only the tail.
 
 There are two shapes:

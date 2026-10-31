@@ -20,14 +20,17 @@ payload's bytes canonical, which the hash chain relies on.
 <prefix>/
   manifest/<id:%020d>.mf             JSON manifest, create-only, dense ids from 1
   log/<logID>/<seq:%020d>.seg        segment = one group commit (or a fence), create-only, dense seq from 1
-  snap/<logID>/<lsn:%020d>.snap      optional index checkpoint (cache, never truth)
+  snap/<logID>/<lsn:%020d>.snap      index snapshot written before design 24 (read only; cache, never truth)
+  ckpt/<logID>/<lsn:%020d>-e<epoch>-<nonce>.ckpt              index checkpoint descriptor (cache, never truth)
+  ckpt/<logID>/<lsn:%020d>-e<epoch>-<nonce>.r<i>.<p:%06d>.run piece p of a stored record-store run
   log/<logID>/<seq>.idx                 segment-index checkpoint covering segments up to <seq> (cache, never
                                         truth; create-only; deleted with the segment by GC)
   log/<logID>/<seq>.repair              repair note of a damaged segment kept by --repair-tail:
                                         "loget-repair v1 seq= frames= valid= size= sha256=" (create-only;
                                         the segment stays as is; deleted with the segment by GC)
   quarantine/<logID>/<seq>-<epoch>.seg  written by versions before the repair note (copy of a repaired tail)
-  base/<logID>/<lsn:%020d>-e<epoch>-<nonce>.base         compaction base image (main only)
+  base/<logID>/<lsn:%020d>-e<epoch>-<nonce>.base         compaction base image (before design 24; read only)
+  base/<logID>/<lsn:%020d>-e<epoch>-<nonce>.<p:%06d>.run  piece p of a compaction base run (design 24)
   base/<logID>/<lsn:%020d>-e<epoch>-<nonce>.<n:%06d>.val value chunk of that base, ≤ 64 MiB
   keys/_kek                          dev-mode key-encryption key (see SECURITY.md)
   keys/_sign                         ed25519 seed for shred certificates (dev mode)
@@ -170,6 +173,16 @@ start with `LGETVAL1`. Derived indexes are rebuilt from the base's
 records at open.
 See [design/03-compaction.md](design/03-compaction.md).
 
+Since design 24 compaction writes `"format": 3` and the base as one
+record-store run in pieces instead of a `.base` object: `"base"` gains
+`"run": {"len", "n", "vers", "piece", "sums"}` (run bytes, keys, versions,
+bytes per piece, one CRC-32C per piece) and the pieces are
+`<key>.<p:%06d>.run` (run piece layout below). Bases of format 2 are still
+read. A log's newest index checkpoint is `"ckpt": {"lsn", "floor", "key",
+"runs": [{"key", "pieces"}]}` (any format; older binaries ignore the field);
+garbage kinds `"ckpt"` (a descriptor) and `"run"` (a run's `chunks` pieces)
+are added. See [design/24-open-checkpoints.md](design/24-open-checkpoints.md).
+
 The manifest with the highest id is current. Creating `id+1` is how a writer
 takes the lease and how branch operations commit; `ErrExists` means another
 writer got there first, and this one is fenced.
@@ -203,9 +216,44 @@ frames are checked (CRC, sequence, first LSN) when read, and `verify`
 scans everything and warns about any checkpoint that differs from the
 segments.
 
+## Index checkpoint (`.ckpt`) and run pieces (`.run`)
+
+Design 24. Descriptor key `ckpt/<log>/<lsn %020d>-e<epoch>-<nonce hex>.ckpt`.
+Version 1, little endian:
+
+```
+8B   magic "LGCKPT1\n"
+u64  LSN covered
+u64  floor: compaction base LSN of the lineage the record store was built on
+32B  hash-chain head after that LSN
+u8   len(log id), then the log id
+u32  record store inline limit
+u32  run count, then per run (newest first):
+       u16 len(key) | key | u64 bytes | u64 keys | u64 versions
+       | u32 bytes per piece | u32 piece count | u32 CRC32C per piece
+u32  section count
+section × count { u8 len(name) | name "<index>@<version>" | u64 len | bytes }   sorted by name
+u32  CRC32C(all of the above)
+```
+
+A run's bytes are the record store's run entries as kept in its run file
+(design 21), split into pieces `<run key>.<p %06d>.run` of the stated size
+(the last may be shorter); a piece has no header, its CRC is in the
+descriptor (or, for a base, in the manifest). A run keeps the key it was
+first stored under, so a descriptor may name runs stored by an earlier
+checkpoint. Open uses a checkpoint only if the manifest's `ckpt` names it,
+the descriptor's checksum holds, it names this log, its LSN and floor match
+the manifest and the log's own base, its chain head equals the log's at
+that LSN, its inline limit is the current one, and every piece has its
+length and CRC; each run's entries are then walked and its hash slots
+rebuilt. Anything else logs a line, counts in
+`CheckpointFallbacks`, and the log is replayed (from an older snapshot or
+the base when there is one).
+
 ## Snapshot (`.snap`)
 
-Key `snap/<log>/<lsn %020d>.snap`. Version 2:
+Written before design 24; still read (a checkpoint replaces it at the
+next checkpoint). Key `snap/<log>/<lsn %020d>.snap`. Version 2:
 
 ```
 8B   magic "LGSNAP2\n"
@@ -230,5 +278,4 @@ and that index is rebuilt from the log.
 
 The KV part starts with the tag `KV2` and records the inline limit it was
 written with. A `KV1` snapshot or one written with a different
-limit is ignored the same way, and the log is replayed. Snapshots are off by
-default (`WithSnapshotEvery`).
+limit is ignored the same way, and the log is replayed.
