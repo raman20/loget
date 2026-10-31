@@ -32,6 +32,7 @@ type run struct {
 	b     []byte
 	bofs  []int    // block i is b[bofs[i]:bofs[i+1]]
 	slots []uint64 // open addressing, 0 = empty: hash>>fpShift | block offset+1 | offset in block
+	mp    RunFile  // non-nil: b and slots live in a mapped run file (kvfile.go)
 	n     int      // keys
 	vers  int      // versions
 	chunk bool     // some version has Chunk != 0
@@ -208,24 +209,30 @@ func bodyVers(vs []Version, body []byte) []Version {
 	return vs
 }
 
-// builder writes a run from keys in ascending order.
+// builder writes a run from keys in ascending order, to the heap or, if f
+// is set, to a run file (kvfile.go).
 type builder struct {
 	r       *run
-	hs      []uint64 // per key: hash
-	at      []uint32 // per key: offset in its block (maxInOff: scan)
-	prev    []byte   // first key of the current block
-	scratch []byte   // the versions of the current key
+	buf     []byte  // heap: the run's bytes; file: bytes not yet written
+	f       RunFile // nil: heap
+	off     int     // file: bytes written before buf
+	err     error   // file: first write error
+	prev    []byte  // first key of the current block
+	scratch []byte  // the versions of the current key
 	nv      int
 }
 
 func newBuilder() *builder { return &builder{r: &run{subj: map[string]int{}}} }
 
-// grow reserves room for about n keys in b bytes.
-func (w *builder) grow(n, b int) {
-	w.r.b = make([]byte, 0, b)
-	w.r.bofs = make([]int, 0, n/runBlock+2)
-	w.hs, w.at = make([]uint64, 0, n), make([]uint32, 0, n)
+// grow reserves room for about b bytes (heap builders).
+func (w *builder) grow(b int) {
+	if w.f == nil {
+		w.buf = make([]byte, 0, b)
+	}
 }
+
+// size returns the bytes written so far.
+func (w *builder) size() int { return w.off + len(w.buf) }
 
 // ver adds a version to the current key.
 func (w *builder) ver(v *Version) {
@@ -249,35 +256,32 @@ func (w *builder) entry(key []byte, nv int, parts ...[]byte) {
 	r := w.r
 	shared := 0
 	if r.n%runBlock == 0 {
-		r.bofs = append(r.bofs, len(r.b))
+		r.bofs = append(r.bofs, w.size())
 	} else {
 		for shared < len(key) && shared < len(w.prev) && key[shared] == w.prev[shared] {
 			shared++
 		}
 	}
-	at := len(r.b) - r.bofs[len(r.bofs)-1]
 	bl := uvLen(uint64(nv))
 	for _, p := range parts {
 		bl += len(p)
 	}
-	r.b = binary.AppendUvarint(r.b, uint64(shared))
-	r.b = binary.AppendUvarint(r.b, uint64(len(key)-shared))
-	r.b = append(r.b, key[shared:]...)
-	r.b = binary.AppendUvarint(r.b, uint64(bl))
-	r.b = binary.AppendUvarint(r.b, uint64(nv))
+	w.buf = binary.AppendUvarint(w.buf, uint64(shared))
+	w.buf = binary.AppendUvarint(w.buf, uint64(len(key)-shared))
+	w.buf = append(w.buf, key[shared:]...)
+	w.buf = binary.AppendUvarint(w.buf, uint64(bl))
+	w.buf = binary.AppendUvarint(w.buf, uint64(nv))
 	for _, p := range parts {
-		r.b = append(r.b, p...)
+		w.buf = append(w.buf, p...)
 	}
 	if r.n%runBlock == 0 {
 		w.prev = append(w.prev[:0], key...) // the block's first key
 	}
-	if at > maxInOff {
-		at = maxInOff
-	}
-	w.hs = append(w.hs, khash(key))
-	w.at = append(w.at, uint32(at))
 	r.n++
 	r.vers += nv
+	if w.f != nil && len(w.buf) >= fileBuf {
+		w.flush()
+	}
 }
 
 func uvLen(x uint64) int {
@@ -288,33 +292,79 @@ func uvLen(x uint64) int {
 	return n
 }
 
-// finish returns the run, or nil if it has no keys.
-func (w *builder) finish() *run {
+// nslots sizes a run's hash table: load factor ~0.77.
+func nslots(n int) int { return n + n*3/10 + 1 }
+
+// finish returns the run, or nil if it has no keys. Only a file builder
+// can fail; the builder is spent either way.
+func (w *builder) finish() (*run, error) {
 	r := w.r
+	w.r = nil
 	if r.n == 0 {
-		return nil
+		w.abort()
+		return nil, nil
 	}
-	r.bofs = append(r.bofs, len(r.b))
-	// Load factor ~0.77; the index is a multiply-shift of the low 32 bits.
-	r.slots = make([]uint64, r.n+r.n*3/10+1)
-	for i, h := range w.hs {
-		j := r.slot(h)
-		for r.slots[j] != 0 {
-			if j++; j == len(r.slots) {
-				j = 0
-			}
-		}
-		r.slots[j] = h>>fpShift<<fpShift | uint64(r.bofs[i/runBlock]+1)<<16 | uint64(w.at[i])
+	r.bofs = append(r.bofs, w.size())
+	if cap(r.bofs) > len(r.bofs)+len(r.bofs)/8 { // trim slices that grew by doubling
+		r.bofs = append([]int(nil), r.bofs...)
 	}
-	// Trim slices that grew by doubling.
+	if w.f != nil {
+		return w.finishFile(r)
+	}
+	r.b = w.buf
 	if cap(r.b) > len(r.b)+len(r.b)/8 {
 		r.b = bytes.Clone(r.b)
 	}
-	if cap(r.bofs) > len(r.bofs)+len(r.bofs)/8 {
-		r.bofs = append([]int(nil), r.bofs...)
+	w.buf = nil
+	r.slots = make([]uint64, nslots(r.n))
+	r.fillSlots()
+	return r, nil
+}
+
+// fillSlots builds the hash table from the entries, in key order (so the
+// table is the same wherever the run lives).
+func (r *run) fillSlots() {
+	var key []byte
+	for bi := 0; bi < r.blocks(); bi++ {
+		start := r.bofs[bi]
+		first := r.keyAt(start)
+		for p := start; p < r.bofs[bi+1]; {
+			b := r.b[p:]
+			n := len(b)
+			sh, b := uv(b)
+			sl, b := uv(b)
+			key = append(append(key[:0], first[:sh]...), b[:sl]...)
+			bl, b := uv(b[sl:])
+			at := min(p-start, maxInOff)
+			h := khash(key)
+			j := r.slot(h)
+			for r.slots[j] != 0 {
+				if j++; j == len(r.slots) {
+					j = 0
+				}
+			}
+			r.slots[j] = h>>fpShift<<fpShift | uint64(start+1)<<16 | uint64(at)
+			p += n - len(b) + int(bl)
+		}
 	}
-	w.r, w.hs, w.at = nil, nil, nil
-	return r
+}
+
+// own returns b, copied if it points into a mapped file: values handed
+// out of the index must not alias a run that a later write may unmap.
+func (r *run) own(b []byte) []byte {
+	if r.mp != nil {
+		return bytes.Clone(b)
+	}
+	return b
+}
+
+// release unmaps a file run; the run must no longer be reachable by
+// readers (its owner holds the write lock).
+func (r *run) release() {
+	if r.mp != nil {
+		r.mp.Release()
+	}
+	r.b, r.slots = nil, nil
 }
 
 func (r *run) slot(h uint64) int { return int(uint64(uint32(h)) * uint64(len(r.slots)) >> 32) }
@@ -424,10 +474,9 @@ func (r *run) lookupAt(k string, h uint64, j int, s uint64) ([]byte, bool) {
 	}
 }
 
-// rebuild returns the run with fn applied to every key's versions (oldest
-// first); fn returns nil to drop the key. It returns nil if no key is left.
-func (r *run) rebuild(fn func(key []byte, vs []Version) []Version) *run {
-	w := newBuilder()
+// rebuildInto writes the run to w with fn applied to every key's versions
+// (oldest first); fn returns nil to drop the key.
+func (r *run) rebuildInto(w *builder, fn func(key []byte, vs []Version) []Version) {
 	c := r.cursor()
 	var vs []Version
 	for c.next() {
@@ -439,7 +488,6 @@ func (r *run) rebuild(fn func(key []byte, vs []Version) []Version) *run {
 			w.end(c.key)
 		}
 	}
-	return w.finish()
 }
 
 // merger merges adjacent runs (newest first) into one, a bounded number of
@@ -447,16 +495,11 @@ func (r *run) rebuild(fn func(key []byte, vs []Version) []Version) *run {
 type merger struct {
 	in  []*run
 	cur []*cursor // nil once exhausted
-	w   *builder
+	w   *builder  // nil: only the cursors are used (KV.each)
 }
 
-func newMerger(in []*run) *merger {
-	m := &merger{in: in, w: newBuilder()}
-	n, b := 0, 0
-	for _, r := range in {
-		n, b = n+r.n, b+len(r.b)
-	}
-	m.w.grow(n, b+b/32)
+func newMerger(in []*run, w *builder) *merger {
+	m := &merger{in: in, w: w}
 	for _, r := range in {
 		c := r.cursor()
 		c.next() // runs are never empty
@@ -503,7 +546,7 @@ func (m *merger) step(n int) bool {
 }
 
 // result returns the merged run (nil if empty).
-func (m *merger) result() *run {
+func (m *merger) result() (*run, error) {
 	for _, r := range m.in {
 		m.w.r.chunk = m.w.r.chunk || r.chunk
 		for s, k := range r.subj {

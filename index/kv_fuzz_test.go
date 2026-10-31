@@ -26,31 +26,43 @@ func FuzzLoadKV(f *testing.F) {
 	f.Add(kvSeed(false).Snapshot())
 	f.Add(kvSeed(true).Snapshot())
 	f.Add(NewKVInline(4).Snapshot())
+	f.Fuzz(func(t *testing.T, b []byte) { fuzzLoadKV(t, b, KVOptions{Inline: 4}) })
+}
+
+// FuzzLoadKVFiles: FuzzLoadKV with every run in a mapped file (design 21).
+func FuzzLoadKVFiles(f *testing.F) {
+	f.Add(kvSeed(false).Snapshot())
+	f.Add(kvSeed(true).Snapshot())
+	fs, _ := testFiles(f, nil)
 	f.Fuzz(func(t *testing.T, b []byte) {
-		for _, strict := range []bool{true, false} {
-			l, err := loadKV(b, 4, strict)
-			if err != nil {
-				continue
-			}
-			want := b
-			if !strict { // a base keeps its own inline limit field
-				want = append([]byte{}, b...)
-				copy(want[11:19], l.Snapshot()[11:19])
-			}
-			if got := l.Snapshot(); !bytes.Equal(got, want) {
-				t.Fatalf("loaded bytes do not re-encode identically (strict=%v)", strict)
-			}
-			l.Latest(func(space, key string, v Version) error {
-				l.Get(space, key, v.LSN)
-				l.Get(space, key, v.LSN-1)
-				l.LastWrite(space, key)
-				l.Scan(space, key[:len(key)/2], ^uint64(0))
-				return nil
-			})
-			l.DropSubject("s")
-			l.Digest()
-		}
+		fuzzLoadKV(t, b, KVOptions{Inline: 4, Files: fs, OnFileError: func(err error) { t.Fatal(err) }})
 	})
+}
+
+func fuzzLoadKV(t *testing.T, b []byte, o KVOptions) {
+	for _, strict := range []bool{true, false} {
+		l, err := loadKV(b, o, strict)
+		if err != nil {
+			continue
+		}
+		want := b
+		if !strict { // a base keeps its own inline limit field
+			want = append([]byte{}, b...)
+			copy(want[11:19], l.Snapshot()[11:19])
+		}
+		if got := l.Snapshot(); !bytes.Equal(got, want) {
+			t.Fatalf("loaded bytes do not re-encode identically (strict=%v)", strict)
+		}
+		l.Latest(func(space, key string, v Version) error {
+			l.Get(space, key, v.LSN)
+			l.Get(space, key, v.LSN-1)
+			l.LastWrite(space, key)
+			l.Scan(space, key[:len(key)/2], ^uint64(0))
+			return nil
+		})
+		l.DropSubject("s")
+		l.Digest()
+	}
 }
 
 // TestLoadKVRejectsMalformed: B-D1. Each case was accepted before the fix;
@@ -84,10 +96,10 @@ func TestLoadKVRejectsMalformed(t *testing.T) {
 	}
 	v1 := []Version{{LSN: 1, Val: []byte("x")}}
 	good := build("KV2", 4, kv{"kv\x00a", v1}, kv{"kv\x00b", v1})
-	if _, err := loadKV(build("KV2", 4, kv{"kv\x00a", []Version{{LSN: 2}, {LSN: 2, Op: 1}}}), 4, true); err != nil {
+	if _, err := loadKV(build("KV2", 4, kv{"kv\x00a", []Version{{LSN: 2}, {LSN: 2, Op: 1}}}), KVOptions{Inline: 4}, true); err != nil {
 		t.Fatalf("one entry writing a key twice rejected: %v", err)
 	}
-	if _, err := loadKV(good, 4, true); err != nil {
+	if _, err := loadKV(good, KVOptions{Inline: 4}, true); err != nil {
 		t.Fatalf("well-formed snapshot rejected: %v", err)
 	}
 	// raw: a one-key snapshot with the given u64 fields after the key,
@@ -129,7 +141,7 @@ func TestLoadKVRejectsMalformed(t *testing.T) {
 		"count past the end":    raw("KV2", "kv\x00a", 1<<40),
 		"chunk over 32 bits":    raw("KV3", "kv\x00a", 1, 1, 0, 0, 1<<32, ^uint64(0), 0),
 	} {
-		if _, err := loadKV(b, 4, true); err != ErrBadSnapshot {
+		if _, err := loadKV(b, KVOptions{Inline: 4}, true); err != ErrBadSnapshot {
 			t.Errorf("%s: err = %v, want ErrBadSnapshot", name, err)
 		}
 	}
@@ -139,11 +151,11 @@ func TestLoadKVRejectsMalformed(t *testing.T) {
 	e.u64(4)
 	e.u64(1)
 	e.u64(^uint64(0))
-	if _, err := loadKV(e.b, 4, true); err != ErrBadSnapshot {
+	if _, err := loadKV(e.b, KVOptions{Inline: 4}, true); err != ErrBadSnapshot {
 		t.Errorf("nil key string: err = %v", err)
 	}
 	// A base may carry another inline limit.
-	if _, err := loadKV(build("KV2", 5, kv{"kv\x00a", v1}), 4, false); err != nil {
+	if _, err := loadKV(build("KV2", 5, kv{"kv\x00a", v1}), KVOptions{Inline: 4}, false); err != nil {
 		t.Errorf("base with another inline limit: %v", err)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"hash/crc32"
 	"math"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -56,6 +57,22 @@ type KV struct {
 	runs      []*run    // newest first
 	mgs       []*merger // merges in progress, of disjoint adjacent runs
 	inline    int       // values longer than this are kept as positions
+	files     RunFiles  // runs of at least minFileRun bytes go here (nil = heap)
+	onFileErr func(error)
+}
+
+// KVOptions configures a KV index.
+type KVOptions struct {
+	// Inline: values of at most this many bytes are kept inline, larger
+	// ones (whose position in the log is known) as positions (NewKVInline).
+	Inline int
+	// Files, if set, keeps runs (the immutable, compressed part of the
+	// index) of at least 1 MiB in run files instead of the Go heap
+	// (design 21).
+	Files RunFiles
+	// OnFileError is called when a run file cannot be created, written or
+	// mapped; the KV then keeps its runs on the heap from that point on.
+	OnFileError func(error)
 }
 
 const (
@@ -118,11 +135,68 @@ func NewKV() *KV { return NewKVInline(math.MaxInt32) }
 
 // NewKVInline returns a KV index that keeps values of at most max bytes
 // inline and larger ones (whose position in the log is known) as positions.
-func NewKVInline(max int) *KV {
-	if max < 0 {
-		max = 0
+func NewKVInline(max int) *KV { return NewKVOptions(KVOptions{Inline: max}) }
+
+// NewKVOptions returns a KV index configured by o.
+func NewKVOptions(o KVOptions) *KV {
+	return &KV{m: map[string]vers{}, inline: max(o.Inline, 0), hotMax: hotMax, recentMax: recentMax, files: o.Files, onFileErr: o.OnFileError}
+}
+
+// builder returns a builder for a run of about est bytes: a run file if
+// the KV has a directory and the run is not small, else the heap.
+func (l *KV) builder(est int) *builder {
+	if l.files != nil && est >= minFileRun {
+		w, err := newFileBuilder(l.files)
+		if err == nil {
+			return w
+		}
+		l.fileFailed(err)
 	}
-	return &KV{m: map[string]vers{}, inline: max, hotMax: hotMax, recentMax: recentMax}
+	w := newBuilder()
+	w.grow(est)
+	return w
+}
+
+// fileFailed records a run-file error: from now on every run of this KV
+// is built on the heap. The caller rebuilds from inputs still intact.
+func (l *KV) fileFailed(err error) {
+	l.files = nil
+	if l.onFileErr != nil {
+		l.onFileErr(err)
+	}
+}
+
+// build returns the run fill writes (nil if empty). fill must be
+// repeatable: if the run file fails, it runs again into a heap builder.
+func (l *KV) build(est int, fill func(*builder)) *run {
+	w := l.builder(est)
+	fill(w)
+	r, err := w.finish()
+	if err != nil {
+		l.fileFailed(err)
+		w = l.builder(est)
+		fill(w)
+		r, _ = w.finish() // heap builders do not fail
+	}
+	return r
+}
+
+// rebuild returns run r with fn applied to every key's versions (oldest
+// first); fn returns nil to drop the key. nil if no key is left.
+func (l *KV) rebuild(r *run, fn func(key []byte, vs []Version) []Version) *run {
+	return l.build(len(r.b), func(w *builder) { r.rebuildInto(w, fn) })
+}
+
+// FileStats returns how many runs, and how many bytes of runs (entries and
+// hash slots), are in mapped files rather than on the heap.
+func (l *KV) FileStats() (runs int, bytes int64) {
+	for _, r := range l.runs {
+		if r.mp != nil {
+			runs++
+			bytes += int64(len(r.b) + 8*len(r.slots))
+		}
+	}
+	return runs, bytes
 }
 
 func redact(v *Version) { v.Val, v.Del, v.Off, v.Len, v.Sum, v.Chunk = nil, true, 0, 0, 0, 0 }
@@ -182,11 +256,9 @@ func (l *KV) put(k string, v Version) {
 
 // freeze turns the hot set into the newest run.
 func (l *KV) freeze() {
-	w := newBuilder()
-	w.grow(len(l.m), 48*l.hot)
-	l.hotRun(w)
+	r := l.build(48*l.hot, l.hotRun)
 	l.m, l.hot, l.keys, l.recent = map[string]vers{}, 0, nil, nil
-	if r := w.finish(); r != nil {
+	if r != nil {
 		l.runs = append([]*run{r}, l.runs...)
 	}
 	l.plan()
@@ -254,7 +326,7 @@ func (l *KV) plan() {
 	for i := 0; i+1 < len(l.runs); i++ {
 		a, b := l.runs[i], l.runs[i+1]
 		if b.n <= mergeRatio*a.n && len(a.b)+len(b.b) <= maxRunBytes && !l.merging(a) && !l.merging(b) {
-			l.mgs = append(l.mgs, newMerger(l.runs[i:i+2:i+2]))
+			l.mgs = append(l.mgs, newMerger(l.runs[i:i+2:i+2], l.builder(len(a.b)+len(b.b)+(len(a.b)+len(b.b))/32)))
 			i++
 		}
 	}
@@ -272,13 +344,25 @@ func (l *KV) work(n int) {
 	done := false
 	for k := 0; k < len(l.mgs); k++ {
 		m := l.mgs[k]
-		if !m.step(n) {
+		finished := m.step(n)
+		if !finished && m.w.err == nil {
 			continue
 		}
 		l.mgs = append(l.mgs[:k:k], l.mgs[k+1:]...)
 		k--
 		done = true
-		r := m.result()
+		var r *run
+		err := m.w.err
+		if err == nil {
+			r, err = m.result()
+		}
+		if err != nil {
+			// The inputs are untouched: drop the merge; plan starts it
+			// again on the heap.
+			m.w.abort()
+			l.fileFailed(err)
+			continue
+		}
 		for i := range l.runs {
 			if l.runs[i] == m.in[0] { // inputs stay adjacent: runs are only added in front or replaced
 				nr := append([]*run{}, l.runs[:i]...)
@@ -289,6 +373,9 @@ func (l *KV) work(n int) {
 				break
 			}
 		}
+		for _, x := range m.in {
+			x.release()
+		}
 	}
 	if done {
 		l.plan()
@@ -298,14 +385,19 @@ func (l *KV) work(n int) {
 // replace swaps run i for r (nil: removes it); a merge that reads it is
 // abandoned (plan starts it again).
 func (l *KV) replace(i int, r *run) {
-	for k, m := range l.mgs {
+	old := l.runs[i]
+	for k := 0; k < len(l.mgs); k++ {
+		m := l.mgs[k]
 		for _, x := range m.in {
-			if x == l.runs[i] {
+			if x == old {
+				m.w.abort()
 				l.mgs = append(l.mgs[:k:k], l.mgs[k+1:]...)
+				k--
 				break
 			}
 		}
 	}
+	defer old.release()
 	if r != nil {
 		l.runs[i] = r
 	} else {
@@ -331,7 +423,7 @@ func (l *KV) DropSubject(s string) {
 		if l.runs[i].subj[s] == 0 {
 			continue
 		}
-		l.replace(i, l.runs[i].rebuild(func(_ []byte, vs []Version) []Version {
+		l.replace(i, l.rebuild(l.runs[i], func(_ []byte, vs []Version) []Version {
 			for j := range vs {
 				if vs[j].Subject == s {
 					redact(&vs[j])
@@ -381,6 +473,8 @@ func (l *KV) Get(space, key string, at uint64) (Version, bool) {
 				if v.Del {
 					return Version{}, false
 				}
+				v.Val = r.own(v.Val)
+				runtime.KeepAlive(r)
 				return v, true
 			}
 		}
@@ -397,7 +491,9 @@ func (l *KV) LastWrite(space, key string) uint64 {
 	h := khash(k)
 	for _, r := range l.runs {
 		if body, ok := r.lookup(k, h); ok {
-			return bodyLast(body).LSN
+			lsn := bodyLast(body).LSN
+			runtime.KeepAlive(r)
+			return lsn
 		}
 	}
 	return 0
@@ -442,10 +538,12 @@ func (l *KV) Scan(space, prefix string, at uint64) []Pair {
 				k := string(c.key)
 				done[k] = true
 				if !v.Del {
+					v.Val = r.own(v.Val)
 					out = append(out, Pair{k[len(space)+1:], v})
 				}
 			}
 		}
+		runtime.KeepAlive(r)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
 	return out
@@ -456,11 +554,13 @@ func (l *KV) Scan(space, prefix string, at uint64) []Pair {
 func (l *KV) each(fn func(k []byte, vs []Version) error) error {
 	srcs := l.runs
 	if len(l.m) > 0 {
-		w := newBuilder()
+		w := newBuilder() // a temporary run: always on the heap
 		l.hotRun(w)
-		srcs = append([]*run{w.finish()}, srcs...)
+		r, _ := w.finish()
+		srcs = append([]*run{r}, srcs...)
 	}
-	m := newMerger(srcs)
+	defer runtime.KeepAlive(srcs)
+	m := newMerger(srcs, nil)
 	var key []byte
 	var vs []Version
 	for {
@@ -544,26 +644,78 @@ var ErrBadSnapshot = errors.New("index: bad snapshot")
 // LoadKV loads a snapshot. A snapshot written with a different inline
 // limit (or in the older format KV1) is rejected; the caller then replays the
 // log instead, so the result is always fold(log).
-func LoadKV(b []byte, inline int) (*KV, error) { return loadKV(b, inline, true) }
+func LoadKV(b []byte, inline int) (*KV, error) { return loadKV(b, KVOptions{Inline: inline}, true) }
 
 // LoadKVBase loads a compaction base image. Unlike a snapshot (a cache
 // that is rebuilt when it does not match), a base is the only copy of its
 // state, so it loads under any inline limit: the limit only decides how
 // values committed later are held.
-func LoadKVBase(b []byte, inline int) (*KV, error) { return loadKV(b, inline, false) }
+func LoadKVBase(b []byte, inline int) (*KV, error) {
+	return loadKV(b, KVOptions{Inline: inline}, false)
+}
 
-func loadKV(b []byte, inline int, strict bool) (*KV, error) {
+// LoadKVOptions is LoadKV for a KV configured by o (o.Inline must match
+// the snapshot's limit).
+func LoadKVOptions(b []byte, o KVOptions) (*KV, error) { return loadKV(b, o, true) }
+
+// LoadKVBaseOptions is LoadKVBase for a KV configured by o.
+func LoadKVBaseOptions(b []byte, o KVOptions) (*KV, error) { return loadKV(b, o, false) }
+
+// errRunFile reports that load failed on a run file (not on the input).
+var errRunFile = errors.New("index: run file failed")
+
+func loadKV(b []byte, o KVOptions, strict bool) (*KV, error) {
+	l := NewKVOptions(o)
+	err := l.load(b, strict)
+	if err == errRunFile { // l.files is now nil: load again on the heap
+		l.dropRuns()
+		err = l.load(b, strict)
+	}
+	if err != nil {
+		l.dropRuns()
+		return nil, err
+	}
+	return l, nil
+}
+
+// dropRuns releases every run of a KV no one else has seen.
+func (l *KV) dropRuns() {
+	for _, r := range l.runs {
+		r.release()
+	}
+	l.runs = nil
+}
+
+// load decodes a snapshot or base into l's runs.
+func (l *KV) load(b []byte, strict bool) (err error) {
 	d := &dec{b: b}
 	f := d.str()
 	if f != "KV2" && f != "KV3" {
-		return nil, ErrBadSnapshot
+		return ErrBadSnapshot
 	}
-	l := NewKVInline(inline)
 	if d.u64() != uint64(l.inline) && strict {
-		return nil, ErrBadSnapshot
+		return ErrBadSnapshot
 	}
 	n := d.u64()
-	w := newBuilder()
+	w := l.builder(min(len(b), maxRunBytes))
+	defer func() {
+		if w != nil {
+			w.abort()
+		}
+	}()
+	// add finishes w's run (keys are sorted: runs of disjoint ranges).
+	add := func() error {
+		r, err := w.finish()
+		w = nil
+		if err != nil {
+			l.fileFailed(err)
+			return errRunFile
+		}
+		if r != nil {
+			l.runs = append(l.runs, r)
+		}
+		return nil
+	}
 	chunked, prev := false, ""
 	for i := uint64(0); i < n && !d.bad; i++ {
 		k := d.str()
@@ -571,15 +723,15 @@ func loadKV(b []byte, inline int, strict bool) (*KV, error) {
 		// out of order would silently replace another, and one without
 		// the separator panics Latest.
 		if (i > 0 && k <= prev) || strings.IndexByte(k, 0) < 0 {
-			return nil, ErrBadSnapshot
+			return ErrBadSnapshot
 		}
 		prev = k
 		c := d.u64()
 		if c > uint64(len(d.b)) {
-			return nil, ErrBadSnapshot
+			return ErrBadSnapshot
 		}
 		if c == 0 {
-			return nil, ErrBadSnapshot // every key has at least one version
+			return ErrBadSnapshot // every key has at least one version
 		}
 		last, lastOp := uint64(0), uint32(0)
 		for j := uint64(0); j < c && !d.bad; j++ {
@@ -589,7 +741,7 @@ func loadKV(b []byte, inline int, strict bool) (*KV, error) {
 			if f == "KV3" {
 				ch := d.u64()
 				if ch > math.MaxUint32 {
-					return nil, ErrBadSnapshot
+					return ErrBadSnapshot
 				}
 				v.Chunk, chunked = uint32(ch), chunked || ch != 0
 			}
@@ -597,25 +749,27 @@ func loadKV(b []byte, inline int, strict bool) (*KV, error) {
 			// Versions are written in (LSN, op) order (one entry may write
 			// a key twice); reads rely on it.
 			if j > 0 && (v.LSN < last || v.LSN == last && v.Op <= lastOp) {
-				return nil, ErrBadSnapshot
+				return ErrBadSnapshot
 			}
 			last, lastOp = v.LSN, v.Op
 			w.ver(&v)
 		}
 		w.end([]byte(k))
-		if len(w.r.b) >= maxRunBytes { // keys are sorted: runs of disjoint ranges
-			l.runs = append(l.runs, w.finish())
-			w = newBuilder()
+		if w.size() >= maxRunBytes {
+			if err := add(); err != nil {
+				return err
+			}
+			w = l.builder(min(len(d.b), maxRunBytes))
+		}
+		if w.err != nil { // a file write failed: stop early
+			return add()
 		}
 	}
 	// KV3 is written only when some version carries a base chunk.
 	if d.bad || len(d.b) != 0 || (f == "KV3") != chunked {
-		return nil, ErrBadSnapshot
+		return ErrBadSnapshot
 	}
-	if r := w.finish(); r != nil {
-		l.runs = append(l.runs, r)
-	}
-	return l, nil
+	return add()
 }
 
 // Inline returns the index' inline-value limit.
@@ -626,7 +780,9 @@ func (l *KV) Inline() int { return l.inline }
 func (l *KV) Latest(fn func(space, key string, v Version) error) error {
 	return l.each(func(k []byte, vs []Version) error {
 		i := bytes.IndexByte(k, 0)
-		return fn(string(k[:i]), string(k[i+1:]), vs[len(vs)-1])
+		v := vs[len(vs)-1]
+		v.Val = bytes.Clone(v.Val) // may alias a run file
+		return fn(string(k[:i]), string(k[i+1:]), v)
 	})
 }
 
@@ -637,7 +793,7 @@ func (l *KV) SetLatest(space, key string, v Version) {
 	h := khash(k)
 	for i := len(l.runs) - 1; i >= 0; i-- {
 		if _, ok := l.runs[i].lookup(k, h); ok {
-			l.replace(i, l.runs[i].rebuild(func(key []byte, vs []Version) []Version {
+			l.replace(i, l.rebuild(l.runs[i], func(key []byte, vs []Version) []Version {
 				if string(key) == k {
 					return nil
 				}

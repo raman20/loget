@@ -62,92 +62,98 @@ func checkKV(t *rapid.T, l *KV, m *mapKV, head uint64, keys []string) {
 // rebuilt and reloaded constantly) the index matches the map model on
 // every read and byte for byte in its encoding.
 func TestKVRunsRefineMap(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		l, m := NewKVInline(3), newMapKV(3)
-		l.hotMax = rapid.IntRange(1, 12).Draw(t, "hotMax")
-		l.recentMax = rapid.IntRange(1, 4).Draw(t, "recentMax")
-		defer func(n int) { maxRunBytes = n }(maxRunBytes)
-		maxRunBytes = rapid.IntRange(10, 400).Draw(t, "maxRunBytes")
-		env := testEnv{}
-		var keys []string
-		for i := 0; i < 24; i++ {
-			keys = append(keys, fmt.Sprint("k", i))
-		}
-		head := uint64(0)
-		n := rapid.IntRange(0, 60).Draw(t, "steps")
-		for s := 0; s < n; s++ {
-			switch rapid.IntRange(0, 9).Draw(t, "what") {
-			case 0: // shred
-				sub := rapid.SampledFrom([]string{"a", "b"}).Draw(t, "shred")
-				env[sub] = true
-				head++
-				e := &Entry{LSN: head, Ops: []format.Op{{Kind: format.OpShred, Key: sub}}}
-				l.Apply(e, env)
-				m.Apply(e, env)
-			case 1: // snapshot round trip
-				var err error
-				if l, err = LoadKV(l.Snapshot(), 3); err != nil {
-					t.Fatal(err)
-				}
-				l.hotMax = rapid.IntRange(1, 12).Draw(t, "hotMax")
-				l.recentMax = rapid.IntRange(1, 4).Draw(t, "recentMax")
-			case 2: // drain or advance the merge in progress
-				l.work(rapid.IntRange(-1, 3).Draw(t, "work"))
-			default:
-				head++
-				e := &Entry{LSN: head}
-				for j := rapid.IntRange(1, 4).Draw(t, "nops"); j > 0; j-- {
-					op := format.Op{Kind: format.OpPut, Space: rapid.SampledFrom([]string{"kv", "doc:c"}).Draw(t, "space"),
-						Key: rapid.SampledFrom(keys).Draw(t, "key"), Subject: rapid.SampledFrom([]string{"", "", "a", "b"}).Draw(t, "subj")}
-					switch rapid.IntRange(0, 4).Draw(t, "kind") {
-					case 0:
-						op.Kind, op.Subject = format.OpDel, ""
-					case 1:
-						op.Value = []byte{} // empty, not nil
-					case 2:
-						op.Value, op.ValOff = []byte("a long value"), 77 // kept as a position
-					default:
-						op.Value = []byte(fmt.Sprint(head))
-					}
-					e.Ops = append(e.Ops, op)
-				}
-				l.Apply(e, env)
-				m.Apply(e, env)
+	rapid.Check(t, func(t *rapid.T) { refineMap(t, KVOptions{Inline: 3}) })
+}
+
+// refineMap is TestKVRunsRefineMap for a KV configured by o (kvfile_test.go
+// runs it with run files, and with run files that fail).
+func refineMap(t *rapid.T, o KVOptions) {
+	l, m := NewKVOptions(o), newMapKV(3)
+	l.hotMax = rapid.IntRange(1, 12).Draw(t, "hotMax")
+	l.recentMax = rapid.IntRange(1, 4).Draw(t, "recentMax")
+	defer func(n int) { maxRunBytes = n }(maxRunBytes)
+	maxRunBytes = rapid.IntRange(10, 400).Draw(t, "maxRunBytes")
+	env := testEnv{}
+	var keys []string
+	for i := 0; i < 24; i++ {
+		keys = append(keys, fmt.Sprint("k", i))
+	}
+	head := uint64(0)
+	n := rapid.IntRange(0, 60).Draw(t, "steps")
+	for s := 0; s < n; s++ {
+		switch rapid.IntRange(0, 9).Draw(t, "what") {
+		case 0: // shred
+			sub := rapid.SampledFrom([]string{"a", "b"}).Draw(t, "shred")
+			env[sub] = true
+			head++
+			e := &Entry{LSN: head, Ops: []format.Op{{Kind: format.OpShred, Key: sub}}}
+			l.Apply(e, env)
+			m.Apply(e, env)
+		case 1: // snapshot round trip
+			var err error
+			if l, err = LoadKVOptions(l.Snapshot(), o); err != nil {
+				t.Fatal(err)
 			}
+			l.hotMax = rapid.IntRange(1, 12).Draw(t, "hotMax")
+			l.recentMax = rapid.IntRange(1, 4).Draw(t, "recentMax")
+		case 2: // drain or advance the merge in progress
+			l.work(rapid.IntRange(-1, 3).Draw(t, "work"))
+		default:
+			head++
+			e := &Entry{LSN: head}
+			for j := rapid.IntRange(1, 4).Draw(t, "nops"); j > 0; j-- {
+				op := format.Op{Kind: format.OpPut, Space: rapid.SampledFrom([]string{"kv", "doc:c"}).Draw(t, "space"),
+					Key: rapid.SampledFrom(keys).Draw(t, "key"), Subject: rapid.SampledFrom([]string{"", "", "a", "b"}).Draw(t, "subj")}
+				switch rapid.IntRange(0, 4).Draw(t, "kind") {
+				case 0:
+					op.Kind, op.Subject = format.OpDel, ""
+				case 1:
+					op.Value = []byte{} // empty, not nil
+				case 2:
+					op.Value, op.ValOff = []byte("a long value"), 77 // kept as a position
+				default:
+					op.Value = []byte(fmt.Sprint(head))
+				}
+				e.Ops = append(e.Ops, op)
+			}
+			l.Apply(e, env)
+			m.Apply(e, env)
 		}
-		checkKV(t, l, m, head, keys)
-	})
+	}
+	checkKV(t, l, m, head, keys)
 }
 
 // TestKVSetLatestRefineMap: building a base (SetLatest per key, including
 // keys already frozen into runs) matches the model.
 func TestKVSetLatestRefineMap(t *testing.T) {
-	rapid.Check(t, func(t *rapid.T) {
-		l, m := NewKVInline(3), newMapKV(3)
-		l.hotMax = rapid.IntRange(1, 8).Draw(t, "hotMax")
-		l.recentMax = rapid.IntRange(1, 3).Draw(t, "recentMax")
-		var keys []string
-		for i := 0; i < 12; i++ {
-			keys = append(keys, fmt.Sprint("k", i))
+	rapid.Check(t, func(t *rapid.T) { setLatestRefineMap(t, KVOptions{Inline: 3}) })
+}
+
+func setLatestRefineMap(t *rapid.T, o KVOptions) {
+	l, m := NewKVOptions(o), newMapKV(3)
+	l.hotMax = rapid.IntRange(1, 8).Draw(t, "hotMax")
+	l.recentMax = rapid.IntRange(1, 3).Draw(t, "recentMax")
+	var keys []string
+	for i := 0; i < 12; i++ {
+		keys = append(keys, fmt.Sprint("k", i))
+	}
+	n := rapid.IntRange(0, 40).Draw(t, "steps")
+	for s := 0; s < n; s++ {
+		k := rapid.SampledFrom(keys).Draw(t, "key")
+		v := Version{LSN: uint64(rapid.IntRange(1, 50).Draw(t, "lsn")), Op: uint32(rapid.IntRange(0, 3).Draw(t, "op"))}
+		switch rapid.IntRange(0, 2).Draw(t, "kind") {
+		case 0:
+			v.Chunk, v.Off, v.Len, v.Sum = 1, 9, 100, 5
+		case 1:
+			v.Val, v.Subject = []byte("x"), "a"
 		}
-		n := rapid.IntRange(0, 40).Draw(t, "steps")
-		for s := 0; s < n; s++ {
-			k := rapid.SampledFrom(keys).Draw(t, "key")
-			v := Version{LSN: uint64(rapid.IntRange(1, 50).Draw(t, "lsn")), Op: uint32(rapid.IntRange(0, 3).Draw(t, "op"))}
-			switch rapid.IntRange(0, 2).Draw(t, "kind") {
-			case 0:
-				v.Chunk, v.Off, v.Len, v.Sum = 1, 9, 100, 5
-			case 1:
-				v.Val, v.Subject = []byte("x"), "a"
-			}
-			l.SetLatest("kv", k, v)
-			m.SetLatest("kv", k, v)
-		}
-		checkKV(t, l, m, 50, keys)
-		l.DropSubject("a")
-		m.DropSubject("a")
-		checkKV(t, l, m, 50, keys)
-	})
+		l.SetLatest("kv", k, v)
+		m.SetLatest("kv", k, v)
+	}
+	checkKV(t, l, m, 50, keys)
+	l.DropSubject("a")
+	m.DropSubject("a")
+	checkKV(t, l, m, 50, keys)
 }
 
 // TestKVRunsBounded: a long run of inserts keeps the run count small and

@@ -10,11 +10,15 @@ type Index interface {
 type KV struct {
 func LoadKV(b []byte, inline int) (*KV, error)
 func LoadKVBase(b []byte, inline int) (*KV, error)
+func LoadKVBaseOptions(b []byte, o KVOptions) (*KV, error)
+func LoadKVOptions(b []byte, o KVOptions) (*KV, error)
 func NewKV() *KV
 func NewKVInline(max int) *KV
+func NewKVOptions(o KVOptions) *KV
 func (l *KV) Apply(e *Entry, env Env)
 func (l *KV) Digest() [32]byte
 func (l *KV) DropSubject(s string)
+func (l *KV) FileStats() (runs int, bytes int64)
 func (l *KV) Get(space, key string, at uint64) (Version, bool)
 func (l *KV) Inline() int
 func (l *KV) LastWrite(space, key string) uint64
@@ -23,6 +27,10 @@ func (*KV) Name() string
 func (l *KV) Scan(space, prefix string, at uint64) []Pair
 func (l *KV) SetLatest(space, key string, v Version)
 func (l *KV) Snapshot() []byte
+type KVOptions struct {
+	Inline int
+	Files RunFiles
+	OnFileError func(error)
 type Kind struct {
 	Name string
 	Version uint32
@@ -38,6 +46,8 @@ func (r *Registry) Derived() []Kind
 func (r *Registry) Kinds() []Kind
 func (r *Registry) Owner(space string) (*Kind, bool)
 func (r *Registry) Register(k Kind) error
+type RunFile interface {
+type RunFiles interface {
 type Snapshotter interface {
 type Version struct {
 	LSN     uint64
