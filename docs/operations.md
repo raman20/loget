@@ -298,6 +298,12 @@ old segments, bases and snapshots as garbage, and deletes them once a grace
 period has passed. Design: [design/03-compaction.md](design/03-compaction.md);
 model: [`spec/LogEtCompact.tla`](../spec/LogEtCompact.tla).
 
+The base is streamed to an unlinked temporary file in the index directory
+(`IndexDir`, by default the OS temp dir; on the heap with
+`WithIndexInMemory`), so the temp directory needs free space of about one
+base (≈ 60 MiB per million 100 B keys plus keys). A base is one object;
+on the journal store it must stay under 1 GiB (design 23).
+
 ```sh
 loget compact                       # embedded, against LOGET_URL or --db; grace 0s
 loget serve --compact-every 1h --compact-grace 5m   # background, on a timer

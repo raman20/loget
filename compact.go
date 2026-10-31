@@ -1,7 +1,6 @@
 package loget
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/hex"
@@ -336,7 +335,14 @@ func (db *DB) writeBase(ctx context.Context, l *logState, v *view, head uint64, 
 	}
 	key := fmt.Sprintf("base/%s/%020d-e%d-%s", l.meta.ID, head, db.epoch, hex.EncodeToString(nonce))
 	id := l.meta.ID
-	kv := index.NewKVOptions(db.kvOptions())
+	inline := index.NewKVOptions(db.kvOptions()).Inline()
+	bi := db.newBaseStream(inline)
+	done := false
+	defer func() {
+		if !done {
+			bi.abandon()
+		}
+	}()
 	cw := &chunkWriter{db: db, key: key}
 	v.mu.RLock()
 	defer v.mu.RUnlock()
@@ -371,18 +377,17 @@ func (db *DB) writeBase(ctx context.Context, l *logState, v *view, head uint64, 
 			}
 		}
 		nv := index.Version{LSN: ver.LSN, Op: ver.Op, Subject: ver.Subject}
-		if len(val) > kv.Inline() {
+		if len(val) > inline {
 			n, off, err := cw.add(ctx, val)
 			if err != nil {
 				return err
 			}
 			nv.Chunk, nv.Off, nv.Len, nv.Sum = uint32(n+1), uint32(off), uint32(len(val)), crc32.Checksum(val, index.Castagnoli)
 		} else {
-			nv.Val = bytes.Clone(val)
+			nv.Val = val // Latest's copy, or ours: encoded before the next key
 		}
-		kv.SetLatest(space, k, nv)
 		stats.Keys++
-		return nil
+		return bi.add(space, k, nv)
 	})
 	if err != nil {
 		return nil, err
@@ -412,20 +417,18 @@ func (db *DB) writeBase(ctx context.Context, l *logState, v *view, head uint64, 
 			}
 		}
 	}
-	img := encodeBase(head, kv.Snapshot())
-	if err := putExactlyOnce(ctx, db.st, baseObj(key), img); err != nil {
+	img, release, err := bi.finish(head)
+	done = true
+	if err != nil {
+		return nil, err
+	}
+	err = putExactlyOnce(ctx, db.st, baseObj(key), img)
+	release()
+	if err != nil {
 		return nil, err
 	}
 	stats.BaseBytes += int64(len(img)) + cw.bytes
 	return &BaseMeta{LSN: head, Seq: seq, Key: key, Chunks: cw.n, Chain: hex.EncodeToString(chain[:]), TS: ts}, nil
-}
-
-func encodeBase(lsn uint64, kv []byte) []byte {
-	b := append([]byte(baseMagic), make([]byte, 16)...)
-	binary.LittleEndian.PutUint64(b[8:], lsn)
-	binary.LittleEndian.PutUint64(b[16:], uint64(len(kv)))
-	b = append(b, kv...)
-	return binary.LittleEndian.AppendUint32(b, format.CRC(b))
 }
 
 // chunkWriter packs base values into chunk objects of about chunkMax.

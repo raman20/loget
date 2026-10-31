@@ -91,6 +91,51 @@ func (s *memSampler) mark(p string) {
 	}
 }
 
+// watch samples every 20 ms until the returned stop is called, which
+// reports the peaks seen (RSS, anon, heap objects; MiB) since watch.
+func (s *memSampler) watch() (stop func() (rss, anon, heap int64)) {
+	st := s.sample()
+	var mu sync.Mutex
+	rss, anon, heap := st.RSSMiB, st.AnonMiB, st.HeapObjMiB
+	prof := os.Getenv("LOGET_BENCH_PEAK_HEAPPROF") // scratch: heap profiles at the start and at each new heap peak
+	writeProf := func(name string) {
+		if f, err := os.Create(prof + name); err == nil {
+			pprof.Lookup("heap").WriteTo(f, 0)
+			f.Close()
+		}
+	}
+	if prof != "" {
+		writeProf("-start.pb.gz")
+	}
+	quit, done := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		tk := time.NewTicker(20 * time.Millisecond)
+		defer tk.Stop()
+		for {
+			select {
+			case <-quit:
+				return
+			case <-tk.C:
+				m := s.sample()
+				mu.Lock()
+				if prof != "" && m.HeapObjMiB > heap+64 {
+					writeProf("-peak.pb.gz")
+				}
+				rss, anon, heap = max(rss, m.RSSMiB), max(anon, m.AnonMiB), max(heap, m.HeapObjMiB)
+				mu.Unlock()
+			}
+		}
+	}()
+	return func() (int64, int64, int64) {
+		close(quit)
+		<-done
+		mu.Lock()
+		defer mu.Unlock()
+		return rss, anon, heap
+	}
+}
+
 func (s *memSampler) result() map[string]any {
 	if s == nil {
 		return nil

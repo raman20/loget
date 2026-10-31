@@ -56,10 +56,12 @@ Nothing else is added to `main` meanwhile.
    (expiry by entry timestamp, never by wall clock at read time).
 5. **Snapshots**: pinned snapshot handles that compaction respects;
    multi-part checkpoint snapshots for large indexes.
-6. **Compaction**: incremental compaction without a commit pause. Also
-   measured in design 21: one `fdatasync` per deleted object on the
-   journal (480k deletes = 60 s), and `writeBase` peaking at 6.3 GiB RSS
-   at 10M keys.
+6. **Compaction**: incremental compaction without a commit pause. The
+   three problems measured in design 21 (design 23): `writeBase` peaking
+   at 6.3 GiB RSS at 10M keys: fixed, the base is streamed (peak 3.2 GiB,
+   twice as fast); one `fdatasync` per deleted object on the journal
+   (480k deletes = 60 s): open; the OCC recent-commit window as the
+   largest heap user in bulk writes: open.
 
 Also open for KV, no order yet: tests on AWS S3 and Cloudflare R2 (only
 MinIO is tested), online journal shrink, value compression.

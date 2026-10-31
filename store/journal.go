@@ -469,15 +469,27 @@ func (j *Journal) catchUp() error {
 }
 
 func (j *Journal) record(off int64, kind byte, key string, data []byte) []byte {
-	b := make([]byte, jrnHdr+len(key)+len(data))
+	return append(j.recordHead(off, kind, key, data), data...)
+}
+
+// recordHead returns a record's header and key, its checksum covering
+// data, which follows on disk: PutIfAbsent writes a large object's bytes
+// from the caller's slice (a memory-mapped base, design 23) instead of
+// copying them into one record buffer.
+func (j *Journal) recordHead(off int64, kind byte, key string, data []byte) []byte {
+	b := make([]byte, jrnHdr+len(key), jrnHdr+len(key)+min(len(data), jrnInlineData))
 	b[4] = kind
 	binary.LittleEndian.PutUint16(b[6:8], uint16(len(key)))
 	binary.LittleEndian.PutUint32(b[8:12], uint32(len(data)))
 	copy(b[jrnHdr:], key)
-	copy(b[jrnHdr+len(key):], data)
-	binary.LittleEndian.PutUint32(b[:4], j.sum(off, b[4:jrnHdr], b[jrnHdr:]))
+	c := crc32.Update(j.sum(off, b[4:jrnHdr], b[jrnHdr:]), jcrc, data) // CRC-32 is incremental
+	binary.LittleEndian.PutUint32(b[:4], c)
 	return b
 }
+
+// jrnInlineData is the largest object PutIfAbsent copies into its record
+// buffer (one write); larger ones are written in a second write.
+const jrnInlineData = 1 << 20
 
 // lockWrite takes the writer locks and catches up; the caller must unlock.
 func (j *Journal) lockWrite() (func(), error) {
@@ -492,18 +504,25 @@ func (j *Journal) lockWrite() (func(), error) {
 	return func() { flock(j.f, syscall.LOCK_UN); j.wmu.Unlock() }, nil
 }
 
-// appendRec writes rec at the end (writer locks held) and makes it durable.
-func (j *Journal) appendRec(rec []byte) error {
+// appendRec writes rec, then data, at the end (writer locks held) and
+// makes them durable: one record if rec is a recordHead for data.
+func (j *Journal) appendRec(rec, data []byte) error {
 	j.mu.RLock()
 	at := j.end
 	j.mu.RUnlock()
-	if err := j.reserve(at + int64(len(rec))); err != nil {
+	n := int64(len(rec) + len(data))
+	if err := j.reserve(at + n); err != nil {
 		return err
 	}
 	if _, err := j.writeAt(rec, at); err != nil {
 		return err
 	}
-	j.growAhead(at + int64(len(rec)))
+	if len(data) > 0 {
+		if _, err := j.writeAt(data, at+int64(len(rec))); err != nil {
+			return err
+		}
+	}
+	j.growAhead(at + n)
 	return j.sync()
 }
 
@@ -664,13 +683,16 @@ func (j *Journal) PutIfAbsent(_ context.Context, key string, data []byte) error 
 	if exists {
 		return ErrExists
 	}
-	rec := j.record(at, recPut, key, data)
-	if err := j.appendRec(rec); err != nil {
+	rec, rest := j.recordHead(at, recPut, key, data), data
+	if len(data) <= jrnInlineData {
+		rec, rest = append(rec, data...), nil
+	}
+	if err := j.appendRec(rec, rest); err != nil {
 		return err
 	}
 	j.mu.Lock()
 	j.idx[key] = jent{off: at, klen: len(key), dlen: len(data)}
-	j.end = at + int64(len(rec))
+	j.end = at + int64(jrnHdr+len(key)+len(data))
 	j.mu.Unlock()
 	return nil
 }
@@ -793,7 +815,7 @@ func (j *Journal) Delete(_ context.Context, key string) error {
 		return nil
 	}
 	rec := j.record(at, recDel, key, nil)
-	if err := j.appendRec(rec); err != nil {
+	if err := j.appendRec(rec, nil); err != nil {
 		return err
 	}
 	j.mu.Lock()

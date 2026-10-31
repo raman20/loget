@@ -7,6 +7,15 @@ break APIs and the on-storage format.
 
 ## [Unreleased]
 
+### Changed (KV item 6: compaction memory, design 23, 2026-11-01)
+
+- Compaction streams each base to an unlinked file in the index
+  directory (heap without one) instead of building the key set, its
+  snapshot and the image on the heap: peak RSS at 10M keys 6.4 → 3.2 GiB.
+  Base bytes are unchanged. New `index.BaseEncoder`, `index.StripChunks`.
+- The journal store writes objects over 1 MiB without copying them into
+  a record buffer (same on-disk bytes).
+
 ### Added (KV item 2: range reads and iterators, design 22, 2026-11-01)
 
 - `Tx.Iter(IterOptions{Prefix, Start, End, Reverse, Limit})`, `Iterator`

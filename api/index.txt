@@ -1,6 +1,15 @@
+const BaseHeaderLen = 8 + 3 + 8 + 8
 var Castagnoli = crc32.MakeTable(crc32.Castagnoli)
 var ErrBadSnapshot = errors.New("index: bad snapshot")
 func PrefixEnd(p string) string
+func StripChunks(p []byte) (int, error)
+type BaseEncoder struct {
+func NewBaseEncoder(inline int) *BaseEncoder
+func (b *BaseEncoder) Add(space, key string, v Version) error
+func (b *BaseEncoder) Buffered() int
+func (b *BaseEncoder) Chunked() bool
+func (b *BaseEncoder) Header() []byte
+func (b *BaseEncoder) Take() []byte
 type Entry struct {
 	Log string
 	LSN uint64

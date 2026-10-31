@@ -32,6 +32,9 @@ LogEt's predecessor, and are kept as they were apart from the rename.
 | [compatibility.md](compatibility.md) | format version stamps, upgrade/downgrade policy and tested matrix, golden files |
 | [index-authoring.md](index-authoring.md) | how to write an index: the contract, the counter example, the tests |
 | [design/20-index-framework.md](design/20-index-framework.md) | design: the generic index framework and KV-only core |
+| [design/21-disk-key-index.md](design/21-disk-key-index.md) | design: the KV key index in memory-mapped run files |
+| [design/22-range-reads.md](design/22-range-reads.md) | design: range reads and iterators |
+| [design/23-compaction-memory.md](design/23-compaction-memory.md) | design: streamed compaction bases, batched journal deletes, bounded OCC window |
 | [components/log.md](components/log.md), [components/kv.md](components/kv.md) | component reviews: the log, the KV index |
 | [design-principles.md](design-principles.md) | why one log, and what we refuse to build |
 | [design/01-journal-default.md](design/01-journal-default.md) | design: journal as the default local layout, migration |

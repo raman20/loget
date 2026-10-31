@@ -111,7 +111,7 @@ func TestJournalInterruptedDelete(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := j.appendRec(j.record(j.end, recDel, "keys/u1", nil)); err != nil { // no erase: "crash"
+	if err := j.appendRec(j.record(j.end, recDel, "keys/u1", nil), nil); err != nil { // no erase: "crash"
 		t.Fatal(err)
 	}
 	unlock()

@@ -201,12 +201,17 @@ func cmdYCSB(args []string) {
 				*system, wl.Name, *fsync, c, closed.OpsPerSec, rate, open.Latency.P50Us, open.Latency.P99Us, open.Latency.P999Us, closed.Errors, open.Errors, open.NotIssued)
 		}
 		if fk, ok := kv.(*logetKV); ok && *compactBetween {
+			runtime.GC()
+			stop := memS.watch()
 			t := time.Now()
 			cs, err := fk.db.Compact(bg, loget.CompactOptions{})
 			if err != nil {
 				fatal(err)
 			}
-			logf("compact after %s: %d keys, %d deleted, %.1fs", wl.Name, cs.Keys, cs.Deleted, time.Since(t).Seconds())
+			el := time.Since(t).Seconds()
+			rss, anon, heap := stop()
+			res.Runs = append(res.Runs, compactPeak{Kind: "compact", After: wl.Name, Keys: cs.Keys, Deleted: cs.Deleted, Secs: round(el, 2), RSSPeak: rss, AnonPeak: anon, HeapPeak: heap})
+			logf("compact after %s: %d keys, %d deleted, %.1fs, peak rss %d anon %d heap %d MiB (20 ms samples)", wl.Name, cs.Keys, cs.Deleted, el, rss, anon, heap)
 		}
 		memS.mark("after " + wl.Name)
 	}
@@ -259,4 +264,17 @@ func (a *ackCounter) limit() uint64 {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.next
+}
+
+// compactPeak is one Compact between workloads, with the memory peaks
+// sampled every 20 ms while it ran.
+type compactPeak struct {
+	Kind     string  `json:"kind"`
+	After    string  `json:"after_workload"`
+	Keys     int     `json:"keys"`
+	Deleted  int     `json:"deleted"`
+	Secs     float64 `json:"secs"`
+	RSSPeak  int64   `json:"rss_peak_mib"`
+	AnonPeak int64   `json:"anon_peak_mib"`
+	HeapPeak int64   `json:"heap_objects_peak_mib"`
 }
