@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -213,5 +214,42 @@ func TestCertReload(t *testing.T) {
 	}
 	if s := serial(); s != 2 {
 		t.Fatalf("after a bad reload: serial %d", s)
+	}
+}
+
+// TestScopedScanBounds: start/end/after cannot widen a scoped token's scan
+// beyond its authorised prefix (bounds intersect the prefix).
+func TestScopedScanBounds(t *testing.T) {
+	db := memDB(t)
+	ts, err := ParseTokens([]byte(tokenFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := New(db, Options{Token: "static-admin", Auth: NewAuth(ts)})
+	for _, k := range []string{"a", "jobs", "users/1", "users/2", "z"} {
+		if got := call(h, "PUT", "/v1/kv/"+k, "admin-00001", "v"); got != 200 {
+			t.Fatalf("put %s: %d", k, got)
+		}
+	}
+	for _, q := range []string{"&start=&end=", "&start=a&end=zz", "&start=%00", "&reverse=1&start=a", "&after=a", "&reverse=1&after=zz"} {
+		r := httptest.NewRequest("GET", "/v1/kv?prefix=users/"+q, nil)
+		r.Header.Set("Authorization", "Bearer limited-001")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != 200 {
+			t.Fatalf("%s: %d", q, w.Code)
+		}
+		var out []struct{ Key string }
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		if len(out) != 2 {
+			t.Errorf("%s: %d keys %v, want users/1 and users/2", q, len(out), out)
+		}
+		for _, kv := range out {
+			if !strings.HasPrefix(kv.Key, "users/") {
+				t.Errorf("%s: leaked %q", q, kv.Key)
+			}
+		}
 	}
 }
