@@ -1,0 +1,9 @@
+21:40:30 ycsb pebble fsync=true: loading 10000000 x 100B
+21:40:36 loaded in 6.0s
+21:40:36 mem after load: rss 795 anon 777 file 18 MiB | go-resident 819 heap-live 110 goal 392 | off-heap anon -42 MiB
+21:40:57 pebble C fsync=true c=8: max 195546 ops/s | open @97773/s p50 15.3us p99 313.3us p99.9 6049.8us | errs 0/0 not-issued 0
+21:40:57 mem after C: rss 179 anon 161 file 18 MiB | go-resident 165 heap-live 73 goal 151 | off-heap anon -4 MiB
+21:41:18 pebble A fsync=true c=8: max 108060 ops/s | open @54030/s p50 38.6us p99 41713.7us p99.9 62554.1us | errs 0/0 not-issued 0
+21:41:18 mem after A: rss 53 anon 34 file 19 MiB | go-resident 28 heap-live 3 goal 10 | off-heap anon 6 MiB
+21:41:18 mem end: rss 51 anon 32 file 19 MiB | go-resident 25 heap-live 2 goal 7 | off-heap anon 7 MiB
+wrote /workspace/loget-tools/b21/before10/ycsb-pebble-fsync-true.json

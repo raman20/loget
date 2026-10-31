@@ -1,0 +1,17 @@
+21:35:05 ycsb pebble fsync=true: loading 1000000 x 1024B
+21:35:09 loaded in 3.5s
+21:35:09 mem after load: rss 713 anon 694 file 18 MiB | go-resident 731 heap-live 130 goal 649 | off-heap anon -37 MiB
+21:35:20 pebble A fsync=true c=1: max 28900 ops/s | open @14450/s p50 39.6us p99 62390.3us p99.9 79953.9us | errs 0/0 not-issued 0
+21:35:31 pebble A fsync=true c=8: max 91699 ops/s | open @45850/s p50 55.1us p99 34930.7us p99.9 48496.6us | errs 0/0 not-issued 0
+21:35:42 pebble A fsync=true c=64: max 103666 ops/s | open @51833/s p50 15704.1us p99 118095.9us p99.9 152698.9us | errs 0/0 not-issued 0
+21:35:42 mem after A: rss 83 anon 64 file 18 MiB | go-resident 55 heap-live 3 goal 36 | off-heap anon 9 MiB
+21:35:53 pebble B fsync=true c=1: max 55710 ops/s | open @27855/s p50 36.4us p99 38731.8us p99.9 53149.7us | errs 0/0 not-issued 0
+21:36:04 pebble B fsync=true c=8: max 128709 ops/s | open @64355/s p50 25.1us p99 9257.0us p99.9 22216.7us | errs 0/0 not-issued 0
+21:36:15 pebble B fsync=true c=64: max 180507 ops/s | open @90254/s p50 3663.9us p99 39813.1us p99.9 55246.8us | errs 0/0 not-issued 0
+21:36:15 mem after B: rss 82 anon 63 file 18 MiB | go-resident 55 heap-live 3 goal 35 | off-heap anon 8 MiB
+21:36:26 pebble C fsync=true c=1: max 76915 ops/s | open @38457/s p50 21.3us p99 408.3us p99.9 1728.5us | errs 0/0 not-issued 0
+21:36:37 pebble C fsync=true c=8: max 146269 ops/s | open @73135/s p50 19.0us p99 413.7us p99.9 2144.3us | errs 0/0 not-issued 0
+21:36:48 pebble C fsync=true c=64: max 212788 ops/s | open @106394/s p50 6373.4us p99 45580.3us p99.9 77987.8us | errs 0/0 not-issued 0
+21:36:48 mem after C: rss 81 anon 62 file 18 MiB | go-resident 56 heap-live 3 goal 35 | off-heap anon 6 MiB
+21:36:48 mem end: rss 80 anon 61 file 18 MiB | go-resident 56 heap-live 2 goal 7 | off-heap anon 5 MiB
+wrote /workspace/loget-tools/b21/before/ycsb-pebble-fsync-true.json
