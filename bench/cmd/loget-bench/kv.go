@@ -87,6 +87,9 @@ func logetLayout(system string) store.Layout {
 // valueCacheBytes overrides LogEt's default value cache (0 = default).
 var valueCacheBytes int
 
+// snapshotEvery is LogEt's WithSnapshotEvery (0 = the library default).
+var snapshotEvery int
+
 // indexInMemory keeps LogEt's whole KV index on the Go heap (no run files,
 // as before design 21).
 var indexInMemory bool
@@ -113,6 +116,9 @@ func openLogEt(dir string, fsync bool, layout store.Layout) (*loget.DB, error) {
 	opts := []loget.Option{loget.WithLogf(func(string, ...any) {})}
 	if valueCacheBytes != 0 {
 		opts = append(opts, loget.WithValueCacheBytes(valueCacheBytes))
+	}
+	if snapshotEvery != 0 {
+		opts = append(opts, loget.WithSnapshotEvery(snapshotEvery))
 	}
 	if indexInMemory {
 		opts = append(opts, loget.WithIndexInMemory(true))

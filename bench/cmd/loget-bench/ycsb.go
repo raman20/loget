@@ -90,6 +90,7 @@ func cmdYCSB(args []string) {
 	compactBetween := fs.Bool("compact-between", false, "loget only: Compact (grace 0) after each workload, as serve --compact-every would")
 	profWl := fs.String("cpuprofile-workload", "", "with -cpuprofile: profile only this workload (default: the only one)")
 	memprof := fs.String("memprofile", "", "write heap profiles to <prefix>-<phase>.pb.gz after load and after each workload")
+	fs.IntVar(&snapshotEvery, "snapshot-every", 0, "loget only: WithSnapshotEvery (commits per snapshot; 0 = the library default)")
 	fs.IntVar(&valueCacheBytes, "value-cache", 0, "loget only: value cache bytes (0 = the library default; -1 = off)")
 	fs.BoolVar(&indexInMemory, "index-in-memory", false, "loget only: keep the whole KV index on the Go heap (no run files)")
 	keep := fs.Bool("keep", false, "keep the data directory (for the open suite)")

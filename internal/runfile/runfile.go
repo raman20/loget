@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"runtime"
+	"sync"
 	"unsafe"
 )
 
@@ -54,6 +55,8 @@ func (d *Dir) fault(op string) error {
 // and later the mapping keep it, nothing is left behind by a crash, and no
 // other process can open it.
 type File struct {
+	mu   sync.Mutex
+	refs int // references beyond the owner's (Ref); Release drops one
 	d    *Dir
 	f    *os.File // nil once sealed or released
 	m    []byte   // the mapping, nil until Map and after Release
@@ -124,10 +127,27 @@ func (f *File) Seal() error {
 	return err
 }
 
-// Release unmaps and closes the file. Idempotent. The caller guarantees no
-// reader still uses the mapping; the finalizer calls it only once the file
-// is unreachable, so never concurrently with the owner.
+// Ref adds a reference: the file stays mapped until Release has been
+// called once more than Ref (a checkpoint reading a run the KV replaces
+// meanwhile, design 24).
+func (f *File) Ref() {
+	f.mu.Lock()
+	f.refs++
+	f.mu.Unlock()
+}
+
+// Release drops a reference; the last one unmaps and closes the file.
+// Idempotent after that. The caller guarantees no reader still uses the
+// mapping; the finalizer calls it only once the file is unreachable, so
+// never concurrently with the owner.
 func (f *File) Release() {
+	f.mu.Lock()
+	if f.refs > 0 {
+		f.refs--
+		f.mu.Unlock()
+		return
+	}
+	defer f.mu.Unlock()
 	if f.m != nil {
 		unmap(f.m)
 		f.m = nil

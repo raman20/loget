@@ -1,6 +1,9 @@
 const BaseHeaderLen = 8 + 3 + 8 + 8
 var Castagnoli = crc32.MakeTable(crc32.Castagnoli)
+var ErrBadRun = errors.New("index: bad stored run")
 var ErrBadSnapshot = errors.New("index: bad snapshot")
+var PieceBytes = 64 << 20
+func Pieces(n int64) int
 func PrefixEnd(p string) string
 func StripChunks(p []byte) (int, error)
 type BaseEncoder struct {
@@ -10,6 +13,16 @@ func (b *BaseEncoder) Buffered() int
 func (b *BaseEncoder) Chunked() bool
 func (b *BaseEncoder) Header() []byte
 func (b *BaseEncoder) Take() []byte
+type Cut struct {
+	Inline int
+	Runs   []*CutRun
+func (c *Cut) Release()
+type CutRun struct {
+	Hot bool
+func (c *CutRun) Bytes() []byte
+func (c *CutRun) Key() string
+func (c *CutRun) Meta() RunMeta
+func (c *CutRun) SetKey(key string)
 type Entry struct {
 	Log string
 	LSN uint64
@@ -22,10 +35,12 @@ func LoadKV(b []byte, inline int) (*KV, error)
 func LoadKVBase(b []byte, inline int) (*KV, error)
 func LoadKVBaseOptions(b []byte, o KVOptions) (*KV, error)
 func LoadKVOptions(b []byte, o KVOptions) (*KV, error)
+func LoadKVRuns(o KVOptions, runs []RunSource) (*KV, error)
 func NewKV() *KV
 func NewKVInline(max int) *KV
 func NewKVOptions(o KVOptions) *KV
 func (l *KV) Apply(e *Entry, env Env)
+func (l *KV) Cut() *Cut
 func (l *KV) Digest() [32]byte
 func (l *KV) DropSubject(s string)
 func (l *KV) FileStats() (runs int, bytes int64)
@@ -60,6 +75,21 @@ func (r *Registry) Owner(space string) (*Kind, bool)
 func (r *Registry) Register(k Kind) error
 type RunFile interface {
 type RunFiles interface {
+type RunMeta struct {
+	Len  int64    `json:"len"`
+	N    int      `json:"n"`
+	Vers int      `json:"vers"`
+	Sums []uint32 `json:"sums"`
+type RunSource struct {
+	Key   string
+	Meta  RunMeta
+	Piece func(i int) ([]byte, error)
+type RunWriter struct {
+func NewRunWriter(o KVOptions, est int) *RunWriter
+func (rw *RunWriter) Abort()
+func (rw *RunWriter) Add(space, key string, vs ...Version) error
+func (rw *RunWriter) Finish() (*Cut, error)
+type SharedRunFile interface {
 type Snapshotter interface {
 type Version struct {
 	LSN     uint64

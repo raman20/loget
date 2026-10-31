@@ -117,3 +117,47 @@ func TestCreateLeavesNoEntry(t *testing.T) {
 	}
 	f.Release()
 }
+
+// TestFileRef: the file stays mapped until Release has been called once
+// more than Ref, from any goroutine.
+func TestFileRef(t *testing.T) {
+	if !Supported {
+		t.Skip("no mmap")
+	}
+	d, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := d.Create()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := bytes.Repeat([]byte("xyz"), 3000)
+	if err := f.Write(want); err != nil {
+		t.Fatal(err)
+	}
+	b, _, err := f.Map(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Seal(); err != nil {
+		t.Fatal(err)
+	}
+	f.Ref()
+	f.Ref()
+	done := make(chan bool)
+	go func() {
+		f.Release() // a reader's
+		done <- true
+	}()
+	f.Release() // the owner's
+	<-done
+	if !bytes.Equal(b, want) || f.m == nil {
+		t.Fatal("unmapped while referenced")
+	}
+	f.Release() // the last
+	if f.m != nil {
+		t.Fatal("still mapped after the last Release")
+	}
+	f.Release() // idempotent
+}

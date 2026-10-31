@@ -37,6 +37,9 @@ type run struct {
 	vers  int      // versions
 	chunk bool     // some version has Chunk != 0
 	subj  map[string]int
+	// key is the key a checkpoint stored the run under (kvimage.go).
+	// Written and read only by checkpoints, which are serialised.
+	key string
 }
 
 const (
