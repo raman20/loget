@@ -191,6 +191,12 @@ export LOGET_ADDR=http://127.0.0.1:7070            # point CLI calls at it
   calls against a URL a server is using; use `--addr` instead.
 - Every embedded CLI call is an open (a manifest and a fence segment), so
   prefer a long-running server.
+- Range reads and paging: `GET /v1/kv?prefix=P&start=S&end=E&reverse=1&limit=N`
+  returns keys in `[S, E)` under `P`, descending with `reverse=1`. When a
+  page is full the `Loget-Next-After` header holds the last key
+  (query-escaped); send it back as `after=` for the next page. Pages are
+  separate reads, so a later page may see newer commits unless you pin
+  `at=`. `start`/`end` never widen a scoped token's prefix.
 - The server binds to `127.0.0.1` by default. To expose it, set tokens
   (`--token` / `LOGET_TOKEN` for one admin token, `--token-file` for
   scoped tokens) and TLS (`--tls-cert`, `--tls-key`); `serve` refuses a

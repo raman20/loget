@@ -1,0 +1,13 @@
+00:27:03 scan pebble: loading 10000000 x 100B
+00:27:09 mem after load: rss 749 anon 730 file 18 MiB | go-resident 774 heap-live 140 goal 678 | off-heap anon -44 MiB
+00:27:16 pebble prefix100 c=1: 38782 scans/s, 3878260 keys/s, p50 24.9us p99 43.4us, errs 0 
+00:27:22 pebble prefix100 c=8: 92195 scans/s, 9219680 keys/s, p50 35.3us p99 506.9us, errs 0 
+00:27:28 pebble range50 c=1: 53185 scans/s, 2681047 keys/s, p50 17.8us p99 39.8us, errs 0 
+00:27:34 pebble range50 c=8: 112011 scans/s, 5653502 keys/s, p50 27.0us p99 486.4us, errs 0 
+00:27:40 pebble reverse50 c=1: 20164 scans/s, 1015448 keys/s, p50 48.5us p99 80.1us, errs 0 
+00:27:46 pebble reverse50 c=8: 33128 scans/s, 1668805 keys/s, p50 225.2us p99 581.6us, errs 0 
+00:27:47 pebble full: 10000000 keys in 1.55s (6471844 keys/s) RSS 168 -> peak 168 MiB, heap peak 139 MiB
+00:27:49 pebble full-iter: 10000000 keys in 1.39s (7199393 keys/s) RSS 163 -> peak 163 MiB, heap peak 140 MiB
+00:27:51 pebble full-reverse: 10000000 keys in 1.82s (5493080 keys/s) RSS 162 -> peak 163 MiB, heap peak 140 MiB
+00:27:51 mem end: rss 163 anon 144 file 18 MiB | go-resident 161 heap-live 72 goal 145 | off-heap anon -17 MiB
+wrote after/10m/scan-pebble.json

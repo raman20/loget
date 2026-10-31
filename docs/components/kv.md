@@ -114,6 +114,30 @@ on the heap; `WithIndexInMemory(true)` keeps everything there, as before.
 - Numbers and tradeoffs (lower peak RSS, some read throughput lost):
   [design/21-disk-key-index.md](../design/21-disk-key-index.md).
 
+## Range reads (design 22)
+
+`KV.Range(space, lo, hi, at, reverse, fn)` merges the hot set and every
+run over `[lo, hi)` (`hi` "" = unbounded), forward or backward, at
+snapshot `at`; `Scan` is now `Range` over `[prefix, PrefixEnd(prefix))`.
+Run cursors seek by block and decode one 16-key block at a time
+(backwards for reverse), so no step needs all keys in memory.
+
+- The root `Tx.Iter(IterOptions{Prefix, Start, End, Reverse, Limit})`
+  reads pages of 16 keys doubling to 1,024 under the view read lock and
+  releases it between pages; each page re-seeks after the last key. A
+  transaction's snapshot never changes, so pages are consistent.
+- Values open lazily in `Next`; shredded values are skipped.
+- `IterOptions.After(key)` is pagination (HTTP `after=`, header
+  `Loget-Next-After`).
+- OCC: the read set holds key ranges. An iterator records only what it
+  returned (forward `[lo, last]`, reverse `[last, hi)`), the whole range
+  once exhausted; read-only transactions record nothing.
+- Tests: `checkRange` inside `TestKVRefineMap`/`TestKVFilesRefineMap`,
+  `FuzzKVRange`, `TestIterRefinesOrderedMap` and `TestIterConflictModel`
+  (rapid vs a sorted map, with history, pages, concurrent commits, own
+  writes), reverse pages in the kill -9 test and in every simulator
+  check. Numbers: [design/22-range-reads.md](../design/22-range-reads.md).
+
 ## TLA+ alignment
 
 There is no KV-specific spec. `LogEtTxn.tla` uses the KV index only as
@@ -222,7 +246,8 @@ reaches the 0.5 % cutoff.
   exceed 24 one completes at once, a pause proportional to its size
   (not observed in the tests above: max 7 runs at 200k keys and 4 at
   10M).
-- **A hot-set scan filters up to 1,024 unsorted keys** per call.
+- **A hot-set range read filters and sorts up to 1,024 unsorted keys** per
+  call (per iterator page).
 - **Full snapshot / digest is still O(N)** (merged iteration over all
   runs). Unchanged from before; snapshots run off the commit path.
 - **Values by reference stay in the log**; this review shrinks the index,

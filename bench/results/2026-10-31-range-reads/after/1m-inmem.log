@@ -1,0 +1,13 @@
+00:17:19 scan loget: loading 1000000 x 1024B
+00:17:23 mem after load: rss 222 anon 205 file 17 MiB | go-resident 229 heap-live 109 goal 192 | off-heap anon -24 MiB
+00:17:29 loget prefix100 c=1: 5631 scans/s, 563120 keys/s, p50 154.4us p99 388.1us, errs 0 
+00:17:35 loget prefix100 c=8: 21224 scans/s, 2122560 keys/s, p50 290.8us p99 1295.4us, errs 0 
+00:17:41 loget range50 c=1: 8089 scans/s, 406730 keys/s, p50 113.6us p99 321.0us, errs 0 
+00:17:47 loget range50 c=8: 29403 scans/s, 1480609 keys/s, p50 198.9us p99 1207.3us, errs 0 
+00:17:53 loget reverse50 c=1: 8762 scans/s, 441114 keys/s, p50 103.5us p99 302.6us, errs 0 
+00:17:59 loget reverse50 c=8: 32842 scans/s, 1654398 keys/s, p50 185.2us p99 958.0us, errs 0 
+00:18:02 loget full: 1000000 keys in 3.07s (325688 keys/s) RSS 524 -> peak 1503 MiB, heap peak 1210 MiB
+00:18:04 loget full-iter: 1000000 keys in 2.20s (455572 keys/s) RSS 1503 -> peak 1503 MiB, heap peak 236 MiB
+00:18:06 loget full-reverse: 1000000 keys in 2.11s (473574 keys/s) RSS 550 -> peak 550 MiB, heap peak 236 MiB
+00:18:06 mem end: rss 529 anon 511 file 17 MiB | go-resident 279 heap-live 118 goal 239 | off-heap anon 232 MiB
+wrote /workspace/loget-tools/item2/after/1m-inmem/scan-loget.json

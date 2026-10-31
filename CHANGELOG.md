@@ -7,6 +7,16 @@ break APIs and the on-storage format.
 
 ## [Unreleased]
 
+### Added (KV item 2: range reads and iterators, design 22, 2026-11-01)
+
+- `Tx.Iter(IterOptions{Prefix, Start, End, Reverse, Limit})`, `Iterator`
+  (`Next`, `Key`, `Value`, `Err`, `All`), `IterOptions.After` for
+  pagination, `IterRecords`, `Range`, `RangeRecords`; `index.KV.Range`
+  and `index.PrefixEnd`. HTTP `GET /v1/kv` takes `start`, `end`,
+  `reverse`, `limit`, `after` and sets `Loget-Next-After` on a full page.
+- OCC read sets are key ranges; an iterator conflicts only on the range
+  it returned. `ReadPrefix` and `Scan` behave as before.
+
 ### LogEt: renamed, and KV-only `main` over a generic index framework (2026-10-31)
 
 LogEt is freshDB (last commit 5a08052) renamed, with history restarted.

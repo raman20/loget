@@ -21,7 +21,7 @@ runs, not performance claims.
 | # | gap | LogEt today | Pebble / RocksDB / LMDB | impact |
 |---|---|---|---|---|
 | 1 | **Key index mostly in RAM → mapped run files (design 21)** | runs of ≥ 1 MiB live in unlinked, memory-mapped files (file-backed, reclaimable pages); the hot set, small runs and block offsets stay on the heap. 10M × 100 B YCSB: peak RSS 3,546 → 1,916 MiB, end 920 MiB of which 319 MiB file-backed; 1M × 1 KiB: 958 → 640 MiB peak. Open still rebuilds the index: ~33 s at 10M keys without a snapshot | Pebble 740 MiB peak, 53 MiB end at 10M; opens in under 0.2 s | remaining RAM users: OCC recent-commit window during bulk writes, value cache, Go GC headroom; open time |
-| 2 | **Range reads** | prefix `Scan` only, returning the whole result at once (51–65 µs for 100 keys at 10M keys) | bounded, bidirectional iterators with `SeekGE`/`SeekLT`, limits, streaming | no `[start, end)`, no reverse, no pagination; large scans load everything |
+| 2 | **Range reads → iterators (design 22)** | `Tx.Iter` with prefix and `[start, end)` bounds, reverse, limit, `After` pagination (HTTP `after=` / `Loget-Next-After`), paged under the read lock so memory stays bounded; OCC conflicts cover only the returned range. Full iterator scan at 10M × 100 B: 498k keys/s, no growth over the resident index (before: 207k keys/s via the slice API, heap peak 4.8 GiB); 100-key prefix scan 6.2k/s at c=1 | Pebble 7.2M keys/s full scan, 39k/s prefix100 at c=1, flat 163 MiB RSS; a live iterator can `SeekGE`/`SeekLT` | one value open per key (no readahead), so scans are 4–15× slower than Pebble; no seek on a live iterator (open a new one with `Start`/`After`) |
 | 3 | **Batches and bulk load** | every write is an OCC transaction (`Update`, auto-retry); one segment and one `fdatasync` per group commit; index ingest 2.0–2.9 µs/key | Pebble `Batch`/`IndexedBatch`, SST ingestion; RocksDB `WriteBatch`, `IngestExternalFile`; LMDB `MDB_APPEND` | no write-only fast path; no bulk import; no per-write durability choice |
 | 4 | **Compaction** | whole-log: writes a base image of live data per log, then deletes garbage after a grace period. Commits pause 11–14 ms; branch operations wait for the whole run; journal file shrinks only offline | Pebble/RocksDB: leveled, incremental, in the background without commit pauses. LMDB: copy-on-write with a free list, no compaction | pauses and O(live data) rewrites per run |
 | 5 | **Open / recovery time** | restores the latest snapshot and replays the tail; without snapshots, replays every segment | replay the WAL into a memtable only | slow opens on big logs without `WithSnapshotEvery` |
@@ -44,8 +44,12 @@ Nothing else is added to `main` meanwhile.
    files, peak RSS at 10M keys 3,546 → 1,916 MiB (Pebble 740). Left:
    OCC window during bulk loads, open time (item 5), a bounded pread
    cache if page-cache residency proves a problem (design 21 option C).
-2. **Range scans and iterators**: `[start, end)`, reverse, seek, limits,
-   streaming over runs and the hot set; HTTP pagination.
+2. **Range scans and iterators**: done (design 22): `Tx.Iter` with
+   prefix/`[start, end)`, reverse, limits and `After` pagination, paged
+   over the hot set and runs; HTTP pagination. Full iterator scans 2.4x
+   faster than before with memory bounded by a page; still 4-15x slower
+   than Pebble (one value open per key). Left: value readahead, seek on a
+   live iterator.
 3. **Batch and transaction API**: write-only batches, bulk load, explicit
    transaction size limits.
 4. **TTL**: per-key expiry that is still a pure function of the log

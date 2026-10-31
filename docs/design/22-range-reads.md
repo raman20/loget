@@ -3,7 +3,7 @@
 ROADMAP item 2. Status: implemented. Numbers marked "before" were
 measured at 544c248 on the reference box (8 vCPU, 16 GiB, ext4) on
 2026-10-31 at 23:53-23:58 IST. Numbers marked "after" come from the same
-box later the same night (see Benchmarks). Raw files are in
+box at 00:14-00:25 IST on 2026-11-01 (see Benchmarks). Raw files are in
 `bench/results/2026-10-31-range-reads/{before,after}/`.
 
 ## Problem
@@ -196,7 +196,50 @@ ordering logic, which a reference ordered map checks better:
 
 ## Benchmarks
 
-See the After section, filled in once the after runs complete.
+After: 7179c12, 2026-11-01 00:14-00:25 IST, same box and command
+(`bench/results/2026-10-31-range-reads/README.md`). Scans per second
+(1 / 8 clients); keys/s for full scans.
+
+| 1M keys x 1 KiB | LogEt before | LogEt after | Pebble after |
+|---|---|---|---|
+| prefix100 | 5,584 / 19,731 | 6,196 / 21,342 | 14,354 / 23,237 |
+| range50 (start + 50) | n/a | 8,195 / 29,827 | 24,488 / 40,311 |
+| reverse50 | n/a | 8,978 / 30,221 | 14,128 / 20,249 |
+| full, slice API | 184k, RSS peak 1,729 MiB, heap 1,405 | 325k, RSS peak 1,570, heap 1,229 | 1.69M, 179 MiB |
+| full, iterator | n/a | 450k, heap peak 138 MiB | 1.74M, 132 MiB |
+| full, reverse iterator | n/a | 468k, RSS 491 MiB flat | 1.44M, 132 MiB |
+
+| 10M keys x 100 B | LogEt before | LogEt after | Pebble after |
+|---|---|---|---|
+| prefix100 | 5,977 / 22,535 | 6,206 / 23,867 | 38,782 / 92,195 |
+| range50 | n/a | 7,121 / 29,881 | 53,185 / 112,011 |
+| reverse50 | n/a | 9,514 / 34,187 | 20,164 / 33,128 |
+| full, slice API | 207k (48.4 s), RSS 1,892 -> 5,595 MiB, heap 4,793 | 440k (22.7 s), RSS 1,909 -> 3,833, heap 3,168 | 6.47M, 168 MiB |
+| full, iterator | n/a | 498k (20.1 s), heap peak 1,258 MiB | 7.20M, 163 MiB |
+| full, reverse iterator | n/a | 553k (18.1 s), RSS 2,006 MiB (load: 1,395) | 5.49M, 163 MiB |
+
+Reading the numbers:
+
+- **Memory.** An iterator's full scan no longer grows with the range:
+  heap peak 138 MiB at 1M (heap after load 60 MiB live, 126 MiB GC goal)
+  and 1,258 MiB at 10M (live 560-637, goal 1,127-1,280: the GC goal of
+  the resident index, not scan state). The slice APIs (`Scan`,
+  `ScanRecords`) still return the whole result by contract, so a full
+  slice scan still peaks at gigabytes; use `Iter` for large ranges.
+  `full-iter` RSS is inflated by the preceding slice scan (see README).
+- **Throughput.** Full scans are 1.8-2.1x faster than before through the
+  slice API and 2.4x through the iterator (no `done` map, no re-sorting,
+  no second value map), but the iterator is still 3.9x (1M) and 14x
+  (10M) slower than Pebble (reverse: 3.1x and 9.9x): each key costs a
+  separate value open (see Limits). Short prefix scans gained 4-11 %;
+  Pebble is 1.1-2.3x faster at 1M and 3.9-6.2x at 10M for prefix100,
+  3.7-7.5x for range50 at 10M. LogEt reverse scans are as fast as
+  forward ones; at c=8 they beat Pebble's reverse at 1M (30.2k vs
+  20.2k) and match it at 10M (34.2k vs 33.1k).
+- **Compaction and heap mode** (1M): after `Compact` prefix100
+  6,567 / 21,350, full-iter 435k keys/s, heap peak 21 MiB; with
+  `-index-in-memory` 5,631 / 21,224, full-iter 456k, heap peak 236 MiB.
+- Before ran on a binary without the new phases, hence the n/a cells.
 
 ## Limits
 

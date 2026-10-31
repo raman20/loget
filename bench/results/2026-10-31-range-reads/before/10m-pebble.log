@@ -1,0 +1,12 @@
+23:56:49 scan pebble: loading 10000000 x 100B
+23:56:55 mem after load: rss 694 anon 676 file 18 MiB | go-resident 808 heap-live 119 goal 800 | off-heap anon -132 MiB
+23:57:02 pebble prefix100 c=1: 38514 scans/s, 3851400 keys/s, p50 24.4us p99 45.8us, errs 0 
+23:57:08 pebble prefix100 c=8: 93422 scans/s, 9342360 keys/s, p50 34.8us p99 498.2us, errs 0 
+23:57:14 pebble range50 c=1: 53660 scans/s, 2705270 keys/s, p50 17.7us p99 38.9us, errs 0 
+23:57:20 pebble range50 c=8: 110986 scans/s, 5601029 keys/s, p50 27.4us p99 478.5us, errs 0 
+23:57:26 pebble reverse50 c=1: 21557 scans/s, 1085873 keys/s, p50 45.8us p99 70.4us, errs 0 
+23:57:32 pebble reverse50 c=8: 32037 scans/s, 1613631 keys/s, p50 228.9us p99 611.3us, errs 0 
+23:57:33 pebble full: 10000000 keys in 1.58s (6340031 keys/s) RSS 183 -> peak 183 MiB, heap peak 140 MiB
+23:57:35 pebble full-reverse: 10000000 keys in 1.70s (5881259 keys/s) RSS 178 -> peak 178 MiB, heap peak 140 MiB
+23:57:35 mem end: rss 178 anon 160 file 18 MiB | go-resident 162 heap-live 72 goal 145 | off-heap anon -2 MiB
+wrote /workspace/loget-tools/item2/before/10m/scan-pebble.json

@@ -1,0 +1,331 @@
+{
+  "suite": "scan",
+  "env": {
+    "time": "2026-11-01T00:27:10+05:30",
+    "go_version": "go1.27.3",
+    "os": "linux/amd64",
+    "kernel": "6.12.94+",
+    "cpu": "Intel(R) Xeon(R) Processor",
+    "cpus": 8,
+    "mem_total": "16386368 kB",
+    "disk": "/dev/vdb ext4 128G",
+    "loget_commit": "",
+    "command": "/workspace/loget-tools/loget-bench-scan-after scan -system pebble -keys 10000000 -value 100 -out after/10m",
+    "loadavg_at_start": "0.46 1.50 1.88"
+  },
+  "params": {
+    "system": "pebble",
+    "keys": 10000000,
+    "value_bytes": 100,
+    "clients": [
+      1,
+      8
+    ],
+    "duration": "5s",
+    "seed": 42,
+    "load_seconds": 6.48,
+    "peak_rss": "834592 kB",
+    "memory": {
+      "marks": [
+        {
+          "phase": "after load",
+          "rss_mib": 749,
+          "anon_mib": 730,
+          "file_mib": 18,
+          "go_resident_mib": 774,
+          "heap_objects_mib": 611,
+          "heap_free_mib": 146,
+          "gc_goal_mib": 678,
+          "anon_minus_go_mib": -44
+        },
+        {
+          "phase": "after load (after GC)",
+          "rss_mib": 747,
+          "anon_mib": 728,
+          "file_mib": 18,
+          "go_resident_mib": 772,
+          "heap_objects_mib": 140,
+          "heap_free_mib": 616,
+          "gc_goal_mib": 280,
+          "anon_minus_go_mib": -44
+        },
+        {
+          "phase": "end",
+          "rss_mib": 163,
+          "anon_mib": 144,
+          "file_mib": 18,
+          "go_resident_mib": 161,
+          "heap_objects_mib": 97,
+          "heap_free_mib": 45,
+          "gc_goal_mib": 145,
+          "anon_minus_go_mib": -17
+        },
+        {
+          "phase": "end (after GC)",
+          "rss_mib": 163,
+          "anon_mib": 144,
+          "file_mib": 18,
+          "go_resident_mib": 161,
+          "heap_objects_mib": 72,
+          "heap_free_mib": 71,
+          "gc_goal_mib": 145,
+          "anon_minus_go_mib": -17
+        }
+      ],
+      "note": "sampled every 200 ms; anon_minus_go ≈ LogEt's off-heap value-cache arena + cgo; page cache for pread'd data files is not in RSS for any engine",
+      "peak_by_rss": {
+        "phase": "load",
+        "rss_mib": 799,
+        "anon_mib": 780,
+        "file_mib": 18,
+        "go_resident_mib": 849,
+        "heap_objects_mib": 747,
+        "heap_free_mib": 84,
+        "gc_goal_mib": 814,
+        "anon_minus_go_mib": -69
+      }
+    }
+  },
+  "runs": [
+    {
+      "phase": "prefix100",
+      "desc": "all 100 keys under a random (zipfian) 21-byte prefix",
+      "clients": 1,
+      "closed_loop": {
+        "mode": "closed",
+        "seconds": 5,
+        "ops": 193913,
+        "ops_per_sec": 38782.5,
+        "errors": 0,
+        "latency": {
+          "count": 193913,
+          "mean_us": 25.68,
+          "p50_us": 24.91,
+          "p99_us": 43.39,
+          "p999_us": 61.79,
+          "max_us": 2067.46
+        },
+        "go_gc": {
+          "cycles": 7,
+          "stw_pause_total_ms": 0.53,
+          "stw_pause_max_ms": 0.1,
+          "heap_inuse_end_mb": 129,
+          "gc_cpu_fraction_cumulative": 0.0033
+        }
+      },
+      "keys_per_sec": 3878260
+    },
+    {
+      "phase": "prefix100",
+      "desc": "all 100 keys under a random (zipfian) 21-byte prefix",
+      "clients": 8,
+      "closed_loop": {
+        "mode": "closed",
+        "seconds": 5,
+        "ops": 460984,
+        "ops_per_sec": 92195.1,
+        "errors": 0,
+        "latency": {
+          "count": 460984,
+          "mean_us": 86.5,
+          "p50_us": 35.33,
+          "p99_us": 506.88,
+          "p999_us": 756.22,
+          "max_us": 4653.06
+        },
+        "go_gc": {
+          "cycles": 16,
+          "stw_pause_total_ms": 2.67,
+          "stw_pause_max_ms": 0.3,
+          "heap_inuse_end_mb": 125,
+          "gc_cpu_fraction_cumulative": 0.0025
+        }
+      },
+      "keys_per_sec": 9219680
+    },
+    {
+      "phase": "range50",
+      "desc": "uniform 1..100 keys from a random (zipfian) start key, unbounded end (YCSB E scan)",
+      "clients": 1,
+      "closed_loop": {
+        "mode": "closed",
+        "seconds": 5,
+        "ops": 265924,
+        "ops_per_sec": 53184.7,
+        "errors": 0,
+        "latency": {
+          "count": 265924,
+          "mean_us": 18.69,
+          "p50_us": 17.82,
+          "p99_us": 39.84,
+          "p999_us": 56.32,
+          "max_us": 2045.95
+        },
+        "go_gc": {
+          "cycles": 5,
+          "stw_pause_total_ms": 0.39,
+          "stw_pause_max_ms": 0.09,
+          "heap_inuse_end_mb": 98,
+          "gc_cpu_fraction_cumulative": 0.002
+        }
+      },
+      "keys_per_sec": 2681047
+    },
+    {
+      "phase": "range50",
+      "desc": "uniform 1..100 keys from a random (zipfian) start key, unbounded end (YCSB E scan)",
+      "clients": 8,
+      "closed_loop": {
+        "mode": "closed",
+        "seconds": 5,
+        "ops": 560061,
+        "ops_per_sec": 112010.6,
+        "errors": 0,
+        "latency": {
+          "count": 560061,
+          "mean_us": 71.16,
+          "p50_us": 26.96,
+          "p99_us": 486.4,
+          "p999_us": 783.87,
+          "max_us": 3985.41
+        },
+        "go_gc": {
+          "cycles": 10,
+          "stw_pause_total_ms": 1.86,
+          "stw_pause_max_ms": 0.27,
+          "heap_inuse_end_mb": 81,
+          "gc_cpu_fraction_cumulative": 0.0017
+        }
+      },
+      "keys_per_sec": 5653502
+    },
+    {
+      "phase": "reverse50",
+      "desc": "uniform 1..100 keys descending from a random (zipfian) end key",
+      "clients": 1,
+      "closed_loop": {
+        "mode": "closed",
+        "seconds": 5,
+        "ops": 100822,
+        "ops_per_sec": 20164.3,
+        "errors": 0,
+        "latency": {
+          "count": 100822,
+          "mean_us": 49.47,
+          "p50_us": 48.48,
+          "p99_us": 80.06,
+          "p999_us": 97.66,
+          "max_us": 4513.79
+        },
+        "go_gc": {
+          "cycles": 2,
+          "stw_pause_total_ms": 0.55,
+          "stw_pause_max_ms": 0.48,
+          "heap_inuse_end_mb": 104,
+          "gc_cpu_fraction_cumulative": 0.0015
+        }
+      },
+      "keys_per_sec": 1015448
+    },
+    {
+      "phase": "reverse50",
+      "desc": "uniform 1..100 keys descending from a random (zipfian) end key",
+      "clients": 8,
+      "closed_loop": {
+        "mode": "closed",
+        "seconds": 5,
+        "ops": 165644,
+        "ops_per_sec": 33127.5,
+        "errors": 0,
+        "latency": {
+          "count": 165644,
+          "mean_us": 241.13,
+          "p50_us": 225.15,
+          "p99_us": 581.63,
+          "p999_us": 764.42,
+          "max_us": 5083.14
+        },
+        "go_gc": {
+          "cycles": 3,
+          "stw_pause_total_ms": 0.56,
+          "stw_pause_max_ms": 0.2,
+          "heap_inuse_end_mb": 121,
+          "gc_cpu_fraction_cumulative": 0.0013
+        }
+      },
+      "keys_per_sec": 1668805
+    },
+    {
+      "phase": "full",
+      "desc": "one scan of every key, one client; RSS and heap sampled every 20 ms",
+      "clients": 1,
+      "closed_loop": {
+        "mode": "single",
+        "seconds": 1.545,
+        "ops": 1,
+        "ops_per_sec": 0,
+        "errors": 0,
+        "latency": {
+          "count": 0,
+          "mean_us": 0,
+          "p50_us": 0,
+          "p99_us": 0,
+          "p999_us": 0,
+          "max_us": 0
+        }
+      },
+      "keys_per_sec": 6471844,
+      "rss_start_mib": 168,
+      "rss_peak_mib": 168,
+      "heap_objects_peak_mib": 139
+    },
+    {
+      "phase": "full-iter",
+      "desc": "one scan of every key, one client; RSS and heap sampled every 20 ms",
+      "clients": 1,
+      "closed_loop": {
+        "mode": "single",
+        "seconds": 1.389,
+        "ops": 1,
+        "ops_per_sec": 0,
+        "errors": 0,
+        "latency": {
+          "count": 0,
+          "mean_us": 0,
+          "p50_us": 0,
+          "p99_us": 0,
+          "p999_us": 0,
+          "max_us": 0
+        }
+      },
+      "keys_per_sec": 7199393,
+      "rss_start_mib": 163,
+      "rss_peak_mib": 163,
+      "heap_objects_peak_mib": 140
+    },
+    {
+      "phase": "full-reverse",
+      "desc": "one scan of every key, one client; RSS and heap sampled every 20 ms",
+      "clients": 1,
+      "closed_loop": {
+        "mode": "single",
+        "seconds": 1.82,
+        "ops": 1,
+        "ops_per_sec": 0,
+        "errors": 0,
+        "latency": {
+          "count": 0,
+          "mean_us": 0,
+          "p50_us": 0,
+          "p99_us": 0,
+          "p999_us": 0,
+          "max_us": 0
+        }
+      },
+      "keys_per_sec": 5493080,
+      "rss_start_mib": 162,
+      "rss_peak_mib": 163,
+      "heap_objects_peak_mib": 140
+    }
+  ]
+}

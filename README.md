@@ -186,7 +186,7 @@ verify: ok=true
 
 | Endpoint | Purpose |
 |---|---|
-| `GET/PUT/DELETE /v1/kv/{key}`, `GET /v1/kv?prefix=` | KV |
+| `GET/PUT/DELETE /v1/kv/{key}`, `GET /v1/kv?prefix=&start=&end=&reverse=&limit=&after=` | KV |
 | `POST /v1/tx` | atomic batch of `put` / `del` |
 | `GET/POST /v1/branches`, `DELETE /v1/branches/{b}`, `POST /v1/branches/{b}/rewind`, `POST /v1/branches/{b}/promote` | branches |
 | `GET /v1/log`, `POST /v1/shred/{subject}`, `GET /v1/verify` | raw log, forget, audit |

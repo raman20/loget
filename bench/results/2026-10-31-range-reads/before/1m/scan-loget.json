@@ -1,0 +1,171 @@
+{
+  "suite": "scan",
+  "env": {
+    "time": "2026-10-31T23:53:43+05:30",
+    "go_version": "go1.27.3",
+    "os": "linux/amd64",
+    "kernel": "6.12.94+",
+    "cpu": "Intel(R) Xeon(R) Processor",
+    "cpus": 8,
+    "mem_total": "16386368 kB",
+    "disk": "/dev/vdb ext4 128G",
+    "loget_commit": "",
+    "command": "/workspace/loget-tools/loget-bench-scan-before scan -system loget -keys 1000000 -out /workspace/loget-tools/item2/before/1m",
+    "loadavg_at_start": "1.04 0.67 1.05"
+  },
+  "params": {
+    "system": "loget",
+    "keys": 1000000,
+    "value_bytes": 1024,
+    "clients": [
+      1,
+      8
+    ],
+    "duration": "5s",
+    "seed": 42,
+    "load_seconds": 4.61,
+    "peak_rss": "1774628 kB",
+    "memory": {
+      "marks": [
+        {
+          "phase": "after load",
+          "rss_mib": 191,
+          "anon_mib": 145,
+          "file_mib": 46,
+          "go_resident_mib": 149,
+          "heap_objects_mib": 88,
+          "heap_free_mib": 47,
+          "gc_goal_mib": 125,
+          "anon_minus_go_mib": -4
+        },
+        {
+          "phase": "after load (after GC)",
+          "rss_mib": 191,
+          "anon_mib": 145,
+          "file_mib": 46,
+          "go_resident_mib": 149,
+          "heap_objects_mib": 60,
+          "heap_free_mib": 75,
+          "gc_goal_mib": 121,
+          "anon_minus_go_mib": -4
+        },
+        {
+          "phase": "end",
+          "rss_mib": 1732,
+          "anon_mib": 1685,
+          "file_mib": 46,
+          "go_resident_mib": 1447,
+          "heap_objects_mib": 1405,
+          "heap_free_mib": 0,
+          "gc_goal_mib": 1626,
+          "anon_minus_go_mib": 238
+        },
+        {
+          "phase": "end (after GC)",
+          "rss_mib": 1733,
+          "anon_mib": 1687,
+          "file_mib": 46,
+          "go_resident_mib": 1447,
+          "heap_objects_mib": 69,
+          "heap_free_mib": 1335,
+          "gc_goal_mib": 139,
+          "anon_minus_go_mib": 240
+        }
+      ],
+      "note": "sampled every 200 ms; anon_minus_go ≈ LogEt's off-heap value-cache arena + cgo; page cache for pread'd data files is not in RSS for any engine",
+      "peak_by_rss": {
+        "phase": "load",
+        "rss_mib": 1701,
+        "anon_mib": 1654,
+        "file_mib": 46,
+        "go_resident_mib": 1447,
+        "heap_objects_mib": 1405,
+        "heap_free_mib": 0,
+        "gc_goal_mib": 1626,
+        "anon_minus_go_mib": 207
+      }
+    }
+  },
+  "runs": [
+    {
+      "phase": "prefix100",
+      "desc": "all 100 keys under a random (zipfian) 21-byte prefix",
+      "clients": 1,
+      "closed_loop": {
+        "mode": "closed",
+        "seconds": 5,
+        "ops": 27920,
+        "ops_per_sec": 5583.8,
+        "errors": 0,
+        "latency": {
+          "count": 27920,
+          "mean_us": 178.85,
+          "p50_us": 155.9,
+          "p99_us": 419.07,
+          "p999_us": 662.53,
+          "max_us": 1922.05
+        },
+        "go_gc": {
+          "cycles": 64,
+          "stw_pause_total_ms": 5.59,
+          "stw_pause_max_ms": 0.44,
+          "heap_inuse_end_mb": 142,
+          "gc_cpu_fraction_cumulative": 0.0175
+        }
+      },
+      "keys_per_sec": 558400
+    },
+    {
+      "phase": "prefix100",
+      "desc": "all 100 keys under a random (zipfian) 21-byte prefix",
+      "clients": 8,
+      "closed_loop": {
+        "mode": "closed",
+        "seconds": 5,
+        "ops": 98661,
+        "ops_per_sec": 19730.7,
+        "errors": 0,
+        "latency": {
+          "count": 98661,
+          "mean_us": 405.02,
+          "p50_us": 310.02,
+          "p99_us": 1518.59,
+          "p999_us": 2967.55,
+          "max_us": 9175.04
+        },
+        "go_gc": {
+          "cycles": 214,
+          "stw_pause_total_ms": 35.98,
+          "stw_pause_max_ms": 1.27,
+          "heap_inuse_end_mb": 108,
+          "gc_cpu_fraction_cumulative": 0.0329
+        }
+      },
+      "keys_per_sec": 1973220
+    },
+    {
+      "phase": "full",
+      "desc": "one scan of every key, one client; RSS and heap sampled every 20 ms",
+      "clients": 1,
+      "closed_loop": {
+        "mode": "single",
+        "seconds": 5.436,
+        "ops": 1,
+        "ops_per_sec": 0,
+        "errors": 0,
+        "latency": {
+          "count": 0,
+          "mean_us": 0,
+          "p50_us": 0,
+          "p99_us": 0,
+          "p999_us": 0,
+          "max_us": 0
+        }
+      },
+      "keys_per_sec": 183974,
+      "rss_start_mib": 470,
+      "rss_peak_mib": 1729,
+      "heap_objects_peak_mib": 1405
+    }
+  ]
+}
