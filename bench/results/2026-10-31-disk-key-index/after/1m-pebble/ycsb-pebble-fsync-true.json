@@ -1,0 +1,644 @@
+{
+  "suite": "ycsb",
+  "env": {
+    "time": "2026-10-31T23:12:05+05:30",
+    "go_version": "go1.27.3",
+    "os": "linux/amd64",
+    "kernel": "6.12.94+",
+    "cpu": "Intel(R) Xeon(R) Processor",
+    "cpus": 8,
+    "mem_total": "16386368 kB",
+    "disk": "/dev/vdb ext4 128G",
+    "loget_commit": "",
+    "command": "/workspace/loget-tools/loget-bench2 ycsb -system pebble -keys 1000000 -value 1024 -workloads A,B,C -clients 1,8,64 -warmup 1s -duration 5s -dir /tmp/loget-b21 -out /workspace/loget-tools/b21/after2/1m-pebble",
+    "loadavg_at_start": "5.05 3.27 2.35"
+  },
+  "params": {
+    "system": "pebble",
+    "fsync": true,
+    "keys": 1000000,
+    "value_bytes": 1024,
+    "workloads": "A,B,C",
+    "clients": [
+      1,
+      8,
+      64
+    ],
+    "warmup": "1s",
+    "duration": "5s",
+    "open_loop_fraction_of_max": 0.5,
+    "open_loop_cap_ops_per_sec": 200000,
+    "seed": 42,
+    "zipf_theta": 0.99,
+    "load_seconds": 4.12,
+    "load_keys_per_sec": 242594,
+    "disk_after_run": "1.3G",
+    "peak_rss": "779240 kB",
+    "memory": {
+      "marks": [
+        {
+          "phase": "after load",
+          "rss_mib": 689,
+          "anon_mib": 671,
+          "file_mib": 18,
+          "go_resident_mib": 770,
+          "heap_objects_mib": 565,
+          "heap_free_mib": 192,
+          "gc_goal_mib": 776,
+          "anon_minus_go_mib": -99
+        },
+        {
+          "phase": "after load (after GC)",
+          "rss_mib": 689,
+          "anon_mib": 671,
+          "file_mib": 18,
+          "go_resident_mib": 770,
+          "heap_objects_mib": 107,
+          "heap_free_mib": 650,
+          "gc_goal_mib": 214,
+          "anon_minus_go_mib": -99
+        },
+        {
+          "phase": "after A",
+          "rss_mib": 82,
+          "anon_mib": 63,
+          "file_mib": 18,
+          "go_resident_mib": 55,
+          "heap_objects_mib": 27,
+          "heap_free_mib": 10,
+          "gc_goal_mib": 36,
+          "anon_minus_go_mib": 8
+        },
+        {
+          "phase": "after A (after GC)",
+          "rss_mib": 82,
+          "anon_mib": 63,
+          "file_mib": 18,
+          "go_resident_mib": 55,
+          "heap_objects_mib": 3,
+          "heap_free_mib": 33,
+          "gc_goal_mib": 8,
+          "anon_minus_go_mib": 8
+        },
+        {
+          "phase": "after B",
+          "rss_mib": 80,
+          "anon_mib": 61,
+          "file_mib": 18,
+          "go_resident_mib": 55,
+          "heap_objects_mib": 32,
+          "heap_free_mib": 6,
+          "gc_goal_mib": 36,
+          "anon_minus_go_mib": 6
+        },
+        {
+          "phase": "after B (after GC)",
+          "rss_mib": 80,
+          "anon_mib": 61,
+          "file_mib": 18,
+          "go_resident_mib": 55,
+          "heap_objects_mib": 3,
+          "heap_free_mib": 34,
+          "gc_goal_mib": 7,
+          "anon_minus_go_mib": 6
+        },
+        {
+          "phase": "after C",
+          "rss_mib": 82,
+          "anon_mib": 63,
+          "file_mib": 18,
+          "go_resident_mib": 56,
+          "heap_objects_mib": 26,
+          "heap_free_mib": 12,
+          "gc_goal_mib": 35,
+          "anon_minus_go_mib": 7
+        },
+        {
+          "phase": "after C (after GC)",
+          "rss_mib": 82,
+          "anon_mib": 63,
+          "file_mib": 18,
+          "go_resident_mib": 56,
+          "heap_objects_mib": 3,
+          "heap_free_mib": 35,
+          "gc_goal_mib": 7,
+          "anon_minus_go_mib": 7
+        },
+        {
+          "phase": "end",
+          "rss_mib": 82,
+          "anon_mib": 63,
+          "file_mib": 18,
+          "go_resident_mib": 56,
+          "heap_objects_mib": 3,
+          "heap_free_mib": 35,
+          "gc_goal_mib": 7,
+          "anon_minus_go_mib": 7
+        },
+        {
+          "phase": "end (after GC)",
+          "rss_mib": 77,
+          "anon_mib": 58,
+          "file_mib": 18,
+          "go_resident_mib": 48,
+          "heap_objects_mib": 2,
+          "heap_free_mib": 29,
+          "gc_goal_mib": 4,
+          "anon_minus_go_mib": 10
+        }
+      ],
+      "note": "sampled every 200 ms; anon_minus_go ≈ LogEt's off-heap value-cache arena + cgo; page cache for pread'd data files is not in RSS for any engine",
+      "peak_by_rss": {
+        "phase": "load",
+        "rss_mib": 736,
+        "anon_mib": 718,
+        "file_mib": 18,
+        "go_resident_mib": 853,
+        "heap_objects_mib": 713,
+        "heap_free_mib": 126,
+        "gc_goal_mib": 773,
+        "anon_minus_go_mib": -135
+      }
+    },
+    "data_dir_page_cache_mib": 1321
+  },
+  "runs": [
+    {
+      "system": "pebble",
+      "fsync": true,
+      "durability": "pebble.Sync (WAL fsync per commit, concurrent commits share an fsync)",
+      "workload": "A",
+      "desc": "50% read / 50% update",
+      "clients": 1,
+      "closed_loop": {
+        "mode": "closed",
+        "seconds": 5,
+        "ops": 96960,
+        "ops_per_sec": 19392,
+        "errors": 0,
+        "latency": {
+          "count": 96960,
+          "mean_us": 51.37,
+          "p50_us": 27.92,
+          "p99_us": 248.32,
+          "p999_us": 537.6,
+          "max_us": 1212153.86
+        },
+        "go_gc": {
+          "cycles": 41,
+          "stw_pause_total_ms": 4.01,
+          "stw_pause_max_ms": 0.38,
+          "heap_inuse_end_mb": 8,
+          "gc_cpu_fraction_cumulative": 0.0055
+        }
+      },
+      "open_loop": {
+        "mode": "open",
+        "seconds": 5,
+        "ops": 48480,
+        "ops_per_sec": 9686.5,
+        "target_ops_per_sec": 9696,
+        "errors": 0,
+        "latency": {
+          "count": 48480,
+          "mean_us": 2707.83,
+          "p50_us": 41.34,
+          "p99_us": 55246.85,
+          "p999_us": 67076.1,
+          "max_us": 69009.41
+        },
+        "go_gc": {
+          "cycles": 22,
+          "stw_pause_total_ms": 1.41,
+          "stw_pause_max_ms": 0.1,
+          "heap_inuse_end_mb": 10,
+          "gc_cpu_fraction_cumulative": 0.004
+        }
+      }
+    },
+    {
+      "system": "pebble",
+      "fsync": true,
+      "durability": "pebble.Sync (WAL fsync per commit, concurrent commits share an fsync)",
+      "workload": "A",
+      "desc": "50% read / 50% update",
+      "clients": 8,
+      "closed_loop": {
+        "mode": "closed",
+        "seconds": 5,
+        "ops": 444511,
+        "ops_per_sec": 88899.1,
+        "errors": 0,
+        "latency": {
+          "count": 444511,
+          "mean_us": 89.62,
+          "p50_us": 59.1,
+          "p99_us": 495.87,
+          "p999_us": 1152,
+          "max_us": 68812.8
+        },
+        "go_gc": {
+          "cycles": 129,
+          "stw_pause_total_ms": 18.15,
+          "stw_pause_max_ms": 0.34,
+          "heap_inuse_end_mb": 12,
+          "gc_cpu_fraction_cumulative": 0.0051
+        }
+      },
+      "open_loop": {
+        "mode": "open",
+        "seconds": 5,
+        "ops": 222247,
+        "ops_per_sec": 44448.9,
+        "target_ops_per_sec": 44449.6,
+        "errors": 0,
+        "latency": {
+          "count": 222247,
+          "mean_us": 1552.69,
+          "p50_us": 56.86,
+          "p99_us": 34144.26,
+          "p999_us": 45613.06,
+          "max_us": 48988.16
+        },
+        "go_gc": {
+          "cycles": 72,
+          "stw_pause_total_ms": 9.12,
+          "stw_pause_max_ms": 0.33,
+          "heap_inuse_end_mb": 12,
+          "gc_cpu_fraction_cumulative": 0.0051
+        }
+      }
+    },
+    {
+      "system": "pebble",
+      "fsync": true,
+      "durability": "pebble.Sync (WAL fsync per commit, concurrent commits share an fsync)",
+      "workload": "A",
+      "desc": "50% read / 50% update",
+      "clients": 64,
+      "closed_loop": {
+        "mode": "closed",
+        "seconds": 5.07,
+        "ops": 492108,
+        "ops_per_sec": 97092.9,
+        "errors": 0,
+        "latency": {
+          "count": 492108,
+          "mean_us": 658.35,
+          "p50_us": 85.89,
+          "p99_us": 4526.08,
+          "p999_us": 40271.87,
+          "max_us": 158859.26
+        },
+        "go_gc": {
+          "cycles": 39,
+          "stw_pause_total_ms": 6.06,
+          "stw_pause_max_ms": 0.21,
+          "heap_inuse_end_mb": 37,
+          "gc_cpu_fraction_cumulative": 0.0049
+        }
+      },
+      "open_loop": {
+        "mode": "open",
+        "seconds": 5.01,
+        "ops": 242732,
+        "ops_per_sec": 48440.1,
+        "target_ops_per_sec": 48546.5,
+        "errors": 0,
+        "latency": {
+          "count": 242732,
+          "mean_us": 24315.16,
+          "p50_us": 16826.37,
+          "p99_us": 113704.96,
+          "p999_us": 173670.4,
+          "max_us": 201195.52
+        },
+        "go_gc": {
+          "cycles": 21,
+          "stw_pause_total_ms": 3.19,
+          "stw_pause_max_ms": 0.47,
+          "heap_inuse_end_mb": 32,
+          "gc_cpu_fraction_cumulative": 0.0044
+        }
+      }
+    },
+    {
+      "system": "pebble",
+      "fsync": true,
+      "durability": "pebble.Sync (WAL fsync per commit, concurrent commits share an fsync)",
+      "workload": "B",
+      "desc": "95% read / 5% update",
+      "clients": 1,
+      "closed_loop": {
+        "mode": "closed",
+        "seconds": 5,
+        "ops": 256414,
+        "ops_per_sec": 51282.7,
+        "errors": 0,
+        "latency": {
+          "count": 256414,
+          "mean_us": 19.33,
+          "p50_us": 11.66,
+          "p99_us": 83.07,
+          "p999_us": 389.89,
+          "max_us": 69795.84
+        },
+        "go_gc": {
+          "cycles": 82,
+          "stw_pause_total_ms": 4.94,
+          "stw_pause_max_ms": 0.31,
+          "heap_inuse_end_mb": 10,
+          "gc_cpu_fraction_cumulative": 0.0043
+        }
+      },
+      "open_loop": {
+        "mode": "open",
+        "seconds": 5,
+        "ops": 128206,
+        "ops_per_sec": 25641.3,
+        "target_ops_per_sec": 25641.4,
+        "errors": 0,
+        "latency": {
+          "count": 128206,
+          "mean_us": 2042.38,
+          "p50_us": 36.58,
+          "p99_us": 53215.23,
+          "p999_us": 73662.46,
+          "max_us": 75563.01
+        },
+        "go_gc": {
+          "cycles": 42,
+          "stw_pause_total_ms": 3.34,
+          "stw_pause_max_ms": 0.46,
+          "heap_inuse_end_mb": 8,
+          "gc_cpu_fraction_cumulative": 0.004
+        }
+      }
+    },
+    {
+      "system": "pebble",
+      "fsync": true,
+      "durability": "pebble.Sync (WAL fsync per commit, concurrent commits share an fsync)",
+      "workload": "B",
+      "desc": "95% read / 5% update",
+      "clients": 8,
+      "closed_loop": {
+        "mode": "closed",
+        "seconds": 5,
+        "ops": 664976,
+        "ops_per_sec": 132993.8,
+        "errors": 0,
+        "latency": {
+          "count": 664976,
+          "mean_us": 59.84,
+          "p50_us": 18.46,
+          "p99_us": 472.32,
+          "p999_us": 767.49,
+          "max_us": 70123.52
+        },
+        "go_gc": {
+          "cycles": 151,
+          "stw_pause_total_ms": 21.19,
+          "stw_pause_max_ms": 0.49,
+          "heap_inuse_end_mb": 11,
+          "gc_cpu_fraction_cumulative": 0.0045
+        }
+      },
+      "open_loop": {
+        "mode": "open",
+        "seconds": 5,
+        "ops": 332484,
+        "ops_per_sec": 66496.7,
+        "target_ops_per_sec": 66496.9,
+        "errors": 0,
+        "latency": {
+          "count": 332484,
+          "mean_us": 460.05,
+          "p50_us": 24.11,
+          "p99_us": 15949.82,
+          "p999_us": 33112.06,
+          "max_us": 36700.16
+        },
+        "go_gc": {
+          "cycles": 76,
+          "stw_pause_total_ms": 12.05,
+          "stw_pause_max_ms": 2.04,
+          "heap_inuse_end_mb": 10,
+          "gc_cpu_fraction_cumulative": 0.0045
+        }
+      }
+    },
+    {
+      "system": "pebble",
+      "fsync": true,
+      "durability": "pebble.Sync (WAL fsync per commit, concurrent commits share an fsync)",
+      "workload": "B",
+      "desc": "95% read / 5% update",
+      "clients": 64,
+      "closed_loop": {
+        "mode": "closed",
+        "seconds": 5,
+        "ops": 899283,
+        "ops_per_sec": 179822.6,
+        "errors": 0,
+        "latency": {
+          "count": 899283,
+          "mean_us": 355.3,
+          "p50_us": 55.87,
+          "p99_us": 2109.44,
+          "p999_us": 3493.89,
+          "max_us": 48005.12
+        },
+        "go_gc": {
+          "cycles": 60,
+          "stw_pause_total_ms": 9.4,
+          "stw_pause_max_ms": 0.22,
+          "heap_inuse_end_mb": 25,
+          "gc_cpu_fraction_cumulative": 0.0046
+        }
+      },
+      "open_loop": {
+        "mode": "open",
+        "seconds": 5.01,
+        "ops": 449556,
+        "ops_per_sec": 89740,
+        "target_ops_per_sec": 89911.3,
+        "errors": 0,
+        "latency": {
+          "count": 449556,
+          "mean_us": 11093.99,
+          "p50_us": 5779.46,
+          "p99_us": 68681.73,
+          "p999_us": 96665.6,
+          "max_us": 123666.43
+        },
+        "go_gc": {
+          "cycles": 29,
+          "stw_pause_total_ms": 3.78,
+          "stw_pause_max_ms": 0.19,
+          "heap_inuse_end_mb": 36,
+          "gc_cpu_fraction_cumulative": 0.0044
+        }
+      }
+    },
+    {
+      "system": "pebble",
+      "fsync": true,
+      "durability": "pebble.Sync (WAL fsync per commit, concurrent commits share an fsync)",
+      "workload": "C",
+      "desc": "100% read",
+      "clients": 1,
+      "closed_loop": {
+        "mode": "closed",
+        "seconds": 5,
+        "ops": 407937,
+        "ops_per_sec": 81587,
+        "errors": 0,
+        "latency": {
+          "count": 407937,
+          "mean_us": 12.13,
+          "p50_us": 9.62,
+          "p99_us": 48.48,
+          "p999_us": 90.18,
+          "max_us": 2994.18
+        },
+        "go_gc": {
+          "cycles": 124,
+          "stw_pause_total_ms": 10.02,
+          "stw_pause_max_ms": 0.4,
+          "heap_inuse_end_mb": 9,
+          "gc_cpu_fraction_cumulative": 0.0044
+        }
+      },
+      "open_loop": {
+        "mode": "open",
+        "seconds": 5,
+        "ops": 203967,
+        "ops_per_sec": 40793,
+        "target_ops_per_sec": 40793.5,
+        "errors": 0,
+        "latency": {
+          "count": 203967,
+          "mean_us": 65.37,
+          "p50_us": 18.94,
+          "p99_us": 688.64,
+          "p999_us": 6758.4,
+          "max_us": 7921.66
+        },
+        "go_gc": {
+          "cycles": 63,
+          "stw_pause_total_ms": 4.18,
+          "stw_pause_max_ms": 0.31,
+          "heap_inuse_end_mb": 9,
+          "gc_cpu_fraction_cumulative": 0.0043
+        }
+      }
+    },
+    {
+      "system": "pebble",
+      "fsync": true,
+      "durability": "pebble.Sync (WAL fsync per commit, concurrent commits share an fsync)",
+      "workload": "C",
+      "desc": "100% read",
+      "clients": 8,
+      "closed_loop": {
+        "mode": "closed",
+        "seconds": 5,
+        "ops": 797413,
+        "ops_per_sec": 159480.7,
+        "errors": 0,
+        "latency": {
+          "count": 797413,
+          "mean_us": 49.87,
+          "p50_us": 13.18,
+          "p99_us": 424.19,
+          "p999_us": 669.18,
+          "max_us": 1543.17
+        },
+        "go_gc": {
+          "cycles": 166,
+          "stw_pause_total_ms": 22.9,
+          "stw_pause_max_ms": 0.36,
+          "heap_inuse_end_mb": 12,
+          "gc_cpu_fraction_cumulative": 0.0046
+        }
+      },
+      "open_loop": {
+        "mode": "open",
+        "seconds": 5,
+        "ops": 398701,
+        "ops_per_sec": 79739.8,
+        "target_ops_per_sec": 79740.4,
+        "errors": 0,
+        "latency": {
+          "count": 398701,
+          "mean_us": 32.31,
+          "p50_us": 17.25,
+          "p99_us": 309.5,
+          "p999_us": 1860.61,
+          "max_us": 4132.86
+        },
+        "go_gc": {
+          "cycles": 85,
+          "stw_pause_total_ms": 12.66,
+          "stw_pause_max_ms": 1.43,
+          "heap_inuse_end_mb": 9,
+          "gc_cpu_fraction_cumulative": 0.0047
+        }
+      }
+    },
+    {
+      "system": "pebble",
+      "fsync": true,
+      "durability": "pebble.Sync (WAL fsync per commit, concurrent commits share an fsync)",
+      "workload": "C",
+      "desc": "100% read",
+      "clients": 64,
+      "closed_loop": {
+        "mode": "closed",
+        "seconds": 5,
+        "ops": 1138704,
+        "ops_per_sec": 227714.8,
+        "errors": 0,
+        "latency": {
+          "count": 1138704,
+          "mean_us": 280.51,
+          "p50_us": 39.87,
+          "p99_us": 1800.19,
+          "p999_us": 2650.11,
+          "max_us": 8593.41
+        },
+        "go_gc": {
+          "cycles": 71,
+          "stw_pause_total_ms": 10.79,
+          "stw_pause_max_ms": 0.47,
+          "heap_inuse_end_mb": 33,
+          "gc_cpu_fraction_cumulative": 0.0047
+        }
+      },
+      "open_loop": {
+        "mode": "open",
+        "seconds": 5.01,
+        "ops": 569287,
+        "ops_per_sec": 113722.8,
+        "target_ops_per_sec": 113857.4,
+        "errors": 0,
+        "latency": {
+          "count": 569287,
+          "mean_us": 9386.52,
+          "p50_us": 6008.83,
+          "p99_us": 50003.97,
+          "p999_us": 74055.68,
+          "max_us": 87883.78
+        },
+        "go_gc": {
+          "cycles": 36,
+          "stw_pause_total_ms": 5.42,
+          "stw_pause_max_ms": 0.7,
+          "heap_inuse_end_mb": 31,
+          "gc_cpu_fraction_cumulative": 0.0046
+        }
+      }
+    }
+  ]
+}

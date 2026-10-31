@@ -2,8 +2,8 @@
 
 ROADMAP item 1. Status: implemented (ccc4147 index layer, af29ecf
 wiring). Numbers marked "before" are measured at d013307 on the
-reference box (8 vCPU, 16 GiB, ext4), "after" at af29ecf on the same
-box the same evening; raw files in
+reference box (8 vCPU, 16 GiB, ext4), "after" with the bench binary at 9c5f706 on
+the same box the same evening (22:59-23:31 IST); raw files in
 `bench/results/2026-10-31-disk-key-index/{before,after}/`.
 
 ## Problem
@@ -160,7 +160,7 @@ race detector. If option D is built later, it gets a model.
 
 ## Tests
 
-All green at af29ecf in the full local gate (gofmt, vet, staticcheck, API diff, S3 against MinIO, `-race`, simulator, kill -9, fuzz smoke):
+All green at af29ecf and again at 9c5f706 in the full local gate (gofmt, vet, staticcheck, API diff, S3 against MinIO, `-race`, simulator, kill -9, fuzz smoke):
 
 - `index/kvfile_test.go`: the refinement properties against the map model
   (`TestKVRunsRefineMap`, `TestKVSetLatestRefineMap`, with DropSubject,
@@ -186,11 +186,76 @@ All green at af29ecf in the full local gate (gofmt, vet, staticcheck, API diff, 
   empty directory at the end. 2,000 seeds × 60 steps: 3,989 injected
   run-file faults, no failure. `TestDeterminism` still holds.
 
-## Benchmarks (after: to be filled in)
+## Benchmarks
 
-Same three YCSB runs as above (peak and end RSS, anon vs file-backed),
-read/write throughput, and open time (reopen of a 10M-key database with
-and without a snapshot) for LogEt before/after and Pebble.
+Single runs, one engine at a time, same box as "before". Raw output and
+a README: `bench/results/2026-10-31-disk-key-index/after/`.
+
+**A bug found on the way.** The first after-run (af29ecf) showed YCSB-C
+20 % slower and YCSB-A at 648 ops/s after a compaction. Neither was the
+run files: the engine's store wrapper hid `GetRange`, so every value
+cache miss read a whole segment or 64 MiB base chunk (fixed in 9c5f706,
+`TestValueReadsAreRanged`; docs/components/kv.md). "before" (d013307)
+has that bug; both "after" columns have the fix. So before → after mixes
+the two changes, and **files vs heap (the same binary with
+`WithIndexInMemory`) is the measure of design 21 alone.**
+
+Memory (peak RSS from the kernel, end RSS split into anon / file-backed):
+
+| run | before | after, heap | after, files | Pebble |
+|---|---|---|---|---|
+| 1M × 1 KiB, A,B,C × 1/8/64: peak | 958 MiB | 712 MiB | 640 MiB | 761 MiB |
+| same: end (anon / file) | 774 | 662 (644 / 17) | 582 (509 / 72) | 82 |
+| same, 8 MiB value cache, A,C: peak / end | 478 / 289 | 239 / 177 | 196 / 136 | |
+| 10M × 100 B, C,A × 8: peak | 3,546 MiB | 2,632 MiB | 1,916 MiB | 740 MiB |
+| same: end (anon / file) | 1,133 | 1,329 (1,311 / 17) | 920 (601 / 319) | 53 |
+| 10M: Go live heap after load | 1,169 MiB | 1,041 MiB | 561 MiB | 113 MiB |
+
+With files, the index's anon cost at 10M keys
+fell from ~620 MiB to ~15 MiB (heap profile); the 319 MiB of index pages
+are file-backed and reclaimable. What remains of LogEt's peak is OCC's
+recent-commit window during the load (~310 MiB plus the keys it holds),
+the 256 MiB value cache, and Go GC headroom.
+
+Throughput (ops/s, 5 s per 1M cell, 10 s per 10M cell):
+
+| workload | before | after, heap | after, files | Pebble (after) |
+|---|---|---|---|---|
+| 1M A c=1 / 8 / 64 | 8.8k / 70k / 139k | 41k / 102k / 211k | 38k / 99k / 200k | 19k / 89k / 97k |
+| 1M B c=1 / 8 / 64 | 27k / 212k / 245k | 160k / 483k / 1.06M | 151k / 482k / 943k | 51k / 133k / 180k |
+| 1M C c=1 / 8 / 64 | 52k / 327k / 306k | 344k / 1.60M / 1.92M | 349k / 1.62M / 2.02M | 82k / 159k / 228k |
+| 10M C c=8 | 448k | 1.82M | 1.79M / 1.80M | 192k |
+| 10M A c=8 | 116k | 100k | 88k / 87k | 112k |
+| load 1M × 1 KiB / 10M × 100 B | 6.0 / 35.0 s | 5.8 / 38.7 s | 6.6 / 40.0 s | 4.1 / 6.1 s |
+
+Read A/B (1M × 1 KiB, C × 8, two interleaved pairs): files 1.70M and
+1.69M, heap 1.87M and 1.72M ops/s; CPU profiles put `KV.Get` at 11.7 %
+of samples in both. Files cost up to ~10 % on reads in these runs, mostly
+within this box's spread; writes (A) 3-12 % and load 3-14 %, from writing
+and mapping run files during merges.
+
+Open (10M × 100 B directory, 200k uniform reads after open):
+
+| open from | mode | open | peak RSS | RSS after reads (anon / file) | reads |
+|---|---|---|---|---|---|
+| log only (no snapshot, full replay) | files | 32.7 / 33.6 s | 719 MiB | 455 (136 / 319) | 165-180k/s |
+| | heap | 32.3 / 32.3 s | 1,167 MiB | 559 (542 / 16) | 177-222k/s |
+| | Pebble | 0.13 / 0.01 s | 64-66 MiB | 59-64 | 55-61k/s |
+| compaction base | files | 6.6 / 5.2 s | 2,208 MiB | 1,146-1,275 (820-948 / 326) | 227-317k/s |
+| | heap | 6.2 / 4.8 s | 2,183 MiB | 2,183 (2,166 / 17) | 217-278k/s |
+
+Open time is unchanged by design 21 (the index is still rebuilt at open;
+persisting runs is option D / ROADMAP item 5) and is the largest gap to
+Pebble. Opening from a base peaks at ~2.2 GiB in both modes because the
+base is one object decoded in memory (item 5).
+
+Compaction (pre-existing, not changed here; ROADMAP item 6). 1M × 100 B,
+files vs heap: compaction after C 6.4 vs 5.9 s, after A 60.4 vs 59.8 s,
+A after compaction 138k vs 140k ops/s. The 60 s is one `fdatasync` per
+deleted object on the journal (480k segments). At 10M keys, compaction
+after C took 97.8 s (324.6 s before the GetRange fix) and RSS reached
+6.3 GiB (go-resident 5.6 GiB, live heap 82 MiB): `writeBase` holds the
+new base image and chunk buffers in memory.
 
 ## Limits that remain
 
@@ -202,3 +267,7 @@ and without a snapshot) for LogEt before/after and Pebble.
 - MVCC history is still indexed until compaction, now on disk.
 - OCC's recent-commit window and the segment indexes are separate RAM
   users and are not changed here.
+- Open time is unchanged: ~33 s for 10M keys without a snapshot (Pebble:
+  under 0.2 s). Persisting runs (option D) belongs to ROADMAP item 5.
+- Run files cost up to ~10 % read and 3-14 % write/load throughput in
+  the runs above.

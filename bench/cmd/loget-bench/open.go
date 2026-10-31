@@ -61,4 +61,7 @@ func cmdOpen(args []string) {
 	p := openParams{System: *system, Dir: *dir, Keys: *keys, Reads: *reads, OpenSecs: round(openSecs, 3), ReadSecs: round(readSecs, 3),
 		ReadRate: round(float64(*reads)/readSecs, 0), Missing: missing, PeakRSS: peakRSS(), IndexInMemory: indexInMemory, Memory: memS.result()}
 	writeResult(*out, "open-"+*system, &Result{Suite: "open", Env: envInfo(*dir), Params: p})
+	if missing > 0 { // a wrong or empty -dir, not a measurement
+		fatal(fmt.Errorf("open: %d of %d keys missing in %s", missing, *reads, *dir))
+	}
 }

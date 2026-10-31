@@ -1,0 +1,11 @@
+23:01:13 ycsb loget fsync=true: loading 1000000 x 100B
+23:01:16 loaded in 2.9s
+23:01:16 mem after load: rss 211 anon 194 file 16 MiB | go-resident 218 heap-live 108 goal 183 | off-heap anon -24 MiB
+23:01:37 loget C fsync=true c=8: max 2898774 ops/s | open @200000/s p50 5.0us p99 235.9us p99.9 2959.4us | errs 0/0 not-issued 0
+23:01:43 compact after C: 1000000 keys, 1001 deleted, 5.9s
+23:01:43 mem after C: rss 913 anon 895 file 17 MiB | go-resident 870 heap-live 69 goal 679 | off-heap anon 25 MiB
+23:02:04 loget A fsync=true c=8: max 140063 ops/s | open @70031/s p50 55.0us p99 55345.2us p99.9 74645.5us | errs 0/0 not-issued 0
+23:03:04 compact after A: 1000000 keys, 483848 deleted, 59.8s
+23:03:04 mem after A: rss 681 anon 664 file 17 MiB | go-resident 415 heap-live 152 goal 352 | off-heap anon 249 MiB
+23:03:04 mem end: rss 681 anon 664 file 17 MiB | go-resident 415 heap-live 151 goal 306 | off-heap anon 249 MiB
+wrote /workspace/loget-tools/b21/ab/mem/ycsb-loget-fsync-true.json

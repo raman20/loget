@@ -1,0 +1,4 @@
+23:30:13 mem after open: rss 436 anon 117 file 319 MiB | go-resident 122 heap-live 54 goal 106 | off-heap anon -5 MiB
+23:30:15 mem after reads: rss 456 anon 137 file 319 MiB | go-resident 119 heap-live 59 goal 119 | off-heap anon 18 MiB
+23:30:15 open loget: 33.55s, 200000 reads in 1.21s (0 missing)
+wrote /workspace/loget-tools/b21/after2/open-2-loget/open-loget.json

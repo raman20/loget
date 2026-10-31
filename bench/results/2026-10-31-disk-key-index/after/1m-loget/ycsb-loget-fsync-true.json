@@ -1,0 +1,644 @@
+{
+  "suite": "ycsb",
+  "env": {
+    "time": "2026-10-31T23:08:35+05:30",
+    "go_version": "go1.27.3",
+    "os": "linux/amd64",
+    "kernel": "6.12.94+",
+    "cpu": "Intel(R) Xeon(R) Processor",
+    "cpus": 8,
+    "mem_total": "16386368 kB",
+    "disk": "/dev/vdb ext4 128G",
+    "loget_commit": "",
+    "command": "/workspace/loget-tools/loget-bench2 ycsb -system loget -keys 1000000 -value 1024 -workloads A,B,C -clients 1,8,64 -warmup 1s -duration 5s -dir /tmp/loget-b21 -out /workspace/loget-tools/b21/after2/1m-loget",
+    "loadavg_at_start": "0.55 1.76 1.76"
+  },
+  "params": {
+    "system": "loget",
+    "fsync": true,
+    "keys": 1000000,
+    "value_bytes": 1024,
+    "workloads": "A,B,C",
+    "clients": [
+      1,
+      8,
+      64
+    ],
+    "warmup": "1s",
+    "duration": "5s",
+    "open_loop_fraction_of_max": 0.5,
+    "open_loop_cap_ops_per_sec": 200000,
+    "seed": 42,
+    "zipf_theta": 0.99,
+    "load_seconds": 6.63,
+    "load_keys_per_sec": 150814,
+    "disk_after_run": "3.2G",
+    "peak_rss": "654844 kB",
+    "memory": {
+      "marks": [
+        {
+          "phase": "after load",
+          "rss_mib": 193,
+          "anon_mib": 146,
+          "file_mib": 46,
+          "go_resident_mib": 150,
+          "heap_objects_mib": 97,
+          "heap_free_mib": 40,
+          "gc_goal_mib": 126,
+          "anon_minus_go_mib": -4
+        },
+        {
+          "phase": "after load (after GC)",
+          "rss_mib": 193,
+          "anon_mib": 146,
+          "file_mib": 46,
+          "go_resident_mib": 150,
+          "heap_objects_mib": 61,
+          "heap_free_mib": 76,
+          "gc_goal_mib": 123,
+          "anon_minus_go_mib": -4
+        },
+        {
+          "phase": "after A",
+          "rss_mib": 500,
+          "anon_mib": 434,
+          "file_mib": 65,
+          "go_resident_mib": 181,
+          "heap_objects_mib": 149,
+          "heap_free_mib": 16,
+          "gc_goal_mib": 166,
+          "anon_minus_go_mib": 253
+        },
+        {
+          "phase": "after A (after GC)",
+          "rss_mib": 500,
+          "anon_mib": 434,
+          "file_mib": 65,
+          "go_resident_mib": 181,
+          "heap_objects_mib": 66,
+          "heap_free_mib": 98,
+          "gc_goal_mib": 132,
+          "anon_minus_go_mib": 253
+        },
+        {
+          "phase": "after B",
+          "rss_mib": 577,
+          "anon_mib": 505,
+          "file_mib": 72,
+          "go_resident_mib": 256,
+          "heap_objects_mib": 141,
+          "heap_free_mib": 93,
+          "gc_goal_mib": 244,
+          "anon_minus_go_mib": 249
+        },
+        {
+          "phase": "after B (after GC)",
+          "rss_mib": 577,
+          "anon_mib": 505,
+          "file_mib": 72,
+          "go_resident_mib": 256,
+          "heap_objects_mib": 103,
+          "heap_free_mib": 130,
+          "gc_goal_mib": 208,
+          "anon_minus_go_mib": 249
+        },
+        {
+          "phase": "after C",
+          "rss_mib": 582,
+          "anon_mib": 509,
+          "file_mib": 72,
+          "go_resident_mib": 264,
+          "heap_objects_mib": 194,
+          "heap_free_mib": 48,
+          "gc_goal_mib": 242,
+          "anon_minus_go_mib": 245
+        },
+        {
+          "phase": "after C (after GC)",
+          "rss_mib": 582,
+          "anon_mib": 509,
+          "file_mib": 72,
+          "go_resident_mib": 264,
+          "heap_objects_mib": 103,
+          "heap_free_mib": 136,
+          "gc_goal_mib": 208,
+          "anon_minus_go_mib": 245
+        },
+        {
+          "phase": "end",
+          "rss_mib": 582,
+          "anon_mib": 509,
+          "file_mib": 72,
+          "go_resident_mib": 264,
+          "heap_objects_mib": 103,
+          "heap_free_mib": 136,
+          "gc_goal_mib": 208,
+          "anon_minus_go_mib": 245
+        },
+        {
+          "phase": "end (after GC)",
+          "rss_mib": 580,
+          "anon_mib": 508,
+          "file_mib": 72,
+          "go_resident_mib": 262,
+          "heap_objects_mib": 102,
+          "heap_free_mib": 135,
+          "gc_goal_mib": 206,
+          "anon_minus_go_mib": 246
+        }
+      ],
+      "note": "sampled every 200 ms; anon_minus_go ≈ LogEt's off-heap value-cache arena + cgo; page cache for pread'd data files is not in RSS for any engine",
+      "peak_by_rss": {
+        "phase": "C c=64",
+        "rss_mib": 637,
+        "anon_mib": 565,
+        "file_mib": 72,
+        "go_resident_mib": 314,
+        "heap_objects_mib": 234,
+        "heap_free_mib": 55,
+        "gc_goal_mib": 284,
+        "anon_minus_go_mib": 251
+      }
+    },
+    "data_dir_page_cache_mib": 3192
+  },
+  "runs": [
+    {
+      "system": "loget",
+      "fsync": true,
+      "durability": "group commit; journal store: ack after the segment record is appended to one preallocated file + fdatasync",
+      "workload": "A",
+      "desc": "50% read / 50% update",
+      "clients": 1,
+      "closed_loop": {
+        "mode": "closed",
+        "seconds": 5,
+        "ops": 190973,
+        "ops_per_sec": 38193.6,
+        "errors": 0,
+        "latency": {
+          "count": 190973,
+          "mean_us": 26.02,
+          "p50_us": 22.51,
+          "p99_us": 85.25,
+          "p999_us": 755.71,
+          "max_us": 119734.27
+        },
+        "go_gc": {
+          "cycles": 44,
+          "stw_pause_total_ms": 3.1,
+          "stw_pause_max_ms": 0.22,
+          "heap_inuse_end_mb": 49,
+          "gc_cpu_fraction_cumulative": 0.012
+        }
+      },
+      "open_loop": {
+        "mode": "open",
+        "seconds": 5,
+        "ops": 95484,
+        "ops_per_sec": 19096.8,
+        "target_ops_per_sec": 19096.8,
+        "errors": 0,
+        "latency": {
+          "count": 95484,
+          "mean_us": 2736.71,
+          "p50_us": 37.63,
+          "p99_us": 39387.14,
+          "p999_us": 46858.24,
+          "max_us": 49283.07
+        },
+        "go_gc": {
+          "cycles": 15,
+          "stw_pause_total_ms": 0.95,
+          "stw_pause_max_ms": 0.16,
+          "heap_inuse_end_mb": 44,
+          "gc_cpu_fraction_cumulative": 0.0093
+        }
+      }
+    },
+    {
+      "system": "loget",
+      "fsync": true,
+      "durability": "group commit; journal store: ack after the segment record is appended to one preallocated file + fdatasync",
+      "workload": "A",
+      "desc": "50% read / 50% update",
+      "clients": 8,
+      "closed_loop": {
+        "mode": "closed",
+        "seconds": 5,
+        "ops": 494805,
+        "ops_per_sec": 98959.5,
+        "errors": 0,
+        "latency": {
+          "count": 494805,
+          "mean_us": 80.54,
+          "p50_us": 61.6,
+          "p99_us": 796.16,
+          "p999_us": 1932.29,
+          "max_us": 38240.26
+        },
+        "go_gc": {
+          "cycles": 62,
+          "stw_pause_total_ms": 7.56,
+          "stw_pause_max_ms": 0.22,
+          "heap_inuse_end_mb": 80,
+          "gc_cpu_fraction_cumulative": 0.0096
+        }
+      },
+      "open_loop": {
+        "mode": "open",
+        "seconds": 5,
+        "ops": 247398,
+        "ops_per_sec": 49479.9,
+        "target_ops_per_sec": 49479.8,
+        "errors": 0,
+        "latency": {
+          "count": 247398,
+          "mean_us": 3761.48,
+          "p50_us": 63.78,
+          "p99_us": 45645.82,
+          "p999_us": 55705.6,
+          "max_us": 59179.01
+        },
+        "go_gc": {
+          "cycles": 19,
+          "stw_pause_total_ms": 2.29,
+          "stw_pause_max_ms": 0.17,
+          "heap_inuse_end_mb": 85,
+          "gc_cpu_fraction_cumulative": 0.0091
+        }
+      }
+    },
+    {
+      "system": "loget",
+      "fsync": true,
+      "durability": "group commit; journal store: ack after the segment record is appended to one preallocated file + fdatasync",
+      "workload": "A",
+      "desc": "50% read / 50% update",
+      "clients": 64,
+      "closed_loop": {
+        "mode": "closed",
+        "seconds": 5,
+        "ops": 1001120,
+        "ops_per_sec": 200197.4,
+        "errors": 0,
+        "latency": {
+          "count": 1001120,
+          "mean_us": 319.27,
+          "p50_us": 205.31,
+          "p99_us": 2019.33,
+          "p999_us": 8757.25,
+          "max_us": 29327.36
+        },
+        "go_gc": {
+          "cycles": 80,
+          "stw_pause_total_ms": 9.39,
+          "stw_pause_max_ms": 0.59,
+          "heap_inuse_end_mb": 78,
+          "gc_cpu_fraction_cumulative": 0.0113
+        }
+      },
+      "open_loop": {
+        "mode": "open",
+        "seconds": 5,
+        "ops": 500493,
+        "ops_per_sec": 100097.5,
+        "target_ops_per_sec": 100098.7,
+        "errors": 0,
+        "latency": {
+          "count": 500493,
+          "mean_us": 2152.34,
+          "p50_us": 383.74,
+          "p99_us": 16621.57,
+          "p999_us": 25067.52,
+          "max_us": 33112.06
+        },
+        "go_gc": {
+          "cycles": 33,
+          "stw_pause_total_ms": 4.95,
+          "stw_pause_max_ms": 0.65,
+          "heap_inuse_end_mb": 154,
+          "gc_cpu_fraction_cumulative": 0.0118
+        }
+      }
+    },
+    {
+      "system": "loget",
+      "fsync": true,
+      "durability": "group commit; journal store: ack after the segment record is appended to one preallocated file + fdatasync",
+      "workload": "B",
+      "desc": "95% read / 5% update",
+      "clients": 1,
+      "closed_loop": {
+        "mode": "closed",
+        "seconds": 5,
+        "ops": 755221,
+        "ops_per_sec": 151043.2,
+        "errors": 0,
+        "latency": {
+          "count": 755221,
+          "mean_us": 6.51,
+          "p50_us": 3.02,
+          "p99_us": 44.38,
+          "p999_us": 322.56,
+          "max_us": 64421.89
+        },
+        "go_gc": {
+          "cycles": 18,
+          "stw_pause_total_ms": 1.09,
+          "stw_pause_max_ms": 0.09,
+          "heap_inuse_end_mb": 150,
+          "gc_cpu_fraction_cumulative": 0.0108
+        }
+      },
+      "open_loop": {
+        "mode": "open",
+        "seconds": 5,
+        "ops": 377608,
+        "ops_per_sec": 75521.6,
+        "target_ops_per_sec": 75521.6,
+        "errors": 0,
+        "latency": {
+          "count": 377608,
+          "mean_us": 3308.9,
+          "p50_us": 16.59,
+          "p99_us": 54624.26,
+          "p999_us": 67764.22,
+          "max_us": 69402.62
+        },
+        "go_gc": {
+          "cycles": 6,
+          "stw_pause_total_ms": 0.4,
+          "stw_pause_max_ms": 0.08,
+          "heap_inuse_end_mb": 180,
+          "gc_cpu_fraction_cumulative": 0.0101
+        }
+      }
+    },
+    {
+      "system": "loget",
+      "fsync": true,
+      "durability": "group commit; journal store: ack after the segment record is appended to one preallocated file + fdatasync",
+      "workload": "B",
+      "desc": "95% read / 5% update",
+      "clients": 8,
+      "closed_loop": {
+        "mode": "closed",
+        "seconds": 5,
+        "ops": 2412344,
+        "ops_per_sec": 482461.8,
+        "errors": 0,
+        "latency": {
+          "count": 2412344,
+          "mean_us": 16.39,
+          "p50_us": 3.44,
+          "p99_us": 164.61,
+          "p999_us": 828.42,
+          "max_us": 22151.17
+        },
+        "go_gc": {
+          "cycles": 39,
+          "stw_pause_total_ms": 5.66,
+          "stw_pause_max_ms": 0.22,
+          "heap_inuse_end_mb": 184,
+          "gc_cpu_fraction_cumulative": 0.0105
+        }
+      },
+      "open_loop": {
+        "mode": "open",
+        "seconds": 5,
+        "ops": 1000000,
+        "ops_per_sec": 199999.5,
+        "target_ops_per_sec": 200000,
+        "errors": 0,
+        "latency": {
+          "count": 1000000,
+          "mean_us": 1156.46,
+          "p50_us": 8.03,
+          "p99_us": 31539.2,
+          "p999_us": 48332.8,
+          "max_us": 50823.17
+        },
+        "go_gc": {
+          "cycles": 16,
+          "stw_pause_total_ms": 1.95,
+          "stw_pause_max_ms": 0.17,
+          "heap_inuse_end_mb": 170,
+          "gc_cpu_fraction_cumulative": 0.0104
+        }
+      }
+    },
+    {
+      "system": "loget",
+      "fsync": true,
+      "durability": "group commit; journal store: ack after the segment record is appended to one preallocated file + fdatasync",
+      "workload": "B",
+      "desc": "95% read / 5% update",
+      "clients": 64,
+      "closed_loop": {
+        "mode": "closed",
+        "seconds": 5,
+        "ops": 4713657,
+        "ops_per_sec": 942708.2,
+        "errors": 0,
+        "latency": {
+          "count": 4713657,
+          "mean_us": 67.62,
+          "p50_us": 3.21,
+          "p99_us": 1271.81,
+          "p999_us": 2940.93,
+          "max_us": 31768.58
+        },
+        "go_gc": {
+          "cycles": 69,
+          "stw_pause_total_ms": 18.52,
+          "stw_pause_max_ms": 4.5,
+          "heap_inuse_end_mb": 176,
+          "gc_cpu_fraction_cumulative": 0.0126
+        }
+      },
+      "open_loop": {
+        "mode": "open",
+        "seconds": 5,
+        "ops": 1000000,
+        "ops_per_sec": 199987,
+        "target_ops_per_sec": 200000,
+        "errors": 0,
+        "latency": {
+          "count": 1000000,
+          "mean_us": 954.46,
+          "p50_us": 21.82,
+          "p99_us": 15319.04,
+          "p999_us": 26001.41,
+          "max_us": 43450.37
+        },
+        "go_gc": {
+          "cycles": 14,
+          "stw_pause_total_ms": 2.7,
+          "stw_pause_max_ms": 0.77,
+          "heap_inuse_end_mb": 150,
+          "gc_cpu_fraction_cumulative": 0.0124
+        }
+      }
+    },
+    {
+      "system": "loget",
+      "fsync": true,
+      "durability": "group commit; journal store: ack after the segment record is appended to one preallocated file + fdatasync",
+      "workload": "C",
+      "desc": "100% read",
+      "clients": 1,
+      "closed_loop": {
+        "mode": "closed",
+        "seconds": 5,
+        "ops": 1747442,
+        "ops_per_sec": 349487.3,
+        "errors": 0,
+        "latency": {
+          "count": 1747442,
+          "mean_us": 2.77,
+          "p50_us": 2.34,
+          "p99_us": 10.45,
+          "p999_us": 17.47,
+          "max_us": 4354.05
+        },
+        "go_gc": {
+          "cycles": 20,
+          "stw_pause_total_ms": 1.75,
+          "stw_pause_max_ms": 0.32,
+          "heap_inuse_end_mb": 160,
+          "gc_cpu_fraction_cumulative": 0.0121
+        }
+      },
+      "open_loop": {
+        "mode": "open",
+        "seconds": 5,
+        "ops": 873718,
+        "ops_per_sec": 174743.2,
+        "target_ops_per_sec": 174743.7,
+        "errors": 0,
+        "latency": {
+          "count": 873718,
+          "mean_us": 34.64,
+          "p50_us": 3.5,
+          "p99_us": 246.02,
+          "p999_us": 6397.95,
+          "max_us": 7495.68
+        },
+        "go_gc": {
+          "cycles": 10,
+          "stw_pause_total_ms": 0.64,
+          "stw_pause_max_ms": 0.08,
+          "heap_inuse_end_mb": 191,
+          "gc_cpu_fraction_cumulative": 0.0117
+        }
+      }
+    },
+    {
+      "system": "loget",
+      "fsync": true,
+      "durability": "group commit; journal store: ack after the segment record is appended to one preallocated file + fdatasync",
+      "workload": "C",
+      "desc": "100% read",
+      "clients": 8,
+      "closed_loop": {
+        "mode": "closed",
+        "seconds": 5,
+        "ops": 8107225,
+        "ops_per_sec": 1621440.5,
+        "errors": 0,
+        "latency": {
+          "count": 8107225,
+          "mean_us": 4.77,
+          "p50_us": 2.74,
+          "p99_us": 27.76,
+          "p999_us": 330.5,
+          "max_us": 6578.18
+        },
+        "go_gc": {
+          "cycles": 86,
+          "stw_pause_total_ms": 19.51,
+          "stw_pause_max_ms": 2.92,
+          "heap_inuse_end_mb": 235,
+          "gc_cpu_fraction_cumulative": 0.0142
+        }
+      },
+      "open_loop": {
+        "mode": "open",
+        "seconds": 5,
+        "ops": 1000000,
+        "ops_per_sec": 199999.9,
+        "target_ops_per_sec": 200000,
+        "errors": 0,
+        "latency": {
+          "count": 1000000,
+          "mean_us": 19.81,
+          "p50_us": 5.98,
+          "p99_us": 85.89,
+          "p999_us": 2523.14,
+          "max_us": 12926.98
+        },
+        "go_gc": {
+          "cycles": 11,
+          "stw_pause_total_ms": 2.82,
+          "stw_pause_max_ms": 1.12,
+          "heap_inuse_end_mb": 211,
+          "gc_cpu_fraction_cumulative": 0.0139
+        }
+      }
+    },
+    {
+      "system": "loget",
+      "fsync": true,
+      "durability": "group commit; journal store: ack after the segment record is appended to one preallocated file + fdatasync",
+      "workload": "C",
+      "desc": "100% read",
+      "clients": 64,
+      "closed_loop": {
+        "mode": "closed",
+        "seconds": 5,
+        "ops": 10103287,
+        "ops_per_sec": 2020641.3,
+        "errors": 0,
+        "latency": {
+          "count": 10103287,
+          "mean_us": 31.45,
+          "p50_us": 2.86,
+          "p99_us": 881.15,
+          "p999_us": 3043.33,
+          "max_us": 14950.4
+        },
+        "go_gc": {
+          "cycles": 90,
+          "stw_pause_total_ms": 17.92,
+          "stw_pause_max_ms": 1.38,
+          "heap_inuse_end_mb": 225,
+          "gc_cpu_fraction_cumulative": 0.0169
+        }
+      },
+      "open_loop": {
+        "mode": "open",
+        "seconds": 5,
+        "ops": 1000000,
+        "ops_per_sec": 199999.6,
+        "target_ops_per_sec": 200000,
+        "errors": 0,
+        "latency": {
+          "count": 1000000,
+          "mean_us": 68.87,
+          "p50_us": 18.22,
+          "p99_us": 1009.15,
+          "p999_us": 9691.14,
+          "max_us": 14680.06
+        },
+        "go_gc": {
+          "cycles": 11,
+          "stw_pause_total_ms": 1.26,
+          "stw_pause_max_ms": 0.16,
+          "heap_inuse_end_mb": 200,
+          "gc_cpu_fraction_cumulative": 0.0165
+        }
+      }
+    }
+  ]
+}

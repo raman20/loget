@@ -1,0 +1,17 @@
+23:08:28 ycsb loget fsync=true: loading 1000000 x 1024B
+23:08:35 loaded in 6.6s
+23:08:35 mem after load: rss 193 anon 146 file 46 MiB | go-resident 150 heap-live 61 goal 126 | off-heap anon -4 MiB
+23:08:46 loget A fsync=true c=1: max 38194 ops/s | open @19097/s p50 37.6us p99 39387.1us p99.9 46858.2us | errs 0/0 not-issued 0
+23:08:57 loget A fsync=true c=8: max 98960 ops/s | open @49480/s p50 63.8us p99 45645.8us p99.9 55705.6us | errs 0/0 not-issued 0
+23:09:08 loget A fsync=true c=64: max 200197 ops/s | open @100099/s p50 383.7us p99 16621.6us p99.9 25067.5us | errs 0/0 not-issued 0
+23:09:08 mem after A: rss 500 anon 434 file 65 MiB | go-resident 181 heap-live 66 goal 166 | off-heap anon 253 MiB
+23:09:19 loget B fsync=true c=1: max 151043 ops/s | open @75522/s p50 16.6us p99 54624.3us p99.9 67764.2us | errs 0/0 not-issued 0
+23:09:30 loget B fsync=true c=8: max 482462 ops/s | open @200000/s p50 8.0us p99 31539.2us p99.9 48332.8us | errs 0/0 not-issued 0
+23:09:41 loget B fsync=true c=64: max 942708 ops/s | open @200000/s p50 21.8us p99 15319.0us p99.9 26001.4us | errs 0/0 not-issued 0
+23:09:41 mem after B: rss 577 anon 505 file 72 MiB | go-resident 256 heap-live 103 goal 244 | off-heap anon 249 MiB
+23:09:52 loget C fsync=true c=1: max 349487 ops/s | open @174744/s p50 3.5us p99 246.0us p99.9 6397.9us | errs 0/0 not-issued 0
+23:10:03 loget C fsync=true c=8: max 1621440 ops/s | open @200000/s p50 6.0us p99 85.9us p99.9 2523.1us | errs 0/0 not-issued 0
+23:10:14 loget C fsync=true c=64: max 2020641 ops/s | open @200000/s p50 18.2us p99 1009.1us p99.9 9691.1us | errs 0/0 not-issued 0
+23:10:14 mem after C: rss 582 anon 509 file 72 MiB | go-resident 264 heap-live 103 goal 242 | off-heap anon 245 MiB
+23:10:14 mem end: rss 582 anon 509 file 72 MiB | go-resident 264 heap-live 102 goal 208 | off-heap anon 245 MiB
+wrote /workspace/loget-tools/b21/after2/1m-loget/ycsb-loget-fsync-true.json

@@ -1,0 +1,4 @@
+23:18:16 mem after open: rss 26 anon 8 file 17 MiB | go-resident 12 heap-live 1 goal 4 | off-heap anon -4 MiB
+23:18:19 mem after reads: rss 59 anon 41 file 17 MiB | go-resident 13 heap-live 1 goal 4 | off-heap anon 28 MiB
+23:18:19 open pebble: 0.13s, 200000 reads in 3.66s (0 missing)
+wrote /workspace/loget-tools/b21/after2/open-1-pebble/open-pebble.json

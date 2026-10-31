@@ -20,7 +20,7 @@ runs, not performance claims.
 
 | # | gap | LogEt today | Pebble / RocksDB / LMDB | impact |
 |---|---|---|---|---|
-| 1 | **Key index lives in RAM** | every key and version is indexed in memory: 30 B/key heap after load, ~60 B/key after ingest (10M keys, compressed runs); values over 64 B stay in the log behind a 256 MiB off-heap cache. YCSB 1M × 1 KiB: 1,549 MiB peak RSS (measured before the compressed runs) | Pebble 771 MiB load peak, 83 MiB steady; index blocks are on disk behind a block cache. LMDB pages through the OS cache | database size is capped by RAM; the biggest gap |
+| 1 | **Key index mostly in RAM → mapped run files (design 21)** | runs of ≥ 1 MiB live in unlinked, memory-mapped files (file-backed, reclaimable pages); the hot set, small runs and block offsets stay on the heap. 10M × 100 B YCSB: peak RSS 3,546 → 1,916 MiB, end 920 MiB of which 319 MiB file-backed; 1M × 1 KiB: 958 → 640 MiB peak. Open still rebuilds the index: ~33 s at 10M keys without a snapshot | Pebble 740 MiB peak, 53 MiB end at 10M; opens in under 0.2 s | remaining RAM users: OCC recent-commit window during bulk writes, value cache, Go GC headroom; open time |
 | 2 | **Range reads** | prefix `Scan` only, returning the whole result at once (51–65 µs for 100 keys at 10M keys) | bounded, bidirectional iterators with `SeekGE`/`SeekLT`, limits, streaming | no `[start, end)`, no reverse, no pagination; large scans load everything |
 | 3 | **Batches and bulk load** | every write is an OCC transaction (`Update`, auto-retry); one segment and one `fdatasync` per group commit; index ingest 2.0–2.9 µs/key | Pebble `Batch`/`IndexedBatch`, SST ingestion; RocksDB `WriteBatch`, `IngestExternalFile`; LMDB `MDB_APPEND` | no write-only fast path; no bulk import; no per-write durability choice |
 | 4 | **Compaction** | whole-log: writes a base image of live data per log, then deletes garbage after a grace period. Commits pause 11–14 ms; branch operations wait for the whole run; journal file shrinks only offline | Pebble/RocksDB: leveled, incremental, in the background without commit pauses. LMDB: copy-on-write with a free list, no compaction | pauses and O(live data) rewrites per run |
@@ -40,8 +40,10 @@ Each item gets a design note, a formal model where it applies, tests, a
 before/after benchmark against Pebble on the same box, docs and a commit.
 Nothing else is added to `main` meanwhile.
 
-1. **Disk-backed key index**: keep cold runs on disk (or mapped) behind a
-   bounded cache. Acceptance: 10M-key memory and YCSB runs vs Pebble.
+1. **Disk-backed key index**: done (design 21): runs in memory-mapped
+   files, peak RSS at 10M keys 3,546 → 1,916 MiB (Pebble 740). Left:
+   OCC window during bulk loads, open time (item 5), a bounded pread
+   cache if page-cache residency proves a problem (design 21 option C).
 2. **Range scans and iterators**: `[start, end)`, reverse, seek, limits,
    streaming over runs and the hot set; HTTP pagination.
 3. **Batch and transaction API**: write-only batches, bulk load, explicit
@@ -50,7 +52,10 @@ Nothing else is added to `main` meanwhile.
    (expiry by entry timestamp, never by wall clock at read time).
 5. **Snapshots**: pinned snapshot handles that compaction respects;
    multi-part checkpoint snapshots for large indexes.
-6. **Compaction**: incremental compaction without a commit pause.
+6. **Compaction**: incremental compaction without a commit pause. Also
+   measured in design 21: one `fdatasync` per deleted object on the
+   journal (480k deletes = 60 s), and `writeBase` peaking at 6.3 GiB RSS
+   at 10M keys.
 
 Also open for KV, no order yet: tests on AWS S3 and Cloudflare R2 (only
 MinIO is tested), online journal shrink, value compression.
