@@ -1,8 +1,10 @@
 # Design 21: the key index on disk (2026-10-31)
 
-ROADMAP item 1. Status: design; numbers below marked "before" are measured
-at d013307 on the reference box (8 vCPU, 16 GiB, ext4), raw files in
-`bench/results/2026-10-31-disk-key-index/before/`.
+ROADMAP item 1. Status: implemented (ccc4147 index layer, af29ecf
+wiring). Numbers marked "before" are measured at d013307 on the
+reference box (8 vCPU, 16 GiB, ext4), "after" at af29ecf on the same
+box the same evening; raw files in
+`bench/results/2026-10-31-disk-key-index/{before,after}/`.
 
 ## Problem
 
@@ -71,18 +73,31 @@ E. **Embed Pebble/Badger as the key index.** A large dependency doing
 ## Design (option B)
 
 - **Where.** `Options.IndexDir` (`WithIndexDir`, CLI `--index-dir`, env
-  `LOGET_INDEX_DIR`). Default: `os.TempDir()` on Unix. `WithIndexInMemory`
+  `LOGET_INDEX_DIR`). Default: `os.TempDir()` on Unix; if that directory
+  is unusable Open logs it and keeps the index on the heap, while an
+  explicit `IndexDir` that is unusable fails Open. `WithIndexInMemory`
   keeps the old heap behaviour; non-Unix builds always use the heap. The
   directory should be on disk, not tmpfs (on tmpfs the pages are shmem
   and nothing is saved; documented in operations.md).
+- **Code split.** `index` stays a pure fold (its purity test allows no
+  I/O imports; `runtime` is allowed for `KeepAlive` only, and the test
+  checks that). It sees run files through two small interfaces,
+  `index.RunFiles` (`Create`) and `index.RunFile` (`Write`, `Map`, `Seal`,
+  `Release`), passed in `index.KVOptions{Files, MinFileRun, OnFileError}`.
+  `internal/runfile` implements them with `os.CreateTemp` + unlink, and
+  `mmap`/`mprotect`/`madvise(MADV_RANDOM)` from `golang.org/x/sys/unix`
+  (already a dependency). The root package adapts one `runfile.Dir` per
+  DB. `Options.IndexFiles` lets tests and the simulator supply their own
+  implementation (with fault injection) and put every run in a file.
 - **Files.** One file per run, created with a random name, unlinked
   immediately after creation (the open descriptor and later the mapping
   keep it alive). Nothing is left behind by a crash or kill -9, and no
   other process can open it. Layout: `[run bytes][pad to 8][slots]`; the
   block-offset array (`bofs`) and the subject counts stay on the heap.
 - **Small runs stay on the heap.** Runs estimated below `minFileRun`
-  (1 MiB) are built in memory as today: freezes of a small hot set,
-  temporary runs used by `each`, tests. Tests force files with the var.
+  (1 MiB, `KVOptions.MinFileRun`) are built in memory as today: freezes
+  of a small hot set, temporary runs used by `each`. Tests force every run
+  into a file.
 - **Write path.** Unchanged above the run layer: the hot map takes
   writes, freezes at 65,536 versions, adjacent runs merge a few keys per
   write. The builder appends entries to a 1 MiB buffer flushed to the
@@ -110,8 +125,11 @@ E. **Embed Pebble/Badger as the key index.** A large dependency doing
   file (disk full, EIO, directory gone) switches that KV to heap runs
   for good and rebuilds the run in memory from its inputs, which are
   still intact at that point (hot set, merge inputs, snapshot bytes).
-  The error is counted (`Stats.KVIndexFileErrors`, metric
-  `loget_kv_index_file_errors_total`) and logged once. Correctness never
+  A merge whose output file fails is abandoned and planned again on the
+  heap; a snapshot load that fails restarts on the heap from the
+  snapshot bytes. The error is counted (`Stats.KVIndexFileErrors`,
+  metric `loget_kv_index_file_errors_total`) and logged; later failures
+  cannot happen for that KV because it no longer uses files. Correctness never
   depends on the files; memory use does.
 - **Open / crash recovery.** No change: runs are never read back across
   processes. Open restores the snapshot or base and replays the tail as
@@ -142,16 +160,31 @@ race detector. If option D is built later, it gets a model.
 
 ## Tests
 
-- Property tests vs the reference map with `minFileRun = 0` (every run a
-  file), including DropSubject, SetLatest, Scan, snapshot round trips and
-  Digest equality with the heap KV.
-- Fault injection: every file operation can fail (hook); the KV must
-  fall back and still match the reference.
-- FuzzLoadKV with files on.
-- Root tests and the simulator with an index directory (fault seeds
-  included); crash test with kill -9 checks the index directory is empty
-  afterwards.
-- Concurrent read + merge + shred stress under `-race`.
+All green at af29ecf in the full local gate (gofmt, vet, staticcheck, API diff, S3 against MinIO, `-race`, simulator, kill -9, fuzz smoke):
+
+- `index/kvfile_test.go`: the refinement properties against the map model
+  (`TestKVRunsRefineMap`, `TestKVSetLatestRefineMap`, with DropSubject,
+  Scan, snapshot round trips) rerun with every run in a mapped file, and
+  a check that runs really are mapped; `TestKVFilesFaults` makes each file
+  operation fail with probability 0, 5 %, 30 % or 100 % and still checks
+  the model; `TestKVFilesLoadFault` fails each operation during a
+  snapshot load (one error reported, no mapped run, identical snapshot);
+  `TestKVFilesValuesOwned` (values returned never alias a run);
+  `TestKVFilesConcurrent` (4 readers against 20k writes, merges and
+  shreds, under `-race`). Every test also checks the directory is empty.
+- `FuzzLoadKVFiles`: FuzzLoadKV with every run in a file (30 s smoke:
+  ~308k execs, no failure).
+- `internal/runfile`: round trip, unlinking, sealing, fault hooks.
+- Root: `TestIndexFiles` (write, compact, snapshot, reopen; index ==
+  fold(log)), `TestIndexFileFaults` (each operation failing: reads stay
+  right, errors counted), `TestIndexDirOption`.
+- `TestCrashKill9IndexFiles`: 25 kill -9 cycles of a committing,
+  compacting child with every run in a file; recovery also maps its runs;
+  the index directory is empty after each kill.
+- Simulator: every fourth seed keeps every run in a file with 0, 2 % or
+  20 % of file operations failing; it checks its usual invariants and an
+  empty directory at the end. 2,000 seeds × 60 steps: 3,989 injected
+  run-file faults, no failure. `TestDeterminism` still holds.
 
 ## Benchmarks (after: to be filled in)
 
