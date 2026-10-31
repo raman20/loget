@@ -62,7 +62,10 @@ Nothing else is added to `main` meanwhile.
    twice as fast); one `fdatasync` per deleted object on the journal
    (480k deletes = 60 s): fixed, deletes are batched in one journal
    record (1M compaction after A 57.3 → 6.8 s); the OCC recent-commit window as the
-   largest heap user in bulk writes: open.
+   largest heap user in bulk writes: fixed, the writer keeps only commits
+   an open attempt can conflict with (heap after a 10M load 561 → 19 MiB).
+   Still open: incremental compaction (one base object per log, journal
+   limit 1 GiB).
 
 Also open for KV, no order yet: tests on AWS S3 and Cloudflare R2 (only
 MinIO is tested), online journal shrink, value compression.

@@ -1,0 +1,270 @@
+{
+  "suite": "ycsb",
+  "env": {
+    "time": "2026-11-01T01:55:33+05:30",
+    "go_version": "go1.27.3",
+    "os": "linux/amd64",
+    "kernel": "6.12.94+",
+    "cpu": "Intel(R) Xeon(R) Processor",
+    "cpus": 8,
+    "mem_total": "16386368 kB",
+    "disk": "/dev/vdb ext4 128G",
+    "loget_commit": "",
+    "command": "./bench-fix3 ycsb -system loget -keys 10000000 -value 100 -workloads C,A -clients 8 -warmup 1s -duration 10s -dir /workspace/i6data -compact-between -out /workspace/loget-tools/item6/fix3/10m",
+    "loadavg_at_start": "1.29 1.25 1.61"
+  },
+  "params": {
+    "system": "loget",
+    "fsync": true,
+    "keys": 10000000,
+    "value_bytes": 100,
+    "workloads": "C,A",
+    "clients": [
+      8
+    ],
+    "warmup": "1s",
+    "duration": "10s",
+    "open_loop_fraction_of_max": 0.5,
+    "open_loop_cap_ops_per_sec": 200000,
+    "seed": 42,
+    "zipf_theta": 0.99,
+    "load_seconds": 39.24,
+    "load_keys_per_sec": 254850,
+    "disk_after_run": "2.1G",
+    "peak_rss": "2901668 kB",
+    "memory": {
+      "marks": [
+        {
+          "phase": "after load",
+          "rss_mib": 350,
+          "anon_mib": 43,
+          "file_mib": 306,
+          "go_resident_mib": 47,
+          "heap_objects_mib": 30,
+          "heap_free_mib": 7,
+          "gc_goal_mib": 39,
+          "anon_minus_go_mib": -4
+        },
+        {
+          "phase": "after load (after GC)",
+          "rss_mib": 350,
+          "anon_mib": 43,
+          "file_mib": 306,
+          "go_resident_mib": 47,
+          "heap_objects_mib": 19,
+          "heap_free_mib": 17,
+          "gc_goal_mib": 39,
+          "anon_minus_go_mib": -4
+        },
+        {
+          "phase": "after C",
+          "rss_mib": 2516,
+          "anon_mib": 1900,
+          "file_mib": 616,
+          "go_resident_mib": 1651,
+          "heap_objects_mib": 1606,
+          "heap_free_mib": 0,
+          "gc_goal_mib": 1924,
+          "anon_minus_go_mib": 249
+        },
+        {
+          "phase": "after C (after GC)",
+          "rss_mib": 2320,
+          "anon_mib": 1903,
+          "file_mib": 416,
+          "go_resident_mib": 1652,
+          "heap_objects_mib": 82,
+          "heap_free_mib": 1535,
+          "gc_goal_mib": 165,
+          "anon_minus_go_mib": 251
+        },
+        {
+          "phase": "after A",
+          "rss_mib": 2834,
+          "anon_mib": 2179,
+          "file_mib": 654,
+          "go_resident_mib": 1929,
+          "heap_objects_mib": 1871,
+          "heap_free_mib": 0,
+          "gc_goal_mib": 2010,
+          "anon_minus_go_mib": 250
+        },
+        {
+          "phase": "after A (after GC)",
+          "rss_mib": 2524,
+          "anon_mib": 2180,
+          "file_mib": 344,
+          "go_resident_mib": 1929,
+          "heap_objects_mib": 106,
+          "heap_free_mib": 1784,
+          "gc_goal_mib": 212,
+          "anon_minus_go_mib": 251
+        },
+        {
+          "phase": "end",
+          "rss_mib": 2524,
+          "anon_mib": 2180,
+          "file_mib": 344,
+          "go_resident_mib": 1929,
+          "heap_objects_mib": 106,
+          "heap_free_mib": 1784,
+          "gc_goal_mib": 212,
+          "anon_minus_go_mib": 251
+        },
+        {
+          "phase": "end (after GC)",
+          "rss_mib": 2524,
+          "anon_mib": 2180,
+          "file_mib": 344,
+          "go_resident_mib": 1929,
+          "heap_objects_mib": 105,
+          "heap_free_mib": 1785,
+          "gc_goal_mib": 210,
+          "anon_minus_go_mib": 251
+        }
+      ],
+      "note": "sampled every 200 ms; anon_minus_go ≈ LogEt's off-heap value-cache arena + cgo; page cache for pread'd data files is not in RSS for any engine",
+      "peak_by_rss": {
+        "phase": "A c=8",
+        "rss_mib": 2834,
+        "anon_mib": 2180,
+        "file_mib": 654,
+        "go_resident_mib": 1929,
+        "heap_objects_mib": 365,
+        "heap_free_mib": 1516,
+        "gc_goal_mib": 212,
+        "anon_minus_go_mib": 251
+      }
+    },
+    "data_dir_page_cache_mib": 3298,
+    "compact_between_workloads": true
+  },
+  "runs": [
+    {
+      "system": "loget",
+      "fsync": true,
+      "durability": "group commit; journal store: ack after the segment record is appended to one preallocated file + fdatasync",
+      "workload": "C",
+      "desc": "100% read",
+      "clients": 8,
+      "closed_loop": {
+        "mode": "closed",
+        "seconds": 10,
+        "ops": 18995226,
+        "ops_per_sec": 1899262.1,
+        "errors": 0,
+        "latency": {
+          "count": 18995226,
+          "mean_us": 4.05,
+          "p50_us": 2.64,
+          "p99_us": 18.11,
+          "p999_us": 203.26,
+          "max_us": 3573.76
+        },
+        "go_gc": {
+          "cycles": 101,
+          "stw_pause_total_ms": 15.45,
+          "stw_pause_max_ms": 0.47,
+          "heap_inuse_end_mb": 145,
+          "gc_cpu_fraction_cumulative": 0.0119
+        }
+      },
+      "open_loop": {
+        "mode": "open",
+        "seconds": 10,
+        "ops": 2000000,
+        "ops_per_sec": 199999.9,
+        "target_ops_per_sec": 200000,
+        "errors": 0,
+        "latency": {
+          "count": 2000000,
+          "mean_us": 20.52,
+          "p50_us": 5.72,
+          "p99_us": 156.42,
+          "p999_us": 2820.1,
+          "max_us": 5210.11
+        },
+        "go_gc": {
+          "cycles": 7,
+          "stw_pause_total_ms": 0.98,
+          "stw_pause_max_ms": 0.19,
+          "heap_inuse_end_mb": 186,
+          "gc_cpu_fraction_cumulative": 0.0102
+        }
+      }
+    },
+    {
+      "kind": "compact",
+      "after_workload": "C",
+      "keys": 10000000,
+      "deleted": 10001,
+      "secs": 35.23,
+      "rss_peak_mib": 2516,
+      "anon_peak_mib": 1900,
+      "heap_objects_peak_mib": 1606
+    },
+    {
+      "system": "loget",
+      "fsync": true,
+      "durability": "group commit; journal store: ack after the segment record is appended to one preallocated file + fdatasync",
+      "workload": "A",
+      "desc": "50% read / 50% update",
+      "clients": 8,
+      "closed_loop": {
+        "mode": "closed",
+        "seconds": 10,
+        "ops": 1302163,
+        "ops_per_sec": 130214.5,
+        "errors": 0,
+        "latency": {
+          "count": 1302163,
+          "mean_us": 61.17,
+          "p50_us": 46.4,
+          "p99_us": 320.51,
+          "p999_us": 1078.27,
+          "max_us": 52461.57
+        },
+        "go_gc": {
+          "cycles": 24,
+          "stw_pause_total_ms": 3.29,
+          "stw_pause_max_ms": 0.26,
+          "heap_inuse_end_mb": 150,
+          "gc_cpu_fraction_cumulative": 0.006
+        }
+      },
+      "open_loop": {
+        "mode": "open",
+        "seconds": 10,
+        "ops": 651072,
+        "ops_per_sec": 65107.2,
+        "target_ops_per_sec": 65107.3,
+        "errors": 0,
+        "latency": {
+          "count": 651072,
+          "mean_us": 1704.19,
+          "p50_us": 107.01,
+          "p99_us": 22282.24,
+          "p999_us": 28803.07,
+          "max_us": 33046.53
+        },
+        "go_gc": {
+          "cycles": 9,
+          "stw_pause_total_ms": 2.1,
+          "stw_pause_max_ms": 0.77,
+          "heap_inuse_end_mb": 234,
+          "gc_cpu_fraction_cumulative": 0.0057
+        }
+      }
+    },
+    {
+      "kind": "compact",
+      "after_workload": "A",
+      "keys": 10000000,
+      "deleted": 389099,
+      "secs": 42.56,
+      "rss_peak_mib": 2834,
+      "anon_peak_mib": 2179,
+      "heap_objects_peak_mib": 1871
+    }
+  ]
+}

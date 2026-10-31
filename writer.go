@@ -69,12 +69,120 @@ type writer struct {
 	head        uint64
 	lastTS      int64
 	recent      []recentCommit
+	recentBytes int          // estimated heap held by recent (recentCost)
 	carry       []*commitReq // escalated requests deferred to the next batch
 	recentFloor uint64
 	sinceSnap   int
+
+	// reg counts the snapshot LSNs of Update attempts that may still
+	// submit (design 23, part 3), sharded so attempts on many goroutines
+	// do not contend on one lock. The writer drops recent commits no such
+	// snapshot can conflict with.
+	reg     [regShards]regShard
+	regNext atomic.Uint32
 }
 
-const recentMax = 8192
+// The recent-commit window: commits newer than the oldest active
+// snapshot are kept; the floor is raised past older ones (an attempt
+// older than the floor gets ErrConflict and retries) only when a long
+// attempt pins more than recentMax*2 commits or recentMaxBytes. Vars:
+// tests shrink them.
+var (
+	recentMax      = 8192
+	recentMaxBytes = 64 << 20
+)
+
+const regShards = 16
+
+type regShard struct {
+	mu     sync.Mutex
+	active map[uint64]int
+	_      [48]byte // own cache line
+}
+
+// recentCost estimates the heap one recent commit holds.
+func recentCost(c recentCommit) int {
+	n := 64 + 32*len(c.writes)
+	for _, k := range c.writes {
+		n += len(k.space) + len(k.key)
+	}
+	return n
+}
+
+// register records an Update attempt's snapshot (the view head, read
+// under the shard lock so the writer cannot scan that shard between the
+// read and the insert) until release, after the attempt's submit
+// returns. An attempt registering after the writer scanned its shard
+// reads a head at or past every commit the writer holds, so it needs
+// none of the ones being dropped.
+func (w *writer) register() (at uint64, shard int) {
+	shard = int(w.regNext.Add(1) % regShards)
+	r := &w.reg[shard]
+	r.mu.Lock()
+	w.v.mu.RLock()
+	at = w.v.head
+	w.v.mu.RUnlock()
+	if r.active == nil {
+		r.active = map[uint64]int{}
+	}
+	r.active[at]++
+	r.mu.Unlock()
+	return at, shard
+}
+
+func (w *writer) release(at uint64, shard int) {
+	r := &w.reg[shard]
+	r.mu.Lock()
+	if r.active[at]--; r.active[at] == 0 {
+		delete(r.active, at)
+	}
+	r.mu.Unlock()
+}
+
+// oldestActive is the lowest registered snapshot, or MaxUint64.
+func (w *writer) oldestActive() uint64 {
+	bound := ^uint64(0)
+	for i := range w.reg {
+		r := &w.reg[i]
+		r.mu.Lock()
+		for at := range r.active {
+			bound = min(bound, at)
+		}
+		r.mu.Unlock()
+	}
+	return bound
+}
+
+// trimRecent drops recent commits at or below the oldest active
+// snapshot: an attempt can only conflict with commits after its own
+// snapshot, and one that starts later reads a view head at or past every
+// commit held here (they are applied first). Past the count or byte
+// budget it also drops newer ones and raises the floor.
+func (w *writer) trimRecent() {
+	bound := w.oldestActive()
+	cut, bytes := 0, w.recentBytes
+	for cut < len(w.recent) && w.recent[cut].lsn <= bound {
+		bytes -= recentCost(w.recent[cut])
+		cut++
+	}
+	if len(w.recent)-cut > 2*recentMax || bytes > recentMaxBytes {
+		for cut < len(w.recent) && (len(w.recent)-cut > recentMax || bytes > recentMaxBytes/2) {
+			bytes -= recentCost(w.recent[cut])
+			cut++
+		}
+		w.recentFloor = max(w.recentFloor, w.recent[cut-1].lsn)
+	}
+	if cut == 0 {
+		return
+	}
+	clear(w.recent[:cut]) // release the keys
+	if cut == len(w.recent) {
+		w.recent = w.recent[:0]
+	} else {
+		w.recent = w.recent[cut:]
+	}
+	w.recentBytes = bytes
+}
 
 // maxSegBytes caps one group-commit segment: transactions that would push
 // a segment past it wait for the next one (the journal store takes objects
@@ -444,13 +552,11 @@ func (w *writer) process(batch []*commitReq) {
 	w.v.mu.Unlock()
 	w.db.bump()
 	w.head, w.lastTS = head, ts
-	w.recent = append(w.recent, pending...)
-	// Trim to recentMax only once twice that is held, so the copy is
-	// amortized instead of moving recentMax entries on every batch.
-	if over := len(w.recent) - recentMax; over >= recentMax {
-		w.recentFloor = w.recent[over-1].lsn
-		w.recent = append([]recentCommit{}, w.recent[over:]...)
+	for _, c := range pending {
+		w.recentBytes += recentCost(c)
 	}
+	w.recent = append(w.recent, pending...)
+	w.trimRecent()
 	// Snapshots are taken before acking so that, with one client, every
 	// store call happens in a deterministic order (simulation replayability).
 	w.sinceSnap += len(accepted)

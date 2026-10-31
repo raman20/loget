@@ -218,3 +218,90 @@ ops/s). One part-2 sweep benchmark run with batches of 4096 showed a
 lowered to 1024 anyway. The 10M compaction after C (10k deletes)
 takes 34.9 s, so most of the 40.6 s after A is the base write and the
 log reads, not deletes.
+
+## Part 3: bound the OCC recent-commit window
+
+### Problem
+
+The writer validates an `Update` attempt against the commits made after
+its snapshot, so it keeps recent commits with their write sets. It kept
+the last 8,192-16,384 commits regardless of whether any attempt could
+still need them. A bulk load of 1,000-key transactions keeps up to 16M
+keys there: after loading 10M keys the live heap was 561 MiB, almost all
+of it this window (`writer.process` and the key strings it holds, part
+1's profile), and it stayed live into the next compaction's peak.
+
+### Design
+
+A commit is only needed while some attempt that may still submit has a
+snapshot before it.
+
+- Each `Update` attempt registers its snapshot (the view head) with the
+  writer and deregisters after its submit returns (also on error or
+  panic). The head is read under the registration lock, so the writer
+  cannot drop a commit between the attempt reading the head and being
+  registered. The registry is 16 sharded maps (one lock was 18% of CPU in
+  `BenchmarkPutParallel/mem`).
+- After each group commit the writer drops every recent commit at or
+  below the oldest registered snapshot. Safe because an attempt only
+  conflicts with commits after its snapshot, and an attempt that
+  registers later reads a head at or past every commit the writer holds
+  (commits are applied to the view before they enter the window), so it
+  needs none of them. Validation itself is unchanged.
+- A long attempt can pin the window. Past 16,384 commits or
+  `recentMaxBytes` (64 MiB, estimated from key lengths) the writer drops
+  the oldest down to half and raises the floor: an attempt older than the
+  floor gets `ErrConflict` and retries, as before when the window was
+  trimmed by count. A false conflict is possible this way, a missed one
+  is not.
+- Escalated attempts run on the writer at its head and need no
+  registration; read-only and blind attempts register too (they cannot
+  be told apart before `fn` runs) and cost one shard lock each way.
+
+### Tests
+
+`occ_window_test.go`, rapid against a reference model: up to four
+`Update` attempts are held open inside `fn` (reads and writes of random
+keys) and committed in random order between blind commits. Each first
+attempt must get `ErrConflict` exactly when a commit after its snapshot
+wrote a key it read. With the default budgets no false conflict either;
+with a budget of 2 commits / 300 bytes false conflicts are allowed,
+missed ones are not. With nothing open the window holds at most the last
+commit. Mutants caught: ignoring the registry when trimming; dropping
+one commit past the oldest snapshot (`<= bound+1`); no floor check.
+
+### Result
+
+After (01:54-01:58 IST, same script, `fix3-occ-window/`):
+
+| | part 2 | part 3 |
+|---|---|---|
+| 10M, after load: Go heap live / RSS MiB | 561 / 1,374 | **19** / 350 |
+| 10M, compact after C: peak RSS / heap MiB | 3,355 / 2,148 | **2,516** / 1,606 |
+| 10M, compact after A: peak RSS / heap MiB | 2,953 / 1,882 | 2,834 / 1,871 |
+| 1M, after load: Go heap live / RSS MiB | 61 / 181 | 7 / 68 |
+| 1M, compact after C: peak RSS MiB | 695 | 492 |
+| 1M, compact after A: peak RSS MiB, time | 1,036, 6.8 s | 892, 6.7 s |
+
+Against the start of item 6 (`before/`), the 10M compaction after C
+peaks at 2,516 instead of 6,416 MiB RSS.
+
+Cost: `BenchmarkPutParallel/mem` (8 goroutines, in-memory store, no
+fsync) 3,122-3,447 → 3,387-3,558 ns/op (medians 3,253 → 3,496, +7%);
+`PutSerial` and the fs variants are within noise. YCSB throughput within
+noise (10M C 1.90M, A 130k; 1M C 3.20M, A 125k ops/s). An earlier part 3
+run (unsharded registry, `fix3-v1`, not kept) had one workload-A p99 of
+8.3 s at 1M after a compaction; three repeats and this run (p99 15-47 ms)
+did not reproduce it, cause unknown.
+
+## Also fixed: run files left behind by SIGKILL
+
+`TestCrashKill9IndexFiles` failed 4 of 15 runs at part 2's commit (and
+4 of 20 with part 3): an index directory entry survived the kill. Run
+files were created with a name and unlinked right after; a SIGKILL in
+between left the file. Part 1 creates a run file for every compaction
+base, which likely made the window much easier to hit. On Linux run
+files are now opened with `O_TMPFILE` and never have a name (falls back
+to create-then-unlink where the file system lacks it; other systems
+keep the old way). 25 of 25 runs passed after; new unit test
+`TestCreateLeavesNoEntry`.

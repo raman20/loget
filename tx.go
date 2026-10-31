@@ -188,20 +188,10 @@ func (b *Branch) UpdateLSN(ctx context.Context, fn func(*Tx) error) (uint64, err
 			last = res.err // cannot happen: validated first at the head
 			continue
 		}
-		tx := &Tx{db: b.db, v: w.v, writable: true, reads: map[rkey]bool{}, local: map[rkey]*localVal{}}
-		w.v.mu.RLock()
-		tx.at = w.v.head
-		w.v.mu.RUnlock()
-		if err := fn(tx); err != nil {
-			return 0, err
+		res, done, err := w.attempt(ctx, fn, i)
+		if err != nil || done {
+			return res.lsn, err
 		}
-		if len(tx.ops) == 0 {
-			return tx.at, nil
-		}
-		if err := ctx.Err(); err != nil {
-			return 0, err
-		}
-		res := w.submit(&commitReq{at: tx.at, ops: tx.ops, reads: tx.reads, ranges: tx.ranges, attempt: i})
 		if errors.Is(res.err, errPaused) {
 			if err := b.db.waitCompaction(ctx); err != nil {
 				return 0, err
@@ -219,6 +209,26 @@ func (b *Branch) UpdateLSN(ctx context.Context, fn func(*Tx) error) (uint64, err
 		return res.lsn, res.err
 	}
 	return 0, last
+}
+
+// attempt runs fn once at the view head and submits its writes. The
+// snapshot stays registered with the writer until submit returns, so the
+// writer keeps every commit it could conflict with (design 23, part 3).
+// done: fn wrote nothing (res.lsn is the snapshot) or failed (err).
+func (w *writer) attempt(ctx context.Context, fn func(*Tx) error, i int) (res commitRes, done bool, err error) {
+	at, shard := w.register()
+	defer w.release(at, shard)
+	tx := &Tx{db: w.db, v: w.v, at: at, writable: true, reads: map[rkey]bool{}, local: map[rkey]*localVal{}}
+	if err := fn(tx); err != nil {
+		return commitRes{}, true, err
+	}
+	if len(tx.ops) == 0 {
+		return commitRes{lsn: tx.at}, true, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return commitRes{}, true, err
+	}
+	return w.submit(&commitReq{at: tx.at, ops: tx.ops, reads: tx.reads, ranges: tx.ranges, attempt: i}), false, nil
 }
 
 // conflictBackoff waits a jittered, exponentially growing delay after the

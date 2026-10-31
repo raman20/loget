@@ -20,6 +20,13 @@ break APIs and the on-storage format.
   batch delete record per batch with one CRC, so a torn batch is a torn
   tail and deletes nothing; two fsyncs per batch instead of two per
   object (1M-key compaction after workload A 57.3 → 6.8 s).
+- The OCC conflict window keeps only commits that an open `Update`
+  attempt can conflict with (each attempt registers its snapshot), with
+  a 64 MiB / 16,384-commit fallback that raises the floor. Live heap
+  after a 10M-key bulk load 561 → 19 MiB. Costs ~7% in an in-memory
+  8-goroutine put microbenchmark.
+- Index run files are opened with `O_TMPFILE` on Linux, so a killed
+  process no longer leaves one behind in the index directory.
 
 ### Changed (breaking, KV item 6)
 
