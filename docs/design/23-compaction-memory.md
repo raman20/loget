@@ -105,3 +105,116 @@ keeps, part 3) and the value cache. The rest of the heap peak is garbage
 from per-key work (key strings, value reads) that the GC pacer lets grow
 to twice the live heap. The 1M compaction after A is still dominated by
 ~490k garbage deletes, one journal delete each (part 2).
+
+## Part 2: batched journal deletes
+
+### Problem
+
+Compaction deletes every superseded segment, base, snapshot and
+checkpoint. On the journal store each `Delete` appended a delete record
+and fsynced, then marked the put dead, punched its data and fsynced
+again: two `fdatasync`s per object. After workload A at 1M keys that is
+~490k objects and 57.3 s of a 57.3 s compaction (part 1 result).
+
+Design 22's sweep work rejected batching deletes as several delete
+records with one sync: recovery would see a torn run of delete records
+and, when a damaged record is followed by a valid one, has to call it
+corruption (a torn tail can only be at the end).
+
+### Design
+
+One record per batch, so a batch is torn or not as a whole:
+
+- New record kind 4, *batch delete*: key `\0dels`, data a list of
+  (u16 length, key). One CRC covers the header, key and list. At most
+  1 MiB of keys per record (`jrnMaxBatch`); a longer call writes several
+  records, each atomic.
+- `Journal.DeleteBatch(keys)`: take the write lock, drop missing and
+  duplicate keys, append the record, fsync (the batch is now durable),
+  erase every put (dead header + punch, as for `Delete`), fsync once.
+  Two syncs per batch instead of two per object.
+- Recovery treats a batch like a run of delete records that cannot be
+  torn apart:
+  - a damaged batch record with nothing valid after it is a torn tail:
+    zeroed, none of its deletes apply, the objects are still there
+    (all-or-nothing);
+  - a valid batch whose puts are not all dead yet (crash during erase)
+    is an interrupted delete: open erases the rest, same as for one
+    delete record;
+  - a damaged put followed by a batch naming its key is that same
+    interrupted delete;
+  - a damaged batch followed by valid records, or a valid batch whose
+    key list does not parse, is `ErrCorrupt` (as before for any record).
+- The record needs a new journal version: `LOGETJ2`. New files are
+  version 2. A version 1 file is still read and stays version 1 (its
+  batches fall back to one delete each), so the build that wrote it can
+  still open it after a newer build did. Older builds refuse a version 2
+  file with `ErrVersion` (docs/compatibility.md).
+- `store.DeleteBatch(ctx, st, keys)` uses an optional `BatchDeleter`
+  interface and otherwise loops over `Delete` (ignoring `ErrNotFound`).
+  `FS` removes all files, then fsyncs each directory once; `Mem` and
+  `Faulty` implement it (Faulty injects a failure after a random prefix).
+  S3 keeps the loop (no multi-object delete in the minimal client yet).
+- The DB's backup-hold wrapper forwards batches: while a backup holds
+  deletes, it queues them and releases them as one batch.
+- Compaction's garbage sweep deletes in batches of 1024 and checks for
+  `Close` between batches; on a store without batches the per-object
+  fallback also stops within a batch once the DB is closed or crashed
+  (`TestSweepStopsAfterCrash` caught the first version deleting the rest
+  of the batch after `Crash`). A batch holds the journal's write lock, so
+  commits wait for it: 0.8 ms for 256 keys, 3.2 ms for 1024, 10.5 ms for
+  4096 (300 B objects). 1024 keeps that near one commit's fsync. The
+  orphan sweep and manifest deletes stay per object (few objects).
+
+### Tests
+
+- `store/journal_batch_test.go`:
+  - sync count (one batch record per 1 MiB of keys), secrets erased,
+    reopen;
+  - a version 1 file never gets a batch record;
+  - every subset of the batch record's 512-byte sectors torn: open
+    succeeds, either every key or none is deleted, appends work;
+  - a durable batch with only some puts erased and a torn dead header:
+    open finishes the deletes and leaves no secret bytes;
+  - single delete records torn out of order, a damaged batch followed by
+    a valid record, and a malformed key list are `ErrCorrupt`.
+- `store/powerloss_test.go`: the power-loss workload also issues
+  batches of up to 40 keys; every crash image (≈ 800-870 per seed, 3
+  seeds) must show an in-flight batch all-or-nothing. Applying a batch as
+  per-key deletes fails this check ("torn batch: 1 of 2 keys still
+  there").
+- Store conformance (`Mem`, `FS`, `Journal`, S3 on MinIO): missing and
+  duplicate keys, other keys untouched, empty batch; `Faulty`'s injected
+  failure deletes a prefix and returns the error.
+- `compact_batch_test.go`: compaction garbage reaches the store's
+  `DeleteBatch` through the DB's wrapper (no garbage deleted one by one;
+  removing the wrapper's `DeleteBatch` fails it), and deletes held by a
+  backup are released as a batch.
+- The kill -9 crash tests on the journal compact while being killed.
+
+Mutation: disabling the batch branch in recovery fails the torn and
+interrupted tests. Treating a damaged batch like a damaged put survives
+them; the two paths give the same result (equivalent mutant).
+
+### Result
+
+After (01:08-01:12 IST, same script, `fix2-batched-deletes/`):
+
+| | part 1 | part 2 |
+|---|---|---|
+| 1M, compact after A: time (deleted) | 57.3 s (489,308) | **6.8 s** (472,875) |
+| 1M, compact after A: peak RSS / heap MiB | 972 / 537 | 1,036 / 651 |
+| 10M, compact after A: time (deleted) | 83.6 s (435,009) | **40.6 s** (433,271) |
+| 10M, compact after A: peak RSS / heap MiB | 3,059 / 1,980 | 2,953 / 1,882 |
+| 10M / 1M, compact after C: time | 36.4 / 3.4 s | 34.9 / 3.4 s |
+| `BenchmarkCompactSweepPause` (~2,500 deletes): run | 313 ms | 20-23 ms |
+| same: pause / max commit latency | 10 / 11 ms | 10-13 / 10-13 ms |
+
+The 1M peak heap and RSS are higher (+114 / +64 MiB); not investigated,
+single runs.
+Throughput is within noise (10M C 1.92M, A 123k; 1M C 2.95M, A 136k
+ops/s). One part-2 sweep benchmark run with batches of 4096 showed a
+56 ms worst commit; four later runs did not, and the batch size was
+lowered to 1024 anyway. The 10M compaction after C (10k deletes)
+takes 34.9 s, so most of the 40.6 s after A is the base write and the
+log reads, not deletes.

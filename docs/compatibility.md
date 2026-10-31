@@ -9,7 +9,7 @@ reasoning and [formats.md](formats.md) for the byte layouts.
 `loget version` prints the formats the binary reads and writes:
 
 ```
-formats: manifest 1-2, segment 1, base 1, journal 1, snapshot 2 (KV2), checkpoint 1
+formats: manifest 1-2, segment 1, base 1, journal 1-2, snapshot 2 (KV2), checkpoint 1
 ```
 
 | object | stamp | unknown version |
@@ -17,7 +17,7 @@ formats: manifest 1-2, segment 1, base 1, journal 1, snapshot 2 (KV2), checkpoin
 | manifest (`.mf`) | JSON `"format"`: 1, or 2 once compacted | open fails, `ErrVersion` |
 | segment (`.seg`) | magic `LGETSEG1` + u16 version | open fails, `ErrVersion` |
 | base (`.base`) | magic `LGETBAS1` (last byte = version) | open fails, `ErrVersion` |
-| journal file (`journal.fj`) | magic `LOGETJ1\0` (byte 6 = version) | open fails, `ErrVersion` |
+| journal file (`journal.fj`) | magic `LOGETJ2\0` for new files (byte 6 = version; 2 adds batch delete records, design 23). A version 1 file is read and kept at version 1 (deletes stay one record each), so the build that made it can still open it | open fails, `ErrVersion` (a pre-design-23 build refuses a version 2 file) |
 | snapshot (`.snap`) | magic `LGSNAP2\n` (v2, bound to its log and hash chain); `KV2` tag inside, then one section per derived index named `name@version` | ignored, rebuilt from the log (cache); a section of another index version is ignored and that index replays |
 | segment-index checkpoint (`.idx`) | magic `LGETIDX1` (last byte = version) | ignored, the segments are scanned (cache). Older builds ignore `.idx` objects; their GC leaves them behind (a few bytes each) |
 | value chunk (`.val`) | magic `LGETVAL1`, not checked | gated by the manifest format (each value has its own CRC) |

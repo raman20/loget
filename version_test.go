@@ -80,11 +80,11 @@ func TestNewerFormatsRefused(t *testing.T) {
 		j.Close()
 		p := filepath.Join(d, "journal.fj")
 		b, _ := os.ReadFile(p)
-		b[6] = '2'
+		b[6] = byte('0' + store.JournalVersion + 1)
 		os.WriteFile(p, b, 0o644)
 		_, err = Open(ctx, "journal://"+d, quiet())
 		if !errors.Is(err, ErrVersion) || !strings.Contains(err.Error(), "upgrade the binary") {
-			t.Fatalf("journal version 2: %v", err)
+			t.Fatalf("journal version %c: %v", b[6], err)
 		}
 		if c, _ := os.ReadFile(p); string(c) != string(b) {
 			t.Fatal("refused open changed the journal")

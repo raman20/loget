@@ -48,6 +48,32 @@ func (h *holdStore) Delete(ctx context.Context, key string) error {
 	return h.Store.Delete(ctx, key)
 }
 
+// DeleteBatch is Delete for many keys: the ones a hold must delay are
+// queued, the rest go to the wrapped store's batch delete. Without it
+// store.DeleteBatch would see no BatchDeleter here and delete one key at
+// a time.
+func (h *holdStore) DeleteBatch(ctx context.Context, keys []string) error {
+	h.inflight.RLock()
+	defer h.inflight.RUnlock()
+	h.mu.Lock()
+	now := keys
+	if h.holds > 0 {
+		now = nil
+		for _, k := range keys {
+			if strings.HasPrefix(k, "keys/") {
+				now = append(now, k)
+			} else {
+				h.pending[k] = true
+			}
+		}
+	}
+	h.mu.Unlock()
+	if len(now) == 0 {
+		return nil
+	}
+	return store.DeleteBatch(ctx, h.Store, now)
+}
+
 // PutIfAbsent of a key whose delete is queued applies the delete first,
 // so a re-created object (caches) is not removed by the queued delete.
 func (h *holdStore) PutIfAbsent(ctx context.Context, key string, data []byte) error {
@@ -101,12 +127,10 @@ func (h *holdStore) hold() func(ctx context.Context, logf func(string, ...any)) 
 		}
 		h.mu.Unlock()
 		sort.Strings(keys)
-		for _, k := range keys {
-			// Best effort: a failure leaves garbage (space), never damage;
-			// a later compaction or GC sweeps it again.
-			if err := h.Store.Delete(ctx, k); err != nil && !errors.Is(err, store.ErrNotFound) {
-				logf("loget: backup: deferred delete of %s: %v", k, err)
-			}
+		// Best effort: a failure leaves garbage (space), never damage; a
+		// later compaction or GC sweeps it again.
+		if err := store.DeleteBatch(ctx, h.Store, keys); err != nil {
+			logf("loget: backup: deferred delete of %d objects: %v", len(keys), err)
 		}
 	}
 }

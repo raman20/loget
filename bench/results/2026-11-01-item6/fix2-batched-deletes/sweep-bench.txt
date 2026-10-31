@@ -1,0 +1,11 @@
+# go test -run x -bench CompactSweepPause -benchtime 5x . (journal, ~2,400-2,800 deletes)
+# about 01:04 IST, part 1 code (062331e, git archive):
+BenchmarkCompactSweepPause-8   	       5	 312765596 ns/op	      2458 deleted	        11.06 max-commit-ms	        10.04 pause-ms
+# about 01:05-01:07 IST, part 2 code, garbage batch size 4096 then 1024 (-count 2):
+BenchmarkCompactSweepPause-8   	       5	  20165291 ns/op	      2824 deleted	        10.13 max-commit-ms	         9.952 pause-ms
+BenchmarkCompactSweepPause-8   	       5	  20077704 ns/op	      2747 deleted	        10.68 max-commit-ms	        10.86 pause-ms
+BenchmarkCompactSweepPause-8   	       5	  22519984 ns/op	      2651 deleted	        13.11 max-commit-ms	        12.98 pause-ms
+BenchmarkCompactSweepPause-8   	       5	  21578366 ns/op	      2675 deleted	        10.77 max-commit-ms	        10.47 pause-ms
+# One earlier part-2 run (batch 4096) showed max-commit 55.87 ms once; not reproduced in 4 later runs.
+# Journal.DeleteBatch time (= time it holds the write lock), 300 B objects, scratch test:
+#   256 keys 0.8 ms, 1024 keys 3.2 ms, 4096 keys 10.5 ms; 1024 single Deletes 106.6 ms

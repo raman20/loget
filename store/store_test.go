@@ -61,6 +61,23 @@ func conformance(t *testing.T, s Store) {
 	if _, err := GetRange(ctx, s, "r/obj", 0, 1); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("range after delete: %v", err)
 	}
+	// batch deletes (the store's own, or the fallback loop): missing and
+	// duplicate keys are fine, other keys stay
+	for i := 0; i < 5; i++ {
+		s.PutIfAbsent(ctx, fmt.Sprintf("bd/%d", i), []byte{byte(i)})
+	}
+	s.PutIfAbsent(ctx, "bd2/x", []byte("x"))
+	if err := DeleteBatch(ctx, s, []string{"bd/0", "bd/nope", "bd/3", "bd2/x", "bd/0"}); err != nil {
+		t.Fatal(err)
+	}
+	for k, gone := range map[string]bool{"bd/0": true, "bd/1": false, "bd/2": false, "bd/3": true, "bd/4": false, "bd2/x": true} {
+		if _, err := s.Get(ctx, k); gone != errors.Is(err, ErrNotFound) || !gone && err != nil {
+			t.Fatalf("after batch delete %s: %v", k, err)
+		}
+	}
+	if err := DeleteBatch(ctx, s, nil); err != nil {
+		t.Fatal(err)
+	}
 	// racing creators: exactly one wins
 	var wg sync.WaitGroup
 	wins := make(chan int, 16)

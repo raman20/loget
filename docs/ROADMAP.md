@@ -60,7 +60,8 @@ Nothing else is added to `main` meanwhile.
    three problems measured in design 21 (design 23): `writeBase` peaking
    at 6.3 GiB RSS at 10M keys: fixed, the base is streamed (peak 3.2 GiB,
    twice as fast); one `fdatasync` per deleted object on the journal
-   (480k deletes = 60 s): open; the OCC recent-commit window as the
+   (480k deletes = 60 s): fixed, deletes are batched in one journal
+   record (1M compaction after A 57.3 → 6.8 s); the OCC recent-commit window as the
    largest heap user in bulk writes: open.
 
 Also open for KV, no order yet: tests on AWS S3 and Cloudflare R2 (only

@@ -43,11 +43,12 @@ func TestJournalPowerLoss(t *testing.T) {
 }
 
 type plAck struct {
-	from int // event index when the call began
-	at   int // event index of the ack
-	del  bool
-	key  string
-	data []byte
+	from  int // event index when the call began
+	at    int // event index of the ack
+	del   bool
+	key   string
+	data  []byte
+	batch []string // a DeleteBatch: atomic, all of these or none
 }
 
 func powerLoss(t *testing.T, seed int64) {
@@ -67,6 +68,19 @@ func powerLoss(t *testing.T, seed int64) {
 		case r == 0: // reopen: open's recovery writes are traced too
 			j.Close()
 			j = mustJournal(t, d)
+		case r < 9 && r >= 6 && len(live) > 1: // a batch delete of up to 40 keys
+			n := 1 + rnd.Intn(min(len(live), 40))
+			rnd.Shuffle(len(live), func(a, b int) { live[a], live[b] = live[b], live[a] })
+			ks := append([]string(nil), live[:n]...)
+			live = live[n:]
+			from := ack()
+			if err := j.DeleteBatch(ctx, ks); err != nil {
+				t.Fatal(err)
+			}
+			for _, k := range ks {
+				acks = append(acks, plAck{from: from, at: ack(), del: true, key: k})
+			}
+			acks = append(acks, plAck{from: from, at: ack(), batch: ks})
 		case r < 6 && len(live) > 0:
 			x := rnd.Intn(len(live))
 			k := live[x]
@@ -173,6 +187,21 @@ func checkImage(t *testing.T, img []byte, crashAt int, acks []plAck, puts map[st
 	want := map[string][]byte{}
 	gone := map[string]bool{}
 	for _, a := range acks {
+		if a.batch != nil {
+			if a.from < crashAt && a.at > crashAt { // in flight: all or nothing
+				n := 0
+				for _, k := range a.batch {
+					if _, err := j.Get(ctx, k); err == nil {
+						n++
+					}
+				}
+				if n != 0 && n != len(a.batch) {
+					t.Errorf("%s: torn batch: %d of %d keys still there", what, n, len(a.batch))
+					return
+				}
+			}
+			continue
+		}
 		if a.at > crashAt {
 			if a.del && a.from < crashAt { // in flight: either outcome
 				delete(want, a.key)

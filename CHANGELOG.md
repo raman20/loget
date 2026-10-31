@@ -15,6 +15,18 @@ break APIs and the on-storage format.
   Base bytes are unchanged. New `index.BaseEncoder`, `index.StripChunks`.
 - The journal store writes objects over 1 MiB without copying them into
   a record buffer (same on-disk bytes).
+- Compaction deletes garbage in batches: new `store.DeleteBatch` and
+  `store.BatchDeleter` (journal, files, memory). The journal writes one
+  batch delete record per batch with one CRC, so a torn batch is a torn
+  tail and deletes nothing; two fsyncs per batch instead of two per
+  object (1M-key compaction after workload A 57.3 → 6.8 s).
+
+### Changed (breaking, KV item 6)
+
+- New journal files are format version 2 (`LOGETJ2`, adds the batch
+  delete record). Builds before this change refuse them with
+  `ErrVersion`. Existing version 1 journals are read and kept at
+  version 1.
 
 ### Added (KV item 2: range reads and iterators, design 22, 2026-11-01)
 

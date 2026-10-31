@@ -1,4 +1,4 @@
-const JournalVersion = 1
+const JournalVersion = 2
 var (
 	ErrExists   = errors.New("store: object already exists")
 	ErrNotFound = errors.New("store: not found")
@@ -7,9 +7,11 @@ var (
 	ErrVersion = format.ErrVersion
 var ErrInjected = errors.New("store: injected fault")
 func CheckConditional(ctx context.Context, s Store) error
+func DeleteBatch(ctx context.Context, st Store, keys []string) error
 func GetRange(ctx context.Context, st Store, key string, off, n int64) ([]byte, error)
 func Keys(ctx context.Context, s Store) ([]string, error)
 func Migrate(ctx context.Context, dir string, to Layout, logf func(string, ...any)) (err error)
+type BatchDeleter interface {
 type CheckResult struct {
 	Name   string
 	OK     bool
@@ -19,6 +21,7 @@ type FS struct {
 func NewFS(root string) (*FS, error)
 func (s *FS) Close() error
 func (s *FS) Delete(_ context.Context, key string) error
+func (s *FS) DeleteBatch(_ context.Context, keys []string) error
 func (s *FS) Get(_ context.Context, key string) ([]byte, error)
 func (s *FS) GetRange(_ context.Context, key string, off, n int64) ([]byte, error)
 func (s *FS) Keys(context.Context) ([]string, error)
@@ -44,6 +47,7 @@ type Faulty struct {
 	Trace []string
 func NewFaulty(inner Store, seed int64, p FaultProbs) *Faulty
 func (f *Faulty) Delete(ctx context.Context, key string) error
+func (f *Faulty) DeleteBatch(ctx context.Context, keys []string) error
 func (f *Faulty) Flush(ctx context.Context)
 func (f *Faulty) Get(ctx context.Context, key string) ([]byte, error)
 func (f *Faulty) GetRange(ctx context.Context, key string, off, n int64) ([]byte, error)
@@ -53,6 +57,7 @@ type Journal struct {
 func NewJournal(dir string) (*Journal, error)
 func (j *Journal) Close() error
 func (j *Journal) Delete(_ context.Context, key string) error
+func (j *Journal) DeleteBatch(ctx context.Context, keys []string) error
 func (j *Journal) Get(ctx context.Context, key string) ([]byte, error)
 func (j *Journal) GetRange(_ context.Context, key string, off, n int64) ([]byte, error)
 func (j *Journal) Keys(context.Context) ([]string, error)
@@ -71,6 +76,7 @@ type Mem struct {
 func NewMem() *Mem
 func SharedMem(name string) *Mem
 func (s *Mem) Delete(_ context.Context, key string) error
+func (s *Mem) DeleteBatch(_ context.Context, keys []string) error
 func (s *Mem) Get(_ context.Context, key string) ([]byte, error)
 func (s *Mem) GetRange(_ context.Context, key string, off, n int64) ([]byte, error)
 func (m *Mem) Keys(context.Context) ([]string, error)

@@ -48,11 +48,14 @@ objects and their bytes are the same in both.
   - Writes go to `.tmp/`, are fsynced, renamed into place, and then the
     directory is fsynced.
 - **journal** (`journal.fj`): the default for new directories on Unix.
-  - 32-byte header: magic `LOGETJ1\0`, a 16-byte random salt, and the
-    CRC-32C of the first 24 bytes.
+  - 32-byte header: magic `LOGETJ2\0` (`LOGETJ1\0` for files made
+    before design 23, still read and written as version 1), a 16-byte
+    random salt, and the CRC-32C of the first 24 bytes.
   - Then records. Each record has a 12-byte header: crc u32, kind u8
-    (1 put, 2 delete, 3 dead), a pad byte, klen u16 and dlen u32. The key
-    and data follow.
+    (1 put, 2 delete, 3 dead, 4 batch delete), a pad byte, klen u16 and
+    dlen u32. The key and data follow. A batch delete's key is
+    `\0dels` and its data lists the deleted keys, each as u16 length +
+    key (at most 1 MiB of keys per record; version 2 files only).
   - The record CRC is CRC-32C over the salt, the record's own offset, the
     header, the key and the data. A dead record's CRC covers only its
     header and key.
@@ -64,6 +67,12 @@ objects and their bytes are the same in both.
     from passing the CRC.
   - Deleting an object appends a delete record. The put record is then
     marked dead and its data is hole-punched (or zeroed).
+    `store.DeleteBatch` (compaction's garbage sweep) appends one batch
+    delete record for many objects, syncs, erases every put, and syncs
+    again: two syncs per batch instead of two per object. One CRC covers
+    the whole batch, so a torn batch is a torn tail (nothing of it
+    applies); a damaged put followed by a batch listing its key is an
+    interrupted delete and is finished on open.
   - The file grows in 8 MiB zero-filled, fsynced chunks.
   - Writers take an exclusive `flock` and readers a shared one.
 

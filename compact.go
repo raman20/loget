@@ -623,18 +623,47 @@ func (db *DB) deleteGarbage(ctx context.Context, g Garbage) (int, error) {
 	default:
 		return 0, fmt.Errorf("unknown garbage kind %q", g.Kind)
 	}
+	// In batches (design 23): on the journal one record and two syncs per
+	// batch instead of per object. Any subset of a failed batch may be
+	// gone; garbage is unreferenced, so a retry deletes the rest.
 	n := 0
-	for _, k := range keys {
+	sctx := stopCtx{ctx, db}
+	for len(keys) > 0 {
 		if db.stopped() {
 			return n, ErrClosed
 		}
-		if err := db.st.Delete(ctx, k); err != nil && !errors.Is(err, store.ErrNotFound) {
+		b := keys[:min(len(keys), deleteBatch)]
+		if err := store.DeleteBatch(sctx, db.st, b); err != nil {
 			return n, err
 		}
-		n++
+		n += len(b)
+		keys = keys[len(b):]
 	}
 	return n, nil
 }
+
+// stopCtx reports ErrClosed from Err once the DB is closed or crashed,
+// so store.DeleteBatch's one-at-a-time fallback stops within a batch, as
+// the sweep did before batching (a crashed DB deletes nothing more). Only
+// Err changes: Done does not close on a stop.
+type stopCtx struct {
+	context.Context
+	db *DB
+}
+
+func (c stopCtx) Err() error {
+	if c.db.stopped() {
+		return ErrClosed
+	}
+	return c.Context.Err()
+}
+
+// deleteBatch is how many garbage objects one store.DeleteBatch removes:
+// large enough that the syncs no longer dominate, small enough that a
+// batch holds the journal's write lock (and so blocks commits) for about
+// as long as one commit's fsync: ~3 ms for 1024 keys on the reference
+// box, ~10 ms for 4096 (design 23, part 2).
+const deleteBatch = 1024
 
 // sweepOrphans deletes base objects that no manifest from this one on
 // can refer to: written in an older epoch and not in the manifest (a

@@ -53,6 +53,7 @@ type Journal struct {
 	idx  map[string]jent
 	end  int64 // offset after the last valid record seen
 
+	ver      int            // file format: 1 (no batch deletes) or 2
 	growing  atomic.Bool    // a background preallocation is running
 	stopGrow atomic.Bool    // set by Close
 	growWG   sync.WaitGroup // the background preallocation
@@ -65,7 +66,8 @@ type jent struct {
 }
 
 const (
-	jrnMagic   = "LOGETJ1\x00" // byte 6 is the version
+	jrnMagic   = "LOGETJ2\x00" // byte 6 is the version; new files
+	jrnMagicV1 = "LOGETJ1\x00" // read and written as before: no batch records
 	jrnHead    = 32            // magic(8) salt(16) crc(4) pad(4)
 	jrnHdr     = 12            // crc(4) kind(1) pad(1) klen(2) dlen(4)
 	jrnMaxKey  = 4096
@@ -74,6 +76,7 @@ const (
 	recPut  = 1
 	recDel  = 2
 	recDead = 3 // a put whose data was erased by a later delete
+	recDels = 4 // a batch of deletes: data lists the keys (version 2 files)
 )
 
 // Preallocation sizes (vars: the power-loss test shrinks them).
@@ -158,6 +161,7 @@ func (j *Journal) open() error {
 	defer flock(j.f, syscall.LOCK_UN)
 	var h [jrnHead]byte
 	n, err := j.f.ReadAt(h[:], 0)
+	j.ver = 2
 	switch {
 	case n == 0: // new file: write the header durably
 		copy(h[:8], jrnMagic)
@@ -172,11 +176,15 @@ func (j *Journal) open() error {
 		if err := syncDir(j.dir); err != nil {
 			return err
 		}
+		n = jrnHead
+	case n == jrnHead && string(h[:8]) == jrnMagicV1:
+		j.ver = 1
 	case n == jrnHead && string(h[:6]) == jrnMagic[:6] && string(h[:8]) != jrnMagic:
 		return fmt.Errorf("%w: %s has version %q (this build reads %q; written by a newer loget? upgrade the binary)",
 			ErrVersion, filepath.Join(j.dir, jrnFile), h[6:7], jrnMagic[6:7])
-	case n < jrnHead || string(h[:8]) != jrnMagic ||
-		binary.LittleEndian.Uint32(h[24:28]) != crc32.Checksum(h[:24], jcrc):
+	}
+	if n < jrnHead || (string(h[:8]) != jrnMagic && string(h[:8]) != jrnMagicV1) ||
+		binary.LittleEndian.Uint32(h[24:28]) != crc32.Checksum(h[:24], jcrc) {
 		return fmt.Errorf("store: %s: not a journal file (%v)", jrnFile, err)
 	}
 	copy(j.salt[:], h[8:24])
@@ -235,6 +243,16 @@ func (j *Journal) recover() ([]jent, error) {
 	suspects := map[string]bool{}
 	r := &jrnReader{f: j.f, hole: -1}
 	off := j.end
+	del := func(key string) {
+		if suspects[key] {
+			dels[key] = off
+		}
+		// a put still live here was not erased: the delete was cut short
+		if p, ok := j.idx[key]; ok {
+			unerased = append(unerased, p)
+			delete(j.idx, key)
+		}
+	}
 	for {
 		hb := r.read(off, jrnHdr)
 		if hb == nil {
@@ -243,14 +261,14 @@ func (j *Journal) recover() ([]jent, error) {
 		kind, klen := hb[4], int(binary.LittleEndian.Uint16(hb[6:8]))
 		dlen := int(binary.LittleEndian.Uint32(hb[8:12]))
 		sum := binary.LittleEndian.Uint32(hb[:4])
-		if kind < recPut || kind > recDead || klen == 0 || klen > jrnMaxKey || dlen > jrnMaxData ||
-			(kind == recDel && dlen != 0) || off+int64(jrnHdr+klen+dlen) > size {
+		if kind < recPut || kind > recDels || klen == 0 || klen > jrnMaxKey || dlen > jrnMaxData ||
+			(kind == recDel && dlen != 0) || (kind == recDels && dlen == 0) || off+int64(jrnHdr+klen+dlen) > size {
 			break
 		}
 		var tail [jrnHdr - 4]byte
 		copy(tail[:], hb[4:])
 		body := klen
-		if kind == recPut {
+		if kind == recPut || kind == recDels {
 			body += dlen
 		}
 		b := r.read(off+jrnHdr, body)
@@ -260,7 +278,7 @@ func (j *Journal) recover() ([]jent, error) {
 		e := jent{off: off, klen: klen, dlen: dlen}
 		next := off + int64(jrnHdr+klen+dlen)
 		if sum != j.sum(off, tail[:], b) {
-			if kind == recDel {
+			if kind == recDel || kind == recDels { // a torn delete or batch: the tail
 				break
 			}
 			key := string(b[:klen])
@@ -275,13 +293,10 @@ func (j *Journal) recover() ([]jent, error) {
 		case recPut:
 			j.idx[string(key)] = e
 		case recDel:
-			if suspects[string(key)] {
-				dels[string(key)] = off
-			}
-			// a put still live here was not erased: the delete was cut short
-			if p, ok := j.idx[string(key)]; ok {
-				unerased = append(unerased, p)
-				delete(j.idx, string(key))
+			del(string(key))
+		case recDels:
+			if err := eachDel(b[klen:], del); err != nil {
+				return nil, fmt.Errorf("%w: %s: record at offset %d: %v", ErrCorrupt, filepath.Join(j.dir, jrnFile), off, err)
 			}
 		}
 		off = next
@@ -390,12 +405,12 @@ func (j *Journal) validAt(p int64, b []byte, size int64) bool {
 	}
 	kind, pad, klen := b[4], b[5], int(binary.LittleEndian.Uint16(b[6:8]))
 	dlen := int(binary.LittleEndian.Uint32(b[8:12]))
-	if kind < recPut || kind > recDead || pad != 0 || klen == 0 || klen > jrnMaxKey || dlen > jrnMaxData ||
-		(kind == recDel && dlen != 0) || p+int64(jrnHdr+klen+dlen) > size {
+	if kind < recPut || kind > recDels || pad != 0 || klen == 0 || klen > jrnMaxKey || dlen > jrnMaxData ||
+		(kind == recDel && dlen != 0) || (kind == recDels && dlen == 0) || p+int64(jrnHdr+klen+dlen) > size {
 		return false
 	}
 	body := klen
-	if kind == recPut {
+	if kind == recPut || kind == recDels {
 		body += dlen
 	}
 	rb := make([]byte, body)
@@ -414,12 +429,12 @@ func (j *Journal) scan(fn func(kind byte, key string, e jent)) {
 		}
 		kind, klen := hb[4], int(binary.LittleEndian.Uint16(hb[6:8]))
 		dlen := int(binary.LittleEndian.Uint32(hb[8:12]))
-		if kind < recPut || kind > recDead || klen == 0 || klen > jrnMaxKey || dlen > jrnMaxData ||
-			(kind == recDel && dlen != 0) {
+		if kind < recPut || kind > recDels || klen == 0 || klen > jrnMaxKey || dlen > jrnMaxData ||
+			(kind == recDel && dlen != 0) || (kind == recDels && dlen == 0) {
 			return
 		}
 		body := klen
-		if kind == recPut {
+		if kind == recPut || kind == recDels {
 			body += dlen
 		}
 		b := make([]byte, body)
@@ -436,6 +451,11 @@ func (j *Journal) scan(fn func(kind byte, key string, e jent)) {
 			j.idx[key] = e
 		case recDel:
 			delete(j.idx, key)
+		case recDels:
+			if eachDel(b[klen:], func(string) {}) != nil {
+				return // only a corrupt file has this; open reports it
+			}
+			eachDel(b[klen:], func(k string) { delete(j.idx, k) })
 		}
 		if fn != nil {
 			fn(kind, key, e)

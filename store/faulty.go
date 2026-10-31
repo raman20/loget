@@ -164,6 +164,23 @@ func readFaultable(key string) bool {
 	return strings.HasPrefix(key, "log/") || strings.HasPrefix(key, "manifest/")
 }
 
+// DeleteBatch forwards to the inner store's batch delete. An injected
+// failure deletes a random prefix of the keys first: a batch may fail
+// part way.
+func (f *Faulty) DeleteBatch(ctx context.Context, keys []string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(keys) > 0 && f.roll(f.P.FailBefore) {
+		n := f.rng.Intn(len(keys))
+		f.Trace = append(f.Trace, fmt.Sprintf("delete-batch-fail %d/%d", n, len(keys)))
+		if err := DeleteBatch(ctx, f.Inner, keys[:n]); err != nil {
+			return err
+		}
+		return ErrInjected
+	}
+	return DeleteBatch(ctx, f.Inner, keys)
+}
+
 func (f *Faulty) Delete(ctx context.Context, key string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
