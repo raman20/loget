@@ -513,46 +513,11 @@ type Pair struct {
 
 // Scan returns live keys in space with prefix at LSN `at`, sorted.
 func (l *KV) Scan(space, prefix string, at uint64) []Pair {
-	p := ck(space, prefix)
 	var out []Pair
-	done := map[string]bool{} // keys whose visible version was found
-	hot := func(k string) {
-		vs := l.m[k]
-		if i := vs.find(at); i >= 0 {
-			done[k] = true
-			if w := vs.at(i); !w.del {
-				out = append(out, Pair{k[len(space)+1:], w.unpack()})
-			}
-		}
-	}
-	for i := sort.SearchStrings(l.keys, p); i < len(l.keys) && strings.HasPrefix(l.keys[i], p); i++ {
-		hot(l.keys[i])
-	}
-	for _, k := range l.recent {
-		if strings.HasPrefix(k, p) {
-			hot(k)
-		}
-	}
-	pb := []byte(p)
-	for _, r := range l.runs {
-		c := r.cursor()
-		c.seek(pb)
-		for c.next() && bytes.HasPrefix(c.key, pb) {
-			if done[string(c.key)] {
-				continue
-			}
-			if v, ok := bodyAt(c.body, at); ok {
-				k := string(c.key)
-				done[k] = true
-				if !v.Del {
-					v.Val = r.own(v.Val)
-					out = append(out, Pair{k[len(space)+1:], v})
-				}
-			}
-		}
-		runtime.KeepAlive(r)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	l.Range(space, prefix, PrefixEnd(prefix), at, false, func(k string, v Version) bool {
+		out = append(out, Pair{k, v})
+		return true
+	})
 	return out
 }
 

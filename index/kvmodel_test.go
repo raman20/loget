@@ -80,6 +80,25 @@ func (l *mapKV) Scan(space, prefix string, at uint64) []Pair {
 	return out
 }
 
+// Range is the reference for KV.Range: filter, sort, reverse.
+func (l *mapKV) Range(space, lo, hi string, at uint64, reverse bool) []Pair {
+	var out []Pair
+	for k := range l.m {
+		if !strings.HasPrefix(k, space+"\x00") {
+			continue
+		}
+		key := k[len(space)+1:]
+		if key < lo || (hi != "" && key >= hi) {
+			continue
+		}
+		if v, ok := l.Get(space, key, at); ok {
+			out = append(out, Pair{key, v})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return (out[i].Key < out[j].Key) != reverse })
+	return out
+}
+
 func (l *mapKV) SetLatest(space, key string, v Version) { l.m[ck(space, key)] = []Version{v} }
 
 func (l *mapKV) encode() []byte {

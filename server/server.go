@@ -4,6 +4,7 @@
 // encrypt the value under that subject's key (crypto-shreddable).
 //
 //	GET    /v1/kv?prefix=&at=           scan            POST /v1/tx            atomic batch
+//	       &start=&end=&reverse=1&limit=&after=   range / page (Loget-Next-After header)
 //	GET    /v1/kv/{key}?at=             read (time travel with at=LSN)
 //	PUT    /v1/kv/{key}                 write (body = value)
 //	DELETE /v1/kv/{key}
@@ -25,6 +26,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"time"
@@ -283,19 +285,47 @@ type kvOut struct {
 	Value string `json:"value"`
 }
 
+// scan serves GET /v1/kv: the keys under ?prefix= (the authorised
+// scope), optionally narrowed to [start, end), descending with reverse=1,
+// at most limit= of them. A full page sets Loget-Next-After to the
+// (query-escaped) last key: pass it back as after= for the next page.
 func (s *Server) scan(w http.ResponseWriter, r *http.Request) {
 	r = s.with(r)
+	q := r.URL.Query()
+	o := loget.IterOptions{Prefix: q.Get("prefix"), Start: q.Get("start"), End: q.Get("end")}
+	switch q.Get("reverse") {
+	case "", "0", "false":
+	case "1", "true":
+		o.Reverse = true
+	default:
+		fail(w, fmt.Errorf("%w: reverse", errBad))
+		return
+	}
+	if v := q.Get("limit"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			fail(w, fmt.Errorf("%w: limit", errBad))
+			return
+		}
+		o.Limit = n
+	}
+	if q.Has("after") {
+		o = o.After(q.Get("after"))
+	}
 	var out []kvOut
 	err := view(r, func(tx *loget.Tx) error {
-		kvs, err := tx.Scan(r.URL.Query().Get("prefix"))
-		for _, p := range kvs {
-			out = append(out, kvOut{p.Key, string(p.Value)})
+		it := tx.Iter(o)
+		for it.Next() {
+			out = append(out, kvOut{it.Key(), string(it.Value())})
 		}
-		return err
+		return it.Err()
 	})
 	if err != nil {
 		fail(w, err)
 		return
+	}
+	if o.Limit > 0 && len(out) == o.Limit {
+		w.Header().Set("Loget-Next-After", url.QueryEscape(out[len(out)-1].Key))
 	}
 	reply(w, out)
 }

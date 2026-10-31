@@ -32,7 +32,7 @@ type Tx struct {
 	writable bool
 	ops      []format.Op
 	reads    map[rkey]bool
-	prefixes []rkey
+	ranges   []*keyRange // scanned ranges and ReadPrefix (iter.go)
 	local    map[rkey]*localVal
 	// Exact view at `at` for derived indexes in a time-travel read, built
 	// on first use by indexView (read-only branch views only).
@@ -201,7 +201,7 @@ func (b *Branch) UpdateLSN(ctx context.Context, fn func(*Tx) error) (uint64, err
 		if err := ctx.Err(); err != nil {
 			return 0, err
 		}
-		res := w.submit(&commitReq{at: tx.at, ops: tx.ops, reads: tx.reads, prefixes: tx.prefixes, attempt: i})
+		res := w.submit(&commitReq{at: tx.at, ops: tx.ops, reads: tx.reads, ranges: tx.ranges, attempt: i})
 		if errors.Is(res.err, errPaused) {
 			if err := b.db.waitCompaction(ctx); err != nil {
 				return 0, err

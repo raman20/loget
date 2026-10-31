@@ -3,6 +3,8 @@ package index
 import (
 	"bytes"
 	"testing"
+
+	"github.com/raman20/loget/format"
 )
 
 // kvSeed is a small KV with every kind of version: inline, empty and nil
@@ -165,4 +167,51 @@ func TestNewKVInlineNegative(t *testing.T) {
 	if got := NewKVInline(-1).Inline(); got != 0 {
 		t.Fatalf("Inline() = %d, want 0", got)
 	}
+}
+
+// FuzzKVRange: arbitrary keys (any bytes, of any length up to 255),
+// written, deleted and frozen into runs in an order the input picks, then
+// a range read with input bounds in both directions equals the model.
+func FuzzKVRange(f *testing.F) {
+	f.Add([]byte("\x03a\x01\x02b\x01\x00\x03a\x01\x01"), "a", "", uint8(3))
+	f.Add([]byte("\x05\xff\xff\x01\x00\x00\x00\x00"), "", "\xff", uint8(9))
+	f.Fuzz(func(t *testing.T, ops []byte, lo, hi string, hot uint8) {
+		l, m := NewKVInline(3), newMapKV(3)
+		l.hotMax, l.recentMax = 1+int(hot%8), 1+int(hot%3)
+		head := uint64(0)
+		for len(ops) >= 2 {
+			n := int(ops[0])
+			if n > len(ops)-2 {
+				n = len(ops) - 2
+			}
+			key, kind := string(ops[1:1+n]), ops[1+n]
+			ops = ops[2+n:]
+			head++
+			op := format.Op{Kind: format.OpPut, Space: "kv", Key: key, Value: []byte{kind}}
+			if kind%4 == 0 {
+				op = format.Op{Kind: format.OpDel, Space: "kv", Key: key}
+			}
+			e := &Entry{LSN: head, Ops: []format.Op{op}}
+			l.Apply(e, testEnv{})
+			m.Apply(e, testEnv{})
+			if kind%5 == 0 {
+				l.work(-1)
+			}
+		}
+		for _, at := range []uint64{head / 2, head} {
+			for _, rev := range []bool{false, true} {
+				want := m.Range("kv", lo, hi, at, rev)
+				var got []Pair
+				l.Range("kv", lo, hi, at, rev, func(k string, v Version) bool { got = append(got, Pair{k, v}); return true })
+				if len(got) != len(want) {
+					t.Fatalf("Range(%q,%q,%d,%v): %d keys, want %d", lo, hi, at, rev, len(got), len(want))
+				}
+				for i := range got {
+					if got[i].Key != want[i].Key || got[i].LSN != want[i].LSN {
+						t.Fatalf("Range(%q,%q,%d,%v)[%d] = %q@%d, want %q@%d", lo, hi, at, rev, i, got[i].Key, got[i].LSN, want[i].Key, want[i].LSN)
+					}
+				}
+			}
+		}
+	})
 }

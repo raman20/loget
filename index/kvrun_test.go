@@ -41,6 +41,7 @@ func checkKV(t *rapid.T, l *KV, m *mapKV, head uint64, keys []string) {
 				}
 			}
 		}
+		checkRange(t, l, m, sp, head)
 	}
 	var got []string
 	_ = l.Latest(func(sp, k string, v Version) error {
@@ -55,6 +56,37 @@ func checkKV(t *rapid.T, l *KV, m *mapKV, head uint64, keys []string) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Latest = %v, want %v", got, want)
+	}
+}
+
+// rangeBounds are the bounds checkRange tries (the model keys are k0..k23).
+var rangeBounds = []string{"", "k", "k1", "k1\x00", "k10", "k15", "k2", "k9", "zz"}
+
+// checkRange compares KV.Range with the model for every pair of bounds,
+// both directions and three snapshots, and stopped half way.
+func checkRange(t *rapid.T, l *KV, m *mapKV, sp string, head uint64) {
+	for _, lo := range rangeBounds {
+		for _, hi := range rangeBounds {
+			for _, at := range []uint64{0, head / 2, head} {
+				for _, rev := range []bool{false, true} {
+					want := m.Range(sp, lo, hi, at, rev)
+					var got []Pair
+					l.Range(sp, lo, hi, at, rev, func(k string, v Version) bool { got = append(got, Pair{k, v}); return true })
+					if len(got) != 0 || len(want) != 0 {
+						if !reflect.DeepEqual(got, want) {
+							t.Fatalf("Range(%s,%q,%q,%d,%v) = %+v, want %+v", sp, lo, hi, at, rev, got, want)
+						}
+					}
+					if n := len(want) / 2; n > 0 {
+						got = got[:0]
+						l.Range(sp, lo, hi, at, rev, func(k string, v Version) bool { got = append(got, Pair{k, v}); return len(got) < n })
+						if !reflect.DeepEqual(got, want[:n]) {
+							t.Fatalf("Range(%s,%q,%q,%d,%v) stopped at %d = %+v, want %+v", sp, lo, hi, at, rev, n, got, want[:n])
+						}
+					}
+				}
+			}
+		}
 	}
 }
 

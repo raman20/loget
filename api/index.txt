@@ -1,5 +1,6 @@
 var Castagnoli = crc32.MakeTable(crc32.Castagnoli)
 var ErrBadSnapshot = errors.New("index: bad snapshot")
+func PrefixEnd(p string) string
 type Entry struct {
 	Log string
 	LSN uint64
@@ -24,6 +25,7 @@ func (l *KV) Inline() int
 func (l *KV) LastWrite(space, key string) uint64
 func (l *KV) Latest(fn func(space, key string, v Version) error) error
 func (*KV) Name() string
+func (l *KV) Range(space, lo, hi string, at uint64, reverse bool, fn func(key string, v Version) bool)
 func (l *KV) Scan(space, prefix string, at uint64) []Pair
 func (l *KV) SetLatest(space, key string, v Version)
 func (l *KV) Snapshot() []byte

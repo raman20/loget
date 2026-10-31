@@ -629,6 +629,30 @@ func (s *sim) check() error {
 		for _, p := range kvs {
 			got[p.Key] = string(p.Value)
 		}
+		// range reads agree with the scan: descending, in pages (own
+		// RNG, so the simulation's schedule for a seed is unchanged)
+		pr := rand.New(rand.NewSource(s.seed ^ 0x17e7))
+		o := loget.IterOptions{Reverse: true, Limit: 1 + pr.Intn(7)}
+		var back []loget.KV
+		for {
+			page, err := tx.Range(o)
+			if err != nil {
+				return err
+			}
+			back = append(back, page...)
+			if len(page) < o.Limit {
+				break
+			}
+			o = o.After(page[len(page)-1].Key)
+		}
+		if len(back) != len(kvs) {
+			return fmt.Errorf("reverse pages: %d keys, scan %d", len(back), len(kvs))
+		}
+		for i, p := range back {
+			if q := kvs[len(kvs)-1-i]; p.Key != q.Key || string(p.Value) != string(q.Value) {
+				return fmt.Errorf("reverse pages: key %d %q, scan %q", i, p.Key, q.Key)
+			}
+		}
 		rs, err := tx.ScanRecords(counter.Prefix+simCounter, "")
 		if err != nil {
 			return err

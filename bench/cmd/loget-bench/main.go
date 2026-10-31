@@ -19,6 +19,7 @@ suites:
   commit   commit latency tails on the journal (8 MiB file growth steps)
   gc       disk size per cycle under overwrite + branch + rewind churn: compact vs gc vs gc+shrink
   open     open time and memory of an existing database (ycsb -keep), then random reads
+  scan     range reads: short prefix/range/reverse scans and full-scan memory (loget vs pebble)
   calib    harness + VM noise floor (no-op latency)
   report   render results/*.json as markdown
 
@@ -43,6 +44,8 @@ func main() {
 		cmdGC(args)
 	case "commit":
 		cmdCommit(args)
+	case "scan":
+		cmdScan(args)
 	case "calib":
 		cmdCalib(args)
 	case "open":

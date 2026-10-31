@@ -135,6 +135,19 @@ type Histogram struct {
 	Count  uint64   `json:"count"`
 	Sum    float64  `json:"sum_seconds"`
 func (h Histogram) Quantile(q float64) float64
+type IterOptions struct {
+	Prefix  string
+	Start   string
+	End     string
+	Reverse bool
+	Limit   int
+func (o IterOptions) After(key string) IterOptions
+type Iterator struct {
+func (it *Iterator) All() iter.Seq2[string, []byte]
+func (it *Iterator) Err() error
+func (it *Iterator) Key() string
+func (it *Iterator) Next() bool
+func (it *Iterator) Value() []byte
 type KV = Record
 type KeyFunc func(ctx context.Context) ([]byte, error)
 func (f KeyFunc) KEK(ctx context.Context) ([]byte, error)
@@ -240,8 +253,12 @@ func (tx *Tx) DeleteRecord(space, key string) error
 func (tx *Tx) Get(key string) ([]byte, error)
 func (tx *Tx) GetRecord(space, key string) ([]byte, error)
 func (tx *Tx) Index(name string, fn func(index.Index) error) error
+func (tx *Tx) Iter(o IterOptions) *Iterator
+func (tx *Tx) IterRecords(space string, o IterOptions) *Iterator
 func (tx *Tx) Put(key string, val []byte, opts ...WriteOpt) error
 func (tx *Tx) PutRecord(space, key string, val []byte, opts ...WriteOpt) error
+func (tx *Tx) Range(o IterOptions) ([]KV, error)
+func (tx *Tx) RangeRecords(space string, o IterOptions) ([]Record, error)
 func (tx *Tx) ReadKey(space, key string)
 func (tx *Tx) ReadPrefix(space, prefix string)
 func (tx *Tx) Scan(prefix string) ([]KV, error)

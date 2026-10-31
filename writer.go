@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,11 +17,11 @@ import (
 type rkey struct{ space, key string }
 
 type commitReq struct {
-	at       uint64
-	ops      []format.Op
-	reads    map[rkey]bool
-	prefixes []rkey
-	attempt  int // conflicts this transaction already lost (fairness)
+	at      uint64
+	ops     []format.Op
+	reads   map[rkey]bool
+	ranges  []*keyRange
+	attempt int // conflicts this transaction already lost (fairness)
 	// exec, if set, is the transaction body to run inside the writer at the
 	// applied head (see escalateAfter); ops/reads/at are filled from it.
 	exec func(*Tx) error
@@ -249,12 +248,12 @@ func (w *writer) runExec(r *commitReq) (ok bool) {
 		r.done <- commitRes{lsn: tx.at}
 		return false
 	}
-	r.at, r.ops, r.reads, r.prefixes = tx.at, tx.ops, tx.reads, tx.prefixes
+	r.at, r.ops, r.reads, r.ranges = tx.at, tx.ops, tx.reads, tx.ranges
 	return true
 }
 
 func (w *writer) conflict(r *commitReq, pending []recentCommit) bool {
-	if len(r.reads) == 0 && len(r.prefixes) == 0 {
+	if len(r.reads) == 0 && len(r.ranges) == 0 {
 		return false // blind writes are always serializable
 	}
 	if r.at < w.recentFloor {
@@ -268,8 +267,8 @@ func (w *writer) conflict(r *commitReq, pending []recentCommit) bool {
 			if r.reads[wr] {
 				return true
 			}
-			for _, p := range r.prefixes {
-				if wr.space == p.space && strings.HasPrefix(wr.key, p.key) {
+			for _, rg := range r.ranges {
+				if rg.has(wr) {
 					return true
 				}
 			}

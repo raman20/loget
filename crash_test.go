@@ -192,6 +192,17 @@ func crashKill9(t *testing.T, dir string, env ...string) {
 				if len(kvs) != n {
 					t.Fatalf("iter %d g%d: %d keys but counter %d (not atomic)", it, g, len(kvs), n)
 				}
+				// a reverse range read over the recovered index (run files
+				// included) returns the same keys, descending
+				ri := tx.Iter(IterOptions{Prefix: fmt.Sprintf("g%d/", g), Reverse: true})
+				for i := len(kvs) - 1; i >= 0; i-- {
+					if !ri.Next() || ri.Key() != kvs[i].Key || string(ri.Value()) != string(kvs[i].Value) {
+						t.Fatalf("iter %d g%d: reverse iterator at %d: %q %v, want %q", it, g, i, ri.Key(), ri.Err(), kvs[i].Key)
+					}
+				}
+				if ri.Next() || ri.Err() != nil {
+					t.Fatalf("iter %d g%d: reverse iterator has extra key %q (%v)", it, g, ri.Key(), ri.Err())
+				}
 				for i := 1; i <= n; i++ {
 					if !seen[fmt.Sprintf("%d:%d", g, i)] {
 						t.Fatalf("iter %d: g%d record %d missing (not prefix-consistent)", it, g, i)

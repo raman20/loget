@@ -1,7 +1,6 @@
 package loget
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 
@@ -57,38 +56,9 @@ func (tx *Tx) GetRecord(space, key string) ([]byte, error) { return tx.get(space
 // ScanRecords returns the live records of space whose key starts with
 // prefix, sorted by key, including this transaction's own writes. It
 // adds the prefix to the read set: any later write under it conflicts.
+// It is RangeRecords with IterOptions{Prefix: prefix}.
 func (tx *Tx) ScanRecords(space, prefix string) ([]Record, error) {
-	if tx.writable {
-		tx.prefixes = append(tx.prefixes, rkey{space, prefix})
-	}
-	tx.v.mu.RLock()
-	ps := tx.v.kv.Scan(space, prefix, tx.at)
-	tx.v.mu.RUnlock()
-	m := map[string][]byte{}
-	for _, p := range ps {
-		v, err := tx.open(p.Version, space, p.Key)
-		if errors.Is(err, ErrNotFound) {
-			continue // shredded
-		}
-		if err != nil {
-			return nil, err
-		}
-		m[p.Key] = v
-	}
-	for k, l := range tx.local {
-		if k.space == space && strings.HasPrefix(k.key, prefix) {
-			if l.del {
-				delete(m, k.key)
-			} else {
-				m[k.key] = l.val
-			}
-		}
-	}
-	out := make([]Record, 0, len(m))
-	for _, k := range sortedMapKeys(m) {
-		out = append(out, Record{k, m[k]})
-	}
-	return out, nil
+	return tx.RangeRecords(space, IterOptions{Prefix: prefix})
 }
 
 // ReadKey adds (space, key) to the read set without reading it: commit
@@ -105,7 +75,8 @@ func (tx *Tx) ReadKey(space, key string) {
 // set ("" = the whole space). See ReadKey.
 func (tx *Tx) ReadPrefix(space, prefix string) {
 	if tx.writable {
-		tx.prefixes = append(tx.prefixes, rkey{space, prefix})
+		pe := index.PrefixEnd(prefix)
+		tx.ranges = append(tx.ranges, &keyRange{space: space, lo: prefix, hi: pe, inf: pe == ""})
 	}
 }
 
