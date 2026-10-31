@@ -1,5 +1,11 @@
 # 11 — Scoped tokens, rotation, certificate reload, connection limits
 
+> **Historical note.** Written for freshDB, LogEt's predecessor, before
+> the 2026-10-31 rename; names were updated, the content was not. Parts
+> about topics, documents or vectors describe code on the `index/*`
+> branches, "v0.1.0" is freshDB v0.1.0, and numbers were measured on
+> freshDB.
+
 ## Problem
 
 `serve` had one shared bearer token (all or nothing), no way to rotate it

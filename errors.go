@@ -1,7 +1,8 @@
-// Package loget is a single-writer storage engine where one append-only log on
-// object storage (or a local directory) is the only source of truth, and
-// key-value, topics/consumer groups, documents, secondary indexes and vectors
-// are "indexes": pure folds over that log.
+// Package loget (LogEt) is a single-writer storage engine where one
+// append-only log on object storage (or a local directory) is the only
+// source of truth, and indexes are pure folds over that log: one log,
+// different indexes over it. Key-value is the built-in index; others plug
+// in through package index (WithIndex).
 package loget
 
 import (
@@ -42,13 +43,13 @@ var (
 	// retry later. HTTP 409.
 	ErrBusy = errors.New("loget: compaction already running")
 
-	// ErrBadName: a name the API cannot store unambiguously (a consumer
-	// group name with a NUL byte), or a message acked in another topic's
-	// group.
+	// ErrBadName: a name the API cannot store unambiguously. Reserved for
+	// indexes that name things (the topics index on branch index/topics).
 	ErrBadName = errors.New("loget: invalid name")
 
-	// ErrBadValue: a value the API refuses: a document that is not a JSON
-	// object, or a Find value that cannot be encoded as JSON. HTTP 400.
+	// ErrBadValue: a value or record the API refuses, such as a record in a
+	// space no registered index owns, or an index whose spaces are invalid.
+	// HTTP 400.
 	ErrBadValue = errors.New("loget: invalid value")
 )
 
@@ -58,7 +59,7 @@ const (
 	MaxTxOps   = format.MaxOps
 )
 
-// MaxKeyBytes bounds keys, and topic, collection and subject names
+// MaxKeyBytes bounds keys, record spaces and subject names
 // (checked when the write is staged; ErrTooLarge). Every key lives in the
 // in-memory index, so this also bounds what one write can cost in RAM.
 const MaxKeyBytes = 8 << 10

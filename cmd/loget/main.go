@@ -213,7 +213,7 @@ func main() {
 	os.Exit(code)
 }
 
-// migrate converts a local directory between the files layout (v0.1.0) and
+// migrate converts a local directory between the files layout and
 // the journal layout. Every process using the directory must be stopped.
 func migrate(dbURL, to string) int {
 	dir := strings.TrimPrefix(dbURL, "file://")

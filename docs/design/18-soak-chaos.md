@@ -1,5 +1,11 @@
 # 18. Soak and chaos (item 18; gap S3.7)
 
+> **Historical note.** Written for freshDB, LogEt's predecessor, before
+> the 2026-10-31 rename; names were updated, the content was not. Parts
+> about topics, documents or vectors describe code on the `index/*`
+> branches, "v0.1.0" is freshDB v0.1.0, and numbers were measured on
+> freshDB.
+
 ## Problem
 
 Crash tests and the simulator ran for seconds to minutes per CI run. No

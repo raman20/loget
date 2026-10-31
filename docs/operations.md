@@ -1,7 +1,7 @@
 # Operations
 
 How to choose storage, size memory, migrate, back up and run LogEt.
-Applies to unreleased `main`; v0.1.0 differences are called out. Everything
+Applies to `main` (KV only; no release yet). Everything
 here is pre-1.0: do not run production data on it yet.
 
 ## Storage URLs
@@ -14,7 +14,7 @@ CLI and server, the `url` argument of `loget.Open` in Go. Default:
 |---|---|---|
 | `./dir`, `/abs/dir`, `file:///abs/dir` | local, auto-detected layout | existing directory: keeps its layout; new or empty directory: **journal** on Linux/macOS/BSD, **files** on Windows |
 | `journal:///abs/dir` | local, journal layout | refuses a directory that holds the files layout |
-| `fs:///abs/dir` | local, files layout (one file per object, as in v0.1.0) | refuses a directory that holds `journal.fj` |
+| `fs:///abs/dir` | local, files layout (one file per object) | refuses a directory that holds `journal.fj` |
 | `s3://bucket/prefix?endpoint=host:port&insecure=1&create=1` | any S3-compatible store | `insecure=1` = plain HTTP, `create=1` = create the bucket; credentials from `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` |
 | `mem://name` | in memory | tests only; gone when the process exits |
 
@@ -35,7 +35,7 @@ loget: open journal:///tmp/qs/m: store: /tmp/qs/m holds the one-file-per-object 
   on the commit path (a ~15–40 ms stall every few MB written; not fixed
   yet). A fresh database is therefore an 8 MiB file. Writers take an
   exclusive `flock`.
-- **files** (v0.1.0, Windows): one file per object. Each commit writes a
+- **files** (Windows default, or `fs://`): one file per object. Each commit writes a
   temp file, fsyncs it, links/renames it into place and fsyncs the
   directory: two fsyncs per commit, so single-client durable writes are
   about 9× slower (YCSB A, 1 client: 5.2k vs 46k ops/s in
@@ -53,10 +53,10 @@ needed semantics but have not been tested with LogEt. Values are read
 back with ranged GETs. Run `loget s3check` against a new endpoint first;
 see [s3.md](s3.md) for the guarantees, retries and request cost.
 
-## Migrating a v0.1.0 directory
+## Migrating between layouts
 
-v0.1.0 directories use the files layout and keep working unchanged. To
-convert one to the journal (Unix only):
+A files-layout directory keeps working unchanged. To convert one to the
+journal (Unix only):
 
 1. Stop every process using it (a server, or anything embedding it). The
    files layout has no lock, so this is not checked.
@@ -88,7 +88,7 @@ positional argument is ignored. The protocol is model-checked in
 What lives in RAM (per open database):
 - every KV key and its version history (MVCC, 40 bytes per version plus
   the key; kept until `Compact`), with values of up to 64 B inline;
-- topic messages, documents and doc indexes, and vectors;
+- the state of any derived index you register (`WithIndex`);
 - the **value cache** for KV values over 64 B, which are otherwise read
   from the log (`pread` locally, ranged GET on S3) and CRC-checked.
 
@@ -99,7 +99,7 @@ RSS grows by about its size once it fills. Go API options:
 |---|---|---|
 | `WithValueCacheBytes(n)` | 1/16 of the memory limit (cgroup v2 `memory.max`, else MemTotal), 16–256 MiB | cache size; negative disables the cache |
 | `WithInlineMax(n)` | 64 B | KV values up to `n` bytes stay in RAM; negative keeps none inline |
-| `WithSnapshotEvery(n)` | 0 (off) | KV+topic snapshot and segment-index checkpoint every `n` commits, written synchronously. Open then reads each segment once instead of twice and folds KV/topics from the snapshot; vector and document-index indexes are still rebuilt from every segment (see "Open time") |
+| `WithSnapshotEvery(n)` | 0 (off) | snapshot (KV plus a section per derived index that can snapshot) and segment-index checkpoint every `n` commits, written synchronously. Open then reads each segment once instead of twice and restores the indexes from the snapshot, replaying only the tail (see "Open time") |
 | `WithReadAhead(n)` | 8 | segment reads kept in flight while replaying (open, time travel, index builds); 1 = sequential |
 | `WithCommitPolicy(CommitPolicy{MaxDelay, TargetBytes})` | no wait | a group commit waits up to `MaxDelay` for more transactions, until it holds `TargetBytes` (default 1 MiB) or `MaxBatch` (256) of them. Fewer, larger segment PUTs for more latency; see below |
 
@@ -113,9 +113,9 @@ one 8-core box shared with other jobs, 2026-10-29; mean of 10 opens):
 | no snapshots | 480-518 ms | 479-494 ms | 283-293 ms | 206.5 |
 | `WithSnapshotEvery(50)` | 480 ms | 262-270 ms | 64-68 ms | 206.5 → 106.5 |
 
-Raw output: `bench/results/2026-10-29-open/`. Open time still grows with
-the log: every segment is read once to rebuild the vector and
-document-index indexes, which have no snapshot yet.
+Raw output: `bench/results/2026-10-29-open/` (measured on freshDB, which
+also rebuilt vector and document indexes from every segment). Without
+snapshots, open still reads every segment.
 
 **Commit policy.** With the default, a batch is whatever queued while the
 previous segment was being written, so with N steady writers about half of
@@ -141,8 +141,9 @@ depends on the store's latency and the write concurrency.
 
 The CLI and `loget serve` use the defaults; they have no flags for these
 yet. For scale: the 1M × 1 KiB YCSB run peaked at 1.55 GiB RSS with the
-defaults on the journal layout (2.05 GiB before the packed versions; v0.1.0:
-7.1 GiB). Lower the cache for small machines, raise it if your hot set is
+defaults on the journal layout (measured on freshDB, before the
+compressed key index cut the index heap to ~30 B/key).
+Lower the cache for small machines, raise it if your hot set is
 larger and reads miss.
 
 **Go GC settings.** About half of RSS with defaults is the Go garbage
@@ -183,39 +184,27 @@ export LOGET_ADDR=http://127.0.0.1:7070            # point CLI calls at it
 - Token file, one per line (`#` comments; a bare `TOKEN` line is admin):
 
       read   r-token-123  name=dashboards
-      write  w-token-456  name=orders-svc kv:orders/* topic:orders docs:orders
+      write  w-token-456  name=orders-svc kv:orders/*
       admin  a-token-789  name=ops
 
-  read: gets, scans, topic reads/streams, searches, log, verify; write:
-  adds puts, deletes, tx, publish, branch create; admin: adds rewind,
-  promote, branch delete, shred, indexes, ANN, compact, gc. Resources
-  (`kv:PREFIX*`, `topic:`, `docs:`, `vectors:`) limit a token to those
-  collections and exclude database-wide routes. 401 = unknown token,
+  read: gets, scans, log, verify; write: adds puts, deletes, tx, branch
+  create; admin: adds rewind, promote, branch delete, shred, compact,
+  gc, backup. Resources (`kv:PREFIX*`) limit a token to those key
+  prefixes and exclude database-wide routes. 401 = unknown token,
   403 = not allowed.
 - Rotation without restart: the token file is re-read within 2 s of a
   change, the certificate files within 10 s, both at once on `SIGHUP`
   (`kill -HUP <pid>`). A file that does not parse (or a cert/key pair that
   does not match) is logged and the old one stays in use. Rotate a token
   by adding the new one, moving clients, then removing the old one; open
-  SSE streams of a removed token end at their next event or ping (≤ 15 s).
-- `--max-streams` (default 1024) and `--max-waiters` (default 4096) cap
-  open SSE streams and long-polls (`wait>0`); over the cap: 503 with
-  `Retry-After: 1`. `-1` removes a cap.
+
 - Supply the KEK with `--kek-file` or `LOGET_KEK` (64 hex chars or
   base64 of 32 bytes) on every process that opens the database, including
   embedded CLI calls. A wrong key fails at open with "wrong key-encryption
   key". A database first opened without a key stays in dev-key mode
   (no rekey yet).
-- Consumers can long-poll (`?wait=30s`, max 60 s) or hold an SSE stream
-  (`GET /v1/topics/{t}/stream`, a `: ping` comment every 15 s). Each one
-  holds a connection and a goroutine (capped by `--max-streams` /
-  `--max-waiters`); cap connections at a proxy if clients are untrusted. Proxies must not
-  buffer `text/event-stream` responses (nginx: `proxy_buffering off`).
-  Streams end when the server shuts down; clients resume with
-  `Last-Event-ID`.
 - Shutdown: `SIGTERM`/`SIGINT` drains: `/readyz` turns 503 `draining`,
-  SSE streams end with `event: shutdown`, long polls return, in-flight
-  requests finish (up to `--shutdown-timeout`, default 30 s), then the
+  in-flight requests finish (up to `--shutdown-timeout`, default 30 s), then the
   database closes and the log says `closed cleanly`. A second signal
   exits at once; acknowledged writes are durable either way. Point your
   orchestrator's stop timeout above `--shutdown-timeout`.
@@ -223,11 +212,10 @@ export LOGET_ADDR=http://127.0.0.1:7070            # point CLI calls at it
   busy port fails without fencing the running server.
 - Timeouts per request: `--read-timeout` (default 5m) bounds reading a
   request body (stalled uploads are cut off, nothing written);
-  `--write-timeout` (default 2m) bounds writing a response (streams renew
-  it per event, long polls get it on top of `wait`, admin routes such as
+  `--write-timeout` (default 2m) bounds writing a response (admin routes such as
   compact/gc/backup are exempt); idle keep-alive connections close after
   2m. `-1` disables a timeout.
-- Limits: keys and topic/collection/subject names ≤ 8 KiB
+- Limits: keys and subject names ≤ 8 KiB
   (`MaxKeyBytes`), a transaction ≤ 64 MiB encoded and 1M ops, a request
   body ≤ `--max-body` (96 MiB); over a limit: 413.
 - Who holds the write lease: every CLI process records itself in
@@ -281,9 +269,9 @@ export LOGET_ADDR=http://127.0.0.1:7070            # point CLI calls at it
 
 ## Compaction
 
-New on `main` (not in v0.1.0). Compaction writes a **base image** of every
-log at its head: the latest live version of each key, every topic message,
-and large values in chunk files. It then commits a manifest that lists the
+Compaction writes a **base image** of every log at its head: the latest
+live version of each key (KV and every other index's records) and large
+values in chunk files. It then commits a manifest that lists the
 old segments, bases and snapshots as garbage, and deletes them once a grace
 period has passed. Design: [design/03-compaction.md](design/03-compaction.md);
 model: [`spec/LogEtCompact.tla`](../spec/LogEtCompact.tla).
@@ -295,7 +283,7 @@ curl -XPOST '127.0.0.1:7070/v1/compact?grace=5m'      # on a running server
 ```
 
 `compact` prints what it did, for example
-`{"base_bytes":300310,"deleted":401,"keys":3,"logs":1,"messages":0,"pending":0}`.
+`{"base_bytes":537,"deleted":30,"keys":5,"logs":3,"pending":0}`.
 `pending` counts garbage still waiting for its grace period; the next
 compaction deletes it.
 
@@ -307,8 +295,7 @@ What you give up:
 - `log` and `verify` start at the base (the base records the hash-chain head,
   so the chain still verifies from there).
 
-What it does not do by default: topic messages are kept unless topic
-retention is set (see "Topic retention" below); there is no TTL. Values of a subject
+There is no TTL (roadmap item 4). Values of a subject
 shredded after the last compaction are dropped by the next one.
 
 Disk space: on the files layout and S3, replaced objects are deleted. In the
@@ -318,9 +305,11 @@ large keys 200 times). On macOS/BSD the bytes are zeroed instead and space
 is not returned.
 
 Measured (`loget-bench compact`, 10k keys × 1 KiB overwritten 50 times:
-9.8 MiB live of 488 MiB written; see [benchmarks](benchmarks.md#changes-since-v010-unreleased-main)):
-journal 504 → 34 MiB allocated and open 1.6 s → 30 ms; files layout 5,004
-files → 9. Commits wait while it runs (0.9 s here). `compact` never deletes
+9.8 MiB live of 488 MiB written, measured on freshDB; see
+[benchmarks](benchmarks.md)): journal 504 → 34 MiB allocated and open
+1.6 s → 30 ms; files layout 5,004 files → 9. Commits pause while the new
+manifest is installed (11–14 ms with ~2,700 deletes, `BenchmarkCompactSweepPause`);
+branch operations wait for the whole run. `compact` never deletes
 manifests or retired logs; use `gc` for that.
 
 ## GC and retention
@@ -362,33 +351,6 @@ headers and hole edges; +0.33 MiB per cycle here) and its apparent size
 only grows, so run `gc --shrink` during maintenance windows.
 
 
-### Topic retention
-
-Topics keep every message (in RAM and in each base) until compaction is
-told to drop old ones:
-
-```sh
-loget compact --topic-max-age 168h --topic-max-messages 1000000
-loget serve --compact-every 1h --topic-max-age 168h       # background
-curl -XPOST '127.0.0.1:7070/v1/compact?topic-max-age=168h'
-```
-
-- Each topic is cut at the highest offset both limits allow (keep the
-  newest N; drop the oldest messages up to the first one younger than the
-  age, by commit time), then lowered to the smallest cursor any consumer
-  group on that branch has committed for the topic, so a group never
-  loses a message it has not acked (`spec/LogEtRetain.tla`).
-  `--topic-ignore-groups` cuts past them; a lagging group then resumes at
-  the cut. A group that never committed a cursor does not hold anything.
-- Offsets never change: `Len` still counts every message ever published,
-  `Start` (Go) is the first kept offset, and a read from below it starts
-  at it.
-- The cut happens when a log gets a new base. `compact` writes one when
-  retention would cut, even with no new commits; `gc` applies the same
-  options only to the bases it writes for its history window.
-- Messages leave RAM when the branch reloads from the new base (right
-  after compaction) and leave storage after the grace period.
-
 ## Health checks and monitoring
 
 - `GET /healthz`: the process is up (liveness). No token.
@@ -409,9 +371,8 @@ curl -XPOST '127.0.0.1:7070/v1/compact?topic-max-age=168h'
   `loget_snapshot_errors_total`, `loget_value_cache_*`,
   `loget_branches`, `loget_head_lsn{branch="main"}`,
   `loget_writer_halted`, `loget_http_requests_total{route,code}`,
-  `loget_http_request_duration_seconds{route}` (streams and long-polls
-  excluded), `loget_http_unauthorized_total`, `loget_http_inflight`,
-  `loget_http_streams`, `loget_http_waiters`, `loget_build_info`, and
+  `loget_http_request_duration_seconds{route}`,
+  `loget_http_unauthorized_total`, `loget_http_inflight`, `loget_build_info`, and
   `go_*` runtime gauges. Embedded users get the same numbers from
   `db.Stats()`, `db.Healthy()` and `db.Ping(ctx)`.
 - Suggested alerts: `loget_writer_halted == 1` (page: commits fail until
@@ -423,7 +384,7 @@ curl -XPOST '127.0.0.1:7070/v1/compact?topic-max-age=168h'
 - Logs: `--log-format json` (one JSON object per line, including the
   engine's messages), `--access-log` (every request: method, route, status,
   bytes, seconds, remote, token *name*), `--slow-op 1s` (default; WARN for
-  slower requests, `0` turns it off; streams and long-polls exempt).
+  slower requests, `0` turns it off).
 - Profiling: `--pprof` serves `/debug/pprof/` to admin tokens; `serve`
   refuses it without auth. Heap profiles can contain plaintext values.
 

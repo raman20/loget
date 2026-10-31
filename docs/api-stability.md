@@ -16,14 +16,14 @@ Every break is listed under "Changed (breaking)" in
 | surface | status | "breaking" means |
 |---|---|---|
 | on-storage format (manifests, segments, bases, journal) | stable track: versioned, golden-tested ([compatibility.md](compatibility.md)) | a binary can no longer open data an earlier release wrote |
-| Go package `loget` (Open, Tx, KV/topic/collection API, errors, options) | stable track | removing an exported identifier or changing its signature or documented behaviour |
+| Go package `loget` (Open, Tx, KV API, errors, options) | stable track | removing an exported identifier or changing its signature or documented behaviour |
 | Go package `store` (Store interface, Open, S3Check) | stable track | same |
 | HTTP API under `/v1/` | stable track | removing a route, field or status code; new fields and routes are not breaking |
 | CLI command names and flags | stable track | removing or renaming a command or flag; human-readable output is **not** stable |
 | `/metrics` names | stable track | renaming or removing a metric |
 | Go packages `server`, `format`, `index` | experimental | may change in any minor release |
 | `sim`, `internal/...`, `examples`, `bench` | internal | no guarantee |
-| vector search (HNSW), indexes, branches | experimental features | may change in any minor release |
+| the index framework (`index.Kind`, `WithIndex`, `Tx.Index`, records), branches | experimental features | may change in any minor release |
 | S3 backend | experimental ([s3.md](s3.md)) | tested on MinIO only |
 
 "Stable track" means changes are reviewed as API changes today, and these

@@ -1,42 +1,53 @@
 # FAQ
 
 **Is LogEt production-ready?**
-No. It is a pre-1.0 prototype (latest release v0.1.0; `main` has unreleased
-improvements). Its correctness core is model-checked and
-simulation-tested, but it has no production users, only a first version of compaction, a single
-shared-token auth, and most index state lives in RAM. See the README's
-[status section](../README.md#status-and-limitations).
+No. It is pre-1.0 and has no release yet. Its correctness core is
+model-checked and simulation-tested, but it has no production users,
+compaction pauses commits, and the KV index keeps every key in RAM. See
+the README's [status section](../README.md#status) and
+[PRODUCTION_READINESS.md](PRODUCTION_READINESS.md).
+
+**What does "LogEt" mean?**
+Danish and Norwegian for "the log"; "et" also means "one". One log, with
+different indexes over it.
+
+**Where did topics, documents and vectors go?**
+LogEt's predecessor, freshDB, had them all in one engine. LogEt finishes
+KV first and adds the others back one at a time through the index
+framework, each meeting the same testing and benchmarking bar. The code
+waits on the `index/topics`, `index/docs`, `index/vectors` and
+`index/txn` branches; the order is in [PIPELINE.md](PIPELINE.md).
 
 **Why not just Postgres?**
 Postgres is a great default, and if it works for you, keep it. LogEt is for
 when you want what a log gives you natively: branches, rewind, time travel,
-exactly-once consume-and-write, and per-subject deletion that also covers
-history and derived indexes. And you want them on object storage, from one
+and per-subject deletion that also covers history and every index. And you want them on object storage, from one
 binary, without running a server cluster.
 
 **How is this different from SlateDB?**
 SlateDB is an embedded LSM KV store on object storage, written in Rust. It
-inspired LogEt's fencing protocol. LogEt is pure Go, and it puts topics,
-documents, vectors and crypto-shredding on the same log. SlateDB is far more
-mature for KV workloads and has compaction. See the [comparison table](../README.md#how-it-compares) in the README.
+inspired LogEt's fencing protocol. LogEt is pure Go, keeps every index on
+one log with branches, time travel and crypto-shredding, and is far less
+mature. SlateDB is the better KV store on object storage today; LogEt's
+KV gaps are listed in [ROADMAP.md](ROADMAP.md).
 
 **Which platforms are supported?**
 Linux is the primary platform: all tests, the simulator and the crash tests run
-there. In CI the unit tests also run on macOS. Windows binaries build (a
-build break after v0.1.0 is fixed on `main`) but are untested: Windows
+there. In CI the unit tests also run on macOS. Windows binaries build but
+are untested: Windows
 can't fsync a directory, so the durability of a new file's directory entry
 after power loss is not verified there. Windows uses the files layout; the
 journal layout is Unix-only.
 
-**I have a v0.1.0 data directory. Do I need to do anything?**
-No. It keeps the files layout (one file per segment) and opens as before.
-To move it to the faster journal layout on Linux, macOS or BSD:
-1. Stop every process using it.
-2. Run `loget migrate --db DIR` (from `main`; v0.1.0 has no `migrate`).
+**Can LogEt open a freshDB database?**
+No. Every on-storage magic string changed at the rename
+([rebrand notes](rebrand/README.md)) and there is no converter.
 
-`migrate` copies and verifies every object and leaves the original as
-`DIR.bak-files`. If it is interrupted, run it again and it finishes the
-job. `loget migrate --to files` converts back.
+**How do I move a files-layout directory to the journal layout?**
+Stop every process using it, then run `loget migrate --db DIR`. It copies
+and verifies every object and leaves the original as `DIR.bak-files`. If
+it is interrupted, run it again and it finishes the job.
+`loget migrate --to files` converts back.
 
 **Can two processes write to the same database?**
 Only one at a time. A new opener fences the old one, which then gets
@@ -67,14 +78,14 @@ still exists there.** Expire noncurrent versions of `keys/`, and back up with
 that in mind. KMS-held keys are on the roadmap.
 
 **How much memory does it need?**
-Keys, KV history, topics, documents and vectors are in RAM; KV values over
-64 B are read from the log through an off-heap cache (`WithValueCacheBytes`;
-default 1/16 of the memory limit, 16–256 MiB). The 1M × 1 KiB YCSB run peaked
-at 1.55 GiB on `main` (7.1 GiB on v0.1.0), about half of it Go GC headroom;
-`GOMEMLIMIT` trades that for GC CPU. Old KV versions stay in memory until you run
-`loget compact` (new on `main`), which keeps only the latest live version
-of each key; topics keep every message. See
-[operations.md](operations.md#compaction). See [operations.md](operations.md#memory-and-cache-sizing).
+Every key and version is indexed in RAM (about 30 B per key of heap after
+a snapshot load at 10M keys, ~60 B while ingesting). KV values over 64 B
+are read from the log through an off-heap cache (`WithValueCacheBytes`;
+default 1/16 of the memory limit, 16–256 MiB). The 1M × 1 KiB YCSB run
+peaked at 1.55 GiB, measured before the compressed key index; Pebble
+held ~0.09 GiB after its load. Old versions stay indexed until `loget
+compact` or `loget gc`. A disk-backed key index is roadmap item 1. See
+[operations.md](operations.md#memory-and-cache-sizing).
 
 **How fast is it?**
 See [benchmarks.md](benchmarks.md) and the summary in the README. They are
@@ -89,5 +100,8 @@ on PUT since August 2024, and Cloudflare R2
 Both should work, but we have not tested them yet; reports are welcome. Stores
 without create-only semantics cannot be opened for writing.
 
-**Why "indexes"?**
-Because they don't store anything of their own. They are ways of looking at the one log.
+**What is an index here?**
+A pure, deterministic fold over the log. Everything durable is in the log;
+an index holds only state it can rebuild from it, so it gets transactions,
+branches, time travel, compaction and shred from the core. KV is the
+built-in one. [How to write an index](index-authoring.md).

@@ -1,5 +1,11 @@
 # 08 — GC with retention: manifests, retired logs, history windows, journal space
 
+> **Historical note.** Written for freshDB, LogEt's predecessor, before
+> the 2026-10-31 rename; names were updated, the content was not. Parts
+> about topics, documents or vectors describe code on the `index/*`
+> branches, "v0.1.0" is freshDB v0.1.0, and numbers were measured on
+> freshDB.
+
 Status: design (item 8). Builds on [03-compaction.md](03-compaction.md).
 
 ## Problem

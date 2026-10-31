@@ -34,6 +34,7 @@ type Env interface {
 	// Shredded reports whether a subject has been crypto-shredded.
 	Shredded(subject string) bool
 	// Open returns op i's plaintext value; ok=false if the subject is shredded.
+	// The bytes may be shared with the engine: read-only, copy to keep.
 	Open(e *Entry, i int) (plain []byte, ok bool)
 }
 

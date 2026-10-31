@@ -1,5 +1,11 @@
 # 14. Observability (item 15; gaps S3.1–S3.4)
 
+> **Historical note.** Written for freshDB, LogEt's predecessor, before
+> the 2026-10-31 rename; names were updated, the content was not. Parts
+> about topics, documents or vectors describe code on the `index/*`
+> branches, "v0.1.0" is freshDB v0.1.0, and numbers were measured on
+> freshDB.
+
 ## Problem
 
 Before this change an operator of `loget serve` had `/healthz` (process

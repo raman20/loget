@@ -1,5 +1,11 @@
 # 02 — Point-read path (item 2)
 
+> **Historical note.** Written for freshDB, LogEt's predecessor, before
+> the 2026-10-31 rename; names were updated, the content was not. Parts
+> about topics, documents or vectors describe code on the `index/*`
+> branches, "v0.1.0" is freshDB v0.1.0, and numbers were measured on
+> freshDB.
+
 ## Goal
 Win back point-read throughput lost when values moved out of RAM into the
 log (YCSB C at 64 clients: v0.1.0 2.92M ops/s; files layout 1.21M; default

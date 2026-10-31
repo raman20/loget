@@ -11,11 +11,7 @@ $B calib -duration 1s -out "$OUT"
 for sys in loget badger pebble bbolt sqlite; do
   $B ycsb -system $sys -keys 5000 -workloads A,C,F,D -clients 1,8 -warmup 200ms -duration 500ms -dir "$D" -out "$OUT"
 done
-for sys in loget nats; do
-  $B msg -system $sys -rates 500 -groups 1,2 -group-rate 500 -duration 1s -drain 5s -dir "$D" -out "$OUT"
-done
-$B txn -clients 8 -hot 1,64 -partitions 1,2 -batch 1,5 -duration 500ms -dir "$D" -out "$OUT"
-$B vector -n 2000 -dim 32 -clusters 10 -queries 20 -clients 1 -duration 500ms -dir "$D" -out "$OUT"
+$B txn -clients 8 -hot 1,64 -duration 500ms -dir "$D" -out "$OUT"
 if [[ -n "${LOGET_BENCH_S3:-}" ]]; then
   $B s3 -batch 1,10 -clients 1,4 -segments 20 -duration 500ms -out "$OUT"
 fi

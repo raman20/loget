@@ -3,7 +3,7 @@
 // taken before close (so the directory is exactly what the workload left).
 // Used once per released version: see testdata/golden/README.md.
 //
-//	cd testdata/golden/gen && go run . ../v0.1.0 [fs://]
+//	cd testdata/golden/gen && go run . ../vX.Y.Z [fs://]
 package main
 
 import (
@@ -18,7 +18,7 @@ import (
 func main() {
 	ctx := context.Background()
 	dir, _ := filepath.Abs(os.Args[1])
-	scheme := "file://" // v0.1.0 has no fs://; newer versions: pass fs://
+	scheme := "file://" // the default local URL; pass fs:// for the files layout
 	if len(os.Args) > 2 {
 		scheme = os.Args[2]
 	}

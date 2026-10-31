@@ -7,6 +7,42 @@ break APIs and the on-storage format.
 
 ## [Unreleased]
 
+### LogEt: renamed, and KV-only `main` over a generic index framework (2026-10-31)
+
+LogEt is freshDB (last commit 5a08052) renamed, with history restarted.
+Everything below this section is freshDB's history, kept as it was.
+
+- **Renamed** freshDB → LogEt: module `github.com/raman20/loget`, binary
+  `loget`, environment variables `LOGET_*`, metrics `loget_*`, TLA+ specs
+  `LogEt*`. Name check and rejected names: `docs/rebrand/name-check.md`.
+- **On-storage magic strings changed**, so freshDB data does not open:
+  segment `FRDBSEG1` → `LGETSEG1`, checkpoint `FRDBIDX1` → `LGETIDX1`,
+  base `FRDBBAS1` → `LGETBAS1`, value chunk `FRDBVAL1` → `LGETVAL1`,
+  snapshot `FRSNAP2` → `LGSNAP2`, journal `FRESHJ1` → `LOGETJ1`. Golden
+  databases regenerated. There is no converter (no LogEt release exists).
+- **"One log, different indexes over it."** The old `lens` package is
+  now `index`: interface `index.Index`, registration `index.Kind`,
+  `index.Registry`, option `loget.WithIndex`. The shred certificate field
+  `lenses_purged` is now `indexes_purged`.
+- **Generic index framework.** The core no longer knows any index but KV:
+  declared key spaces per kind, `Tx.PutRecord` / `DeleteRecord` /
+  `GetRecord` / `ScanRecords`, read-set hooks `Tx.ReadKey` /
+  `Tx.ReadPrefix`, `Tx.Index`, snapshot sections `name@version`,
+  `DB.IndexDigests` / `RebuildDigests`. `Update` retries on `ErrConflict`.
+  Guide: `docs/index-authoring.md`; example with tests and a fuzzer:
+  `examples/counter`.
+- **`main` is KV only.** Topics, consumer groups and push, documents and
+  document field indexes, vectors and HNSW, and the cross-index
+  transaction APIs moved to branches `index/topics`, `index/docs`,
+  `index/vectors` and `index/txn`, to return one at a time
+  (`docs/PIPELINE.md`). Their CLI commands, HTTP endpoints, token
+  resources and TLA+ specs (`LogEtANN`, `LogEtRetain`) left `main` with them.
+- **Docs:** new `docs/ROADMAP.md` (KV gaps vs Pebble, RocksDB and LMDB by
+  impact), `docs/PIPELINE.md`, `docs/design/20-index-framework.md`; README
+  and website rewritten.
+
+## freshDB, after v0.1.0 (never released)
+
 Work on the losses listed in `docs/benchmarks.md`; before/after numbers are
 in its "Changes since v0.1.0" section.
 
@@ -441,7 +477,7 @@ in its "Changes since v0.1.0" section.
 - The FS store's fd cache is sized from `RLIMIT_NOFILE` (clamped) through
   build-tagged helpers, so Windows builds again.
 
-## [0.1.0] - 2026-10-27 — first public prototype (pre-release)
+## freshDB [0.1.0] - 2026-10-27 — first public prototype (pre-release)
 
 **Not for production use.** See the status section in the README.
 
@@ -493,5 +529,4 @@ in its "Changes since v0.1.0" section.
 - The simulator found that a delayed DEK create could land after a shred.
   Open and `verify` now sweep such keys.
 
-[Unreleased]: https://github.com/raman20/loget/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/raman20/loget/releases/tag/v0.1.0
+[Unreleased]: https://github.com/raman20/loget/commits/main

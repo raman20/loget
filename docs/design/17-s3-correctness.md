@@ -1,5 +1,11 @@
 # 17. S3 correctness (item 20; gaps S5.4, S6.5)
 
+> **Historical note.** Written for freshDB, LogEt's predecessor, before
+> the 2026-10-31 rename; names were updated, the content was not. Parts
+> about topics, documents or vectors describe code on the `index/*`
+> branches, "v0.1.0" is freshDB v0.1.0, and numbers were measured on
+> freshDB.
+
 ## Problem
 
 S3 support was tested with MinIO in CI on the happy path only: no

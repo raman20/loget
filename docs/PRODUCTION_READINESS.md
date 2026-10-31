@@ -4,9 +4,16 @@ LogEt is **not production ready**. This file lists every known gap, by
 severity, with its status. It is the source of truth for what "ready"
 would mean; `docs/STATUS.md` tracks finished work items.
 
-Written 2026-10-29 from a code read of `main` plus targeted probes
+Written 2026-10-29 from a code read of freshDB `main` plus targeted probes
 (each probe that found a bug is named). Update a row's status when the fix
 lands, with the commit.
+
+> **LogEt note (2026-10-31).** freshDB was renamed LogEt and `main` was cut
+> down to the log, the index framework and KV. Rows about topics, vectors
+> and documents (S5.2, S5.6, S5.7, and the topic parts of S2.2, S2.3, S3.7)
+> describe code that now lives on the `index/*` branches; they stay here as
+> the record and return to scope when that index is merged
+> ([PIPELINE.md](PIPELINE.md)). Measurements were taken on freshDB.
 
 Severity, highest first:
 
@@ -78,11 +85,11 @@ named), **documented** (accepted limit, written down where users read).
 
 | id | gap | status |
 |---|---|---|
-| S5.1 | The key index (every key and version) lives in RAM: memory grows with keys, ~10× Pebble steady state (design 07). | open: disk-backed key index deferred (no < 1 h route that keeps the formats and tests honest); on the ROADMAP |
-| S5.2 | HNSW build is single-threaded (16 min at 1M × 128-d); after a crash, vectors since the last clean close are re-inserted on open. `EnableANN` builds under the writer lock. Periodic checkpoints designed (design 19 #3), not built. | documented |
-| S5.7 | Vector search (component E review, docs/components/vectors.md): unbounded k/ef/ANN options from HTTP, in-tx `Search` blind to own writes and outside the read set, bad vectors as HTTP 500, `DecodeANN` panics, and >2·M identical vectors forming unreachable HNSW islands (recall@10 0.12 on 35 directions × 5k) | fixed (309aedc) with tests, fuzzing and mutation; open: crash cliff and `EnableANN` writer stall (S5.2), no filtered search / quantization / checkpoints (design 19, not built), near-duplicate clusters > 2·M not handled |
+| S5.1 | The key index (every key and version) lives in RAM: memory grows with keys, ~10× Pebble steady state (design 07). | open: disk-backed key index deferred (no < 1 h route that keeps the formats and tests honest); item 1 of [ROADMAP.md](ROADMAP.md) |
+| S5.2 | HNSW build is single-threaded (16 min at 1M × 128-d); after a crash, vectors since the last clean close are re-inserted on open. `EnableANN` builds under the writer lock. Periodic checkpoints designed (design 19 #3), not built. | moved to branch `index/vectors` (not on main) |
+| S5.7 | Vector search (component E review, docs/components/vectors.md): unbounded k/ef/ANN options from HTTP, in-tx `Search` blind to own writes and outside the read set, bad vectors as HTTP 500, `DecodeANN` panics, and >2·M identical vectors forming unreachable HNSW islands (recall@10 0.12 on 35 directions × 5k) | fixed (309aedc) with tests, fuzzing and mutation; open: crash cliff and `EnableANN` writer stall (S5.2), no filtered search / quantization / checkpoints (design 19, not built), near-duplicate clusters > 2·M not handled. Moved to branch `index/vectors` |
 | S5.3 | The journal file only shrinks offline (`gc --shrink`). The 6 h soak's 9.5 GiB was this: 40.8 M dead records; shrink took 8.57 GB allocated (244 GB apparent) to 0.45 GB in 6 min 54 s | documented, measured; open: online reclaim |
-| S5.6 | Topics without retention keep every message in RAM and in every compaction and snapshot: the 6 h soak's 11.37 M messages were ~1.09 GB of live heap (~95 B each), the bulk of its RSS | documented: retention exists since component C (`--topic-max-age`, `--topic-max-messages`); topic storage outside RAM is on the ROADMAP |
+| S5.6 | Topics without retention keep every message in RAM and in every compaction and snapshot: the 6 h soak's 11.37 M messages were ~1.09 GB of live heap (~95 B each), the bulk of its RSS | documented: retention exists since component C (`--topic-max-age`, `--topic-max-messages`); topics moved to branch `index/topics`; their merge bar includes storage outside RAM ([PIPELINE.md](PIPELINE.md)) |
 | S5.4 | S3 request cost per commit and per open is not measured. | fixed (measured): docs/s3.md — 1 PUT per serial commit, 0.06 with 32 writers, ~2 GETs per segment at open |
 | S5.5 | A snapshot is one object holding the whole key index; above 5 GiB a single S3 PUT fails (multipart is disabled). | open (not reached in tests; design 17) |
 
@@ -91,8 +98,8 @@ named), **documented** (accepted limit, written down where users read).
 | id | gap | status |
 |---|---|---|
 | S6.1 | Version stamps exist for manifests (`format`) and segments, not for snapshots, bases, ANN blobs or the token file; no single "format version" a user can query. | fixed: `ErrVersion` for manifest, segment, base, journal; caches rebuilt; unversioned objects gated by the manifest format; `loget version` lists formats — design 13 |
-| S6.2 | No golden files: an encoder change can alter the on-disk format without any test failing. | fixed: golden databases (v0.1.0 written by v0.1.0 code; main, main-compacted) with read and byte-identity tests |
-| S6.3 | No written upgrade/downgrade policy; migration is tested from v0.1.0 directories only. | fixed: docs/compatibility.md (policy + measured matrix); found: v0.1.0 opens a journal directory as empty (documented, unfixable in v0.1.0) |
+| S6.2 | No golden files: an encoder change can alter the on-disk format without any test failing. | fixed: golden databases (main, main-compacted, gen) with read and byte-identity tests. The freshDB v0.1.0 golden was dropped at the LogEt rename (LogEt does not read freshDB data) |
+| S6.3 | No written upgrade/downgrade policy; migration is tested from v0.1.0 directories only. | fixed: docs/compatibility.md (policy + measured matrix). LogEt has no release yet, so there is nothing to upgrade from; the first release starts the matrix |
 | S6.4 | No documented stable API surface, semver or deprecation policy. | fixed: docs/api-stability.md (surfaces labelled stable-track / experimental / internal); exported Go API snapshotted in `api/`, diffed in CI. HTTP/CLI not diffed |
 | S6.5 | S3: only MinIO is tested; AWS S3 and R2 are untested (need credentials). Conditional-write behaviour of other S3-compatibles is unknown. | partly fixed: `loget s3check` probes an endpoint; fault injection against MinIO; tested-on matrix in docs/s3.md. AWS/R2/GCS still untested |
 
@@ -106,11 +113,11 @@ soak evidence (one 6 h run passed; its growth mostly root-caused, the rate decli
 | area | verdict |
 |---|---|
 | durability / corruption handling | journal store: corruption detected, never silently dropped; power-loss modelled. Disk full tested by fault injection (S1.10). Still open: fs:// and S3 not power-loss modelled, no salvage tool |
-| formats / upgrades | stamps on every authoritative object, refusal tested, golden files for v0.1.0 and main, written policy. Not yet: frozen 1.0 policy, migration tooling for a future bump, old-binary column in CI |
+| formats / upgrades | stamps on every authoritative object, refusal tested, golden files for main, written policy. Not yet: frozen 1.0 policy, migration tooling for a future bump, old-binary column in CI |
 | observability | metrics, readiness, structured/access/slow logs and pprof exist and are tested. Not yet: tracing, shipped dashboards/alert rules, a real Prometheus scrape in CI |
 | backup / restore | online consistent backup, incremental, verified restore, PITR within retained history, drill (test + script). Not yet: S3-destination cost measured, scheduled backups, backup encryption beyond what the data already has |
 | operational safety | graceful drain + shutdown, bind-before-open, per-request timeouts, key/body/tx limits, lease records naming writers, 409 for busy maintenance; tested with the real binary. Not yet: rate limits, global in-flight cap, request-level DB deadlines |
 | soak / chaos | one 6 h soak passed (SOAK OK, 56.8 M ops, 134 kill -9 restarts, every full check and all 82 restored backups OK) and the long simulator passed (600 seeds × 2 000 steps, no violation): bench/results/2026-10-29-soak/. Not yet: a soak on S3, with network faults, longer than 6 h; growth root causes: disk, live heap, open peak, slow requests proven (S2.2, S2.8, S2.9, S5.3, S5.6), retention bounding memory confirmed by a 25 min soak, the rate decline partly explained (harness checks), a new 6 h run still to do |
-| memory bound | not ready: key index and index state in RAM (S5.1); disk-backed index deferred, on the ROADMAP |
+| memory bound | not ready: key index and index state in RAM (S5.1); a disk-backed key index is item 1 of [ROADMAP.md](ROADMAP.md) |
 | S3 | experimental. MinIO only (CI): fault injection (503, resets, lost replies) with no false fences or lost acks, request cost measured, `s3check` for other endpoints. Not yet: any real cloud provider, snapshots > 5 GiB |
 | API stability / supply chain | policy written, Go API diff-gated, govulncheck + SBOM + checksums in CI. Not yet: 1.0 freeze, HTTP/CLI compatibility tests, a published signing key, reproducible builds |

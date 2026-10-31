@@ -14,8 +14,17 @@ hand.
 - Every engine runs embedded in one Go process.
 - S3 numbers come from a local MinIO, not AWS.
 
-The sections from **Summary** on are the v0.1.0 run; see **Changes since
-v0.1.0** for reruns on unreleased `main`. LogEt is v0.1.0, an experimental prerelease. These numbers show where the
+> **History note (LogEt, 2026-10-31).** Every number on this page was
+> measured on freshDB, LogEt's predecessor, before the rename. The KV path
+> on LogEt `main` is the same engine code with new names, so the KV rows
+> describe it; nothing here has been re-run under the LogEt name yet.
+> The streaming, multi-index and vector sections measure code that now
+> lives on the `index/topics`, `index/txn` and `index/vectors` branches,
+> not on `main`. "v0.1.0" below is freshDB v0.1.0. New KV measurements
+> (vs Pebble) land with each [ROADMAP](ROADMAP.md) item.
+
+The sections from **Summary** on are the freshDB v0.1.0 run; see
+**Changes since v0.1.0** for later reruns. These numbers show where the
 design is fast and where it is slow. They are not a claim of production
 readiness.
 
@@ -263,7 +272,7 @@ OCC transfers, fsync on (commits/s; ops that gave up after 16 retries):
   ef 64 / 128 / 256, so efC stays 100 and the default ef is now 128
   (1M: 0.919 at 725 QPS c=1; 100k: 0.997 at 4.4k). Results:
   `bench/results/2026-10-29-hnsw-persist/`, design
-  [10](design/10-hnsw-persist.md).
+  10 (`docs/design/10-hnsw-persist.md` on branch `index/vectors`).
 - **Server auth (no "before" loss; overhead only).** `BenchmarkAuthGet`,
   in-process `GET /v1/kv/a` through `server.New`, 3 × 2 s: 1.94–2.08 µs
   without a token, 2.01–2.05 µs with one (≈ +0.06–0.1 µs, the header parse

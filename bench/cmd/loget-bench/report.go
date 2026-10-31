@@ -12,6 +12,9 @@ import (
 
 // cmdReport merges every *.json result in a directory into one markdown file.
 // It prints every run it finds: nothing is filtered or picked.
+// It still renders the msg and vector suites, which live on the
+// index/topics and index/vectors branches, so older result directories
+// (freshDB runs) render too.
 func cmdReport(args []string) {
 	fs := flag.NewFlagSet("report", flag.ExitOnError)
 	dir := fs.String("dir", "results", "directory with result JSON files")

@@ -5,8 +5,8 @@ import (
 	"fmt"
 )
 
-// Change notification for consumers (docs/design/06-push-consumers.md,
-// spec/LogEtNotify.tla). db.chg is created lazily by a waiter and closed by
+// Change notification for waiters (WaitHead; spec/LogEtNotify.tla, and
+// docs/design/06-push-consumers.md on branch index/topics). db.chg is created lazily by a waiter and closed by
 // bump whenever a branch head may have moved, so commits with nobody
 // waiting cost one uncontended mutex.
 

@@ -1,7 +1,8 @@
 # On-storage formats
 
-Describes unreleased `main`. v0.1.0 used the same segment, payload and
-manifest formats and only the files layout for local directories.
+Describes `main` (unreleased). The layouts are freshDB's with new magic
+strings ([rebrand notes](rebrand/README.md)); LogEt does not read
+freshDB data.
 
 > **Pre-1.0: these formats may change between minor versions.** Readers refuse
 > unknown versions with `ErrVersion` instead of guessing. A version bump will
@@ -19,7 +20,7 @@ payload's bytes canonical, which the hash chain relies on.
 <prefix>/
   manifest/<id:%020d>.mf             JSON manifest, create-only, dense ids from 1
   log/<logID>/<seq:%020d>.seg        segment = one group commit (or a fence), create-only, dense seq from 1
-  snap/<logID>/<lsn:%020d>.snap      optional KV+topic checkpoint (cache, never truth)
+  snap/<logID>/<lsn:%020d>.snap      optional index checkpoint (cache, never truth)
   log/<logID>/<seq>.idx                 segment-index checkpoint covering segments up to <seq> (cache, never
                                         truth; create-only; deleted with the segment by GC)
   log/<logID>/<seq>.repair              repair note of a damaged segment kept by --repair-tail:
@@ -42,8 +43,8 @@ payload's bytes canonical, which the hash chain relies on.
 
 A local directory stores the objects above in one of two layouts. The
 objects and their bytes are the same in both.
-- **files**: one file per object at its key path. This was the only
-  layout in v0.1.0, and it is the default on Windows.
+- **files**: one file per object at its key path. It is the default on
+  Windows.
   - Writes go to `.tmp/`, are fsynced, renamed into place, and then the
     directory is fsynced.
 - **journal** (`journal.fj`): the default for new directories on Unix.
@@ -73,7 +74,7 @@ objects and their bytes are the same in both.
 
 `loget migrate --db DIR [--to journal|files]` converts between the
 layouts offline, with a backup. It is crash-safe; see
-[operations.md](operations.md#migrating-a-v010-directory),
+[operations.md](operations.md#migrating-between-layouts),
 [design 01](design/01-journal-default.md) and
 [`spec/LogEtMigrate.tla`](../spec/LogEtMigrate.tla).
 
@@ -112,9 +113,9 @@ i64       commit timestamp (unix nanos, from the DB clock; part of the log so in
 [32]      prev  = hash-chain head before this frame
 uvarint   number of ops
 op × n:
-  u8      kind   1=PUT 2=DEL 3=APPEND 4=SHRED
+  u8      kind   1=PUT 2=DEL 3=APPEND (reserved for the topics index; main never writes it) 4=SHRED
   uvarint+bytes  subject   ("" = not subject-scoped; else subjectHash)
-  uvarint+bytes  space     "kv", "doc:<coll>", "vec:<coll>", "__cursor", topic name for APPEND, ...
+  uvarint+bytes  space     "kv", or a space owned by a registered index (index.Kind.Spaces)
   uvarint+bytes  key
   uvarint+bytes  value     plaintext, or nonce‖AES-GCM ciphertext if subject != ""
 ```
@@ -143,21 +144,21 @@ authentication.
     "L2": {"id": "L2", "parent": "L1", "parent_lsn": 10, "snap_lsn": 0, "snap_key": ""}
   },
   "refs": {"main": "L2", "exp": "L1"},
-  "reflog": [{"name": "main", "from": "L1", "to": "L2", "at": 10, "why": "rewind"}],
-  "indexes": [{"coll": "memories", "field": "user"}]
+  "reflog": [{"name": "main", "from": "L1", "to": "L2", "at": 10, "why": "rewind"}]
 }
 ```
 
-After a compaction (`main` only) the manifest has `"format": 2`, each
+After a compaction the manifest has `"format": 2`, each
 compacted log has a `"base": {"lsn", "seq", "key", "chunks", "chain", "ts"}`
 (the full state at `lsn`; segments before `seq` are no longer needed, nor
 is the parent), and a `"garbage"` list of
 `{"kind": "segs"|"snaps"|"base", "log", "below", "key", "chunks", "after"}`
-entries deleted once the clock passes `after`. v0.1.0 binaries refuse format
-2 instead of misreading it, so **a compacted database cannot be opened by
-v0.1.0**. A base object starts with the magic `LGETBAS1`, holds the KV image
-(KV snapshot encoding, values pointing into the chunks) and the topic image,
-and ends with section offsets and a CRC-32C; each value keeps its own CRC.
+entries deleted once the clock passes `after`. A base object is the magic
+`LGETBAS1`, the LSN (u64), the length of the record image (u64), the
+image (KV snapshot encoding of every record store space, values pointing
+into the chunks), and a CRC-32C; each value keeps its own CRC. Chunks
+start with `LGETVAL1`. Derived indexes are rebuilt from the base's
+records at open.
 See [design/03-compaction.md](design/03-compaction.md).
 
 The manifest with the highest id is current. Creating `id+1` is how a writer
@@ -203,8 +204,9 @@ u64  LSN covered
 32B  hash-chain head after that LSN
 u8   len(log id), then the log id
 u64  len(kv)
-kv index snapshot bytes
-topic index snapshot bytes
+kv index snapshot bytes (all record-store spaces)
+u32  section count
+section × count { u8 len(name) | name "<index>@<version>" | u64 len | bytes }   sorted by name
 u32  CRC32C(all of the above)
 ```
 
@@ -214,11 +216,10 @@ its head, and the hash-chain head equals the log's own at that LSN. So the
 bytes of another log's snapshot, or of a snapshot from a different history
 under the same name, are never loaded. Anything else (missing, damaged,
 mismatched) is ignored with a log line and the index is rebuilt from the
-log. Version 1 snapshots (the same layout without magic, LSN chain or log
-id) are ignored by this build; builds before it read the magic as an LSN
-past the head and ignore version 2 snapshots.
+log. A section whose name has no registered index at that version is ignored
+and that index is rebuilt from the log.
 
 The KV part starts with the tag `KV2` and records the inline limit it was
-written with. A `KV1` snapshot (v0.1.0) or one written with a different
+written with. A `KV1` snapshot or one written with a different
 limit is ignored the same way, and the log is replayed. Snapshots are off by
 default (`WithSnapshotEvery`).

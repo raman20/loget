@@ -20,8 +20,7 @@ clients, encrypt traffic, or hide metadata.
   space and key, so it can't be moved elsewhere.
 - DEKs are stored in `keys/dek/<hash>`, wrapped by the key-encryption key
   (KEK). Subject names are hashed before they reach storage.
-- **Not encrypted:** keys, document ids, topic names, collection names,
-  index declarations, and any value written without a subject. Use opaque ids in keys.
+- **Not encrypted:** keys, branch names, index key spaces, and any value written without a subject. Use opaque ids in keys.
 
 ## Shred
 
@@ -52,7 +51,7 @@ check object, `keys/_kekcheck`, sealed under the KEK, so a wrong key fails at
 open with `ErrWrongKEK` even before any subject has a DEK. Limits: there is no
 rekey (a database created in dev mode keeps needing `keys/_kek`), no
 built-in KMS client, and the signing seed `keys/_sign` still lives in the
-bucket ([roadmap](../ROADMAP.md)).
+bucket ([roadmap](ROADMAP.md)).
 
 ## Network
 
@@ -60,7 +59,7 @@ bucket ([roadmap](../ROADMAP.md)).
 
 - **Tokens.** `--token` or `LOGET_TOKEN` is one admin token;
   `--token-file` holds scoped tokens (read / write / admin, optionally
-  limited to kv prefixes, topics, doc or vector collections; see
+  limited to kv prefixes; see
   [operations.md](operations.md)). Every request except `GET /healthz`
   needs `Authorization: Bearer <token>` (401 unknown, 403 not allowed).
   Scopes apply to every branch: a write token can write any branch it can
@@ -69,8 +68,8 @@ bucket ([roadmap](../ROADMAP.md)).
   (2 s / 10 s polling) and on SIGHUP; a bad file keeps the old set.
 - **TLS.** `--tls-cert` / `--tls-key` (or `LOGET_TLS_CERT` / `_KEY`)
   serve HTTPS, TLS 1.2 minimum. No mTLS.
-- **Connection caps.** `--max-streams` / `--max-waiters` bound SSE streams
-  and long-polls (503 over the cap). There is no per-token rate limit.
+- **Rate limits.** There is no per-token rate limit or connection cap;
+  cap connections at a proxy if clients are untrusted.
 - **Open binds.** A non-loopback `--listen` (including `:7070`) without a
   token is refused unless you pass `--insecure-no-auth`. Over a network,
   use TLS too, or the token travels in clear text.

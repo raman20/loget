@@ -1,5 +1,11 @@
 # 12 — Durability: no silent data loss on corruption, crash or oversize input
 
+> **Historical note.** Written for freshDB, LogEt's predecessor, before
+> the 2026-10-31 rename; names were updated, the content was not. Parts
+> about topics, documents or vectors describe code on the `index/*`
+> branches, "v0.1.0" is freshDB v0.1.0, and numbers were measured on
+> freshDB.
+
 Production-readiness item 13 (docs/PRODUCTION_READINESS.md, rows S1.x).
 
 ## Problem

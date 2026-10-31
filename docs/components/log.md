@@ -238,9 +238,9 @@ single-request Get keeps one GET per object read (docs/s3.md).
 - **Checkpoint size grows with the log.** It is 24 B per segment and
   written with each snapshot, about 2.4 MB at 100k segments. Compaction
   resets it.
-- **Open is still O(log) when vector or document-index indexes are in
-  use.** They replay every segment because they have no snapshot yet.
-  This is planned for components D and E.
+- **Open is O(log) for a derived index that cannot snapshot.** One
+  without `Restore` replays every segment since the base. KV and the
+  counter example snapshot; see [index-authoring.md](../index-authoring.md).
 - S3 is tested only on MinIO. (The fs serial-put number was rerun on a
   quiet box after the soak: 281–326 µs, no regression.)
 - The 6 h soak (SOAK OK, 2026-10-30 02:09 IST) and the 4-shard long sim

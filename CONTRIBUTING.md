@@ -10,7 +10,7 @@ every size are welcome: bug reports, failing simulator seeds, docs, tests and co
 - For anything bigger than a small fix, **open an issue first** so we can agree
   on the approach.
 - Look for [`good first issue`](https://github.com/raman20/loget/labels/good%20first%20issue)
-  and the list in [ROADMAP.md](ROADMAP.md#good-first-issues).
+  and the list in [ROADMAP.md](docs/ROADMAP.md#good-first-issues).
 - Be kind. This project follows the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Development setup

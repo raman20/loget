@@ -65,7 +65,7 @@ type logetKV struct {
 
 // logetLayout maps a system name to a local layout: "loget" is the
 // default (store.OpenLocal: journal on Unix for a new directory),
-// "loget-files" the v0.1.0 one-file-per-segment layout, "loget-journal"
+// "loget-files" the one-file-per-object layout, "loget-journal"
 // the journal explicitly.
 func logetLayout(system string) store.Layout {
 	switch system {

@@ -6,14 +6,15 @@ a vector database for memory, an outbox table to keep them consistent, and a
 pile of scripts for backups and GDPR deletes. Each one has its own failure
 modes, its own backup story and its own deletion story.
 
-LogEt's bet is that **one log, read through several indexes, is simpler than
-six systems** for small and medium workloads. Every principle below exists to
+LogEt's bet is that **one log, with different indexes over it, is simpler
+than six systems** for small and medium workloads. `main` ships one index,
+KV, and makes it as good as it can be first; the others are added one at
+a time ([PIPELINE.md](PIPELINE.md)). Every principle below exists to
 protect that simplicity.
 
 ## 1. One log is the only truth
 
-Every write — KV, topic message, document, vector, consumer-group ack, shred
-marker — is a record in one append-only, hash-chained log. Everything else is
+Every write — a KV put, any other index's record, a shred marker — is a record in one append-only, hash-chained log. Everything else is
 derived and can be thrown away and rebuilt:
 
 ```

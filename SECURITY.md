@@ -67,9 +67,9 @@ consequence than the one described here.
   `KeyProvider` backed by your KMS), and expire old object versions. Open
   logs a warning in dev-key mode. There is no rekey yet, so a database
   created in dev-key mode cannot move to a real KEK; see the
-  [roadmap](ROADMAP.md).
+  [roadmap](docs/ROADMAP.md).
 - **Late DEK window.** If a DEK-create PUT is delayed past a shred, an orphan
   DEK can exist until the next open or `verify` sweeps it. LogEt never
   serves plaintext for a shredded subject in that window.
-- Keys, topic names and other metadata are **not encrypted**. Only values
+- Keys, branch names and other metadata are **not encrypted**. Only values
   written with a subject are. Do not put personal data in keys.

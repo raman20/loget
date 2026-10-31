@@ -1,5 +1,8 @@
 # LogEt research scan: October 2026
 
+> **Historical note.** Written for freshDB before the 2026-10-31 rename to
+> LogEt. Topic, vector and document ideas apply to the `index/*` branches.
+
 Status: research note, not a design. Written 2026-10-29 (IST). Nothing in it is
 implemented. It is not committed; the owner decides whether it goes in.
 This note is written to be safe to read without the code open.

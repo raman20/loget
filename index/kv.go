@@ -542,7 +542,7 @@ func (l *KV) Snapshot() []byte { return l.encode() }
 var ErrBadSnapshot = errors.New("index: bad snapshot")
 
 // LoadKV loads a snapshot. A snapshot written with a different inline
-// limit (or by v0.1.0, format KV1) is rejected; the caller then replays the
+// limit (or in the older format KV1) is rejected; the caller then replays the
 // log instead, so the result is always fold(log).
 func LoadKV(b []byte, inline int) (*KV, error) { return loadKV(b, inline, true) }
 

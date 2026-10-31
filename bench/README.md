@@ -1,7 +1,7 @@
 # loget-bench
 
 The benchmark suite for LogEt. It is a separate Go module, so the baselines
-(Badger, Pebble, bbolt, SQLite and NATS) never become dependencies of LogEt
+(Badger, Pebble, bbolt and SQLite) never become dependencies of LogEt
 itself.
 
 Methodology, hardware and caveats are in
@@ -12,7 +12,7 @@ Methodology, hardware and caveats are in
 ```bash
 cd bench
 scripts/smoke.sh                  # every suite at tiny size, about 1-2 minutes
-scripts/run-all.sh                # the full suite, about 1.5-2 hours
+scripts/run-all.sh                # the full suite, about 1-1.5 hours
 go run ./cmd/loget-bench report -dir results/<date>   # rebuild results.md
 ```
 
@@ -20,9 +20,10 @@ go run ./cmd/loget-bench report -dir results/<date>   # rebuild results.md
 |---|---|
 | `calib` | The harness noise floor on this machine: timer lateness, and an open-loop no-op at 20k/s |
 | `ycsb` | YCSB A/B/C/D/F, scrambled zipfian (θ=0.99), 1 KB values, closed loop (max) and open loop (at 0.5× max), for `-system loget\|badger\|pebble\|bbolt\|sqlite` |
-| `msg` | Streaming, OpenMessaging-style: end-to-end latency at fixed publish rates, consumer groups, and max throughput, for `-system loget\|nats` |
-| `txn` | OCC transfers on hot keys (commit/abort rates, plus a sum invariant), and the multi-index consume, write and ack transaction (with an exactly-once check) |
-| `vector` | recall@10 vs QPS on synthetic clustered vectors against a brute-force flat loop |
+| `txn` | OCC transfers on hot keys (commit/abort rates, plus a sum invariant), LogEt vs Badger |
+| `compact` | storage, open time and heap before/after compaction (overwrite-heavy) |
+| `commit` | commit latency tails on the journal |
+| `gc` | disk size per cycle under overwrite + branch + rewind churn |
 | `s3` | Commit latency, batch size, group commit, requests per commit, **estimated** request cost, and cold open vs segment count against an S3 endpoint (`-url` or `LOGET_BENCH_S3`) |
 | `report` | Merges the `*.json` in a directory into `results.md` (every run, no filtering) |
 

@@ -1,13 +1,15 @@
 # Getting started
 
-This walks through every index from the CLI, then the same engine from Go.
-All commands and outputs below are from a real run of unreleased `main` on
-Linux (LSNs depend on what you ran before; hashes differ every run).
+This walks through the KV index from the CLI, then the same engine from
+Go. `main` ships KV only; other indexes come one at a time
+([PIPELINE.md](PIPELINE.md)), and you can write your own
+([index-authoring.md](index-authoring.md)). All commands and outputs below
+are from a real run of `main` on Linux (LSNs depend on what you ran
+before; hashes differ every run).
 
 ## Install
 
-The latest release is v0.1.0, which predates the journal layout and
-`loget migrate`. To get what these docs describe, install `main`:
+There is no release yet. Install `main`:
 
 ```sh
 go install github.com/raman20/loget/cmd/loget@main     # needs Go 1.27+
@@ -51,73 +53,32 @@ $ loget scan config/
 [{"key":"config/model","value":"small"}]
 $ loget get config/temp --at 2              # time travel: as of LSN 2
 0.2
-```
-
-## Documents and indexes
-
-```console
-$ loget doc put memories m1 '{"user":"alice","text":"likes tea"}' --subject alice
+$ loget put user/alice/email alice@example.com --subject alice
 {"lsn":4}
-$ loget doc index memories user              # built by replaying the log
-{"ok":true}
-$ loget doc find memories user alice
-["m1"]
-$ loget doc get memories m1
-{"user":"alice","text":"likes tea"}
 ```
 
-`--subject alice` encrypts the value under Alice's key so it can be
-shredded later.
+`--subject alice` encrypts the value under Alice's own key so it can be
+shredded later (below).
 
-## Vectors
+## Transactions
 
-Cosine similarity, exact search.
+`tx` applies a batch of `put` / `del` ops atomically (one LSN):
 
 ```console
-$ loget vec put mem m1 0.9,0.1,0 --subject alice
-{"lsn":5}
-$ loget vec put mem m2 0,1,0
-{"lsn":6}
-$ loget vec search mem 1,0,0 -k 2
-[{"id":"m1","score":0.9938837},{"id":"m2","score":0}]
+$ loget tx '[{"op":"put","key":"stock/apple","value":"8"},{"op":"put","key":"order/2","value":"apple"},{"op":"del","key":"config/model"}]'
+{"lsn":5,"ops":3}
 ```
 
-## Topics and exactly-once processing
-
-```console
-$ loget pub tasks "summarise inbox"
-{"lsn":7}
-$ loget sub tasks --from 0 --max 1           # read without a group
-[{"lsn":7,"offset":0,"value":"summarise inbox"}]
-```
-
-To process a message exactly once, write the result and ack the group
-cursor in **one** transaction:
-
-```console
-$ loget tx '[{"op":"put","key":"result/t0","value":"3 unread"},{"op":"ack","topic":"tasks","group":"worker","offset":0}]'
-{"lsn":8,"ops":2}
-$ loget sub tasks --group worker             # nothing left for this group
-[]
-$ loget get result/t0
-3 unread
-```
-
-`loget sub --group G` on its own fetches *and* acks, so it is at-most-once
-for the client. `tx` ops: `put`, `del`, `pub`, `ack`, `doc`, `vec`.
-`sub --follow` long-polls (`?wait=30s`), so new messages arrive as soon as
-they commit. Over HTTP, `GET /v1/topics/{t}/stream` is a Server-Sent Events
-stream.
+From Go, `db.Update` runs a function as a serializable transaction: reads
+are validated at commit, and on a conflict the function is retried.
 
 ## Forget a subject
 
 ```console
 $ loget shred alice                          # prints a signed certificate
-{ "certificate": { ... "dek_deleted": true, ... "shred_lsn": 9, ... }, "valid_signature": true }
-$ loget doc find memories user alice
-[]
-$ loget vec search mem 1,0,0 -k 2            # m1 was Alice's
-[{"id":"m2","score":0}]
+{ "certificate": { ... "dek_deleted": true, ... "shred_lsn": 6, ... }, "valid_signature": true }
+$ loget get user/alice/email
+error (404): loget: not found
 $ loget verify
 { ..., "ok": true, ... }
 ```
@@ -130,7 +91,7 @@ decrypt them.
 
 ```console
 $ loget branch create try --at 2             # fork main as of LSN 2; copies nothing
-{"heads":{"main":9,"try":2},"ok":true}
+{"heads":{"main":6,"try":2},"ok":true}
 $ loget get config/temp --branch try
 0.2
 $ loget branch list                          # refs, heads and the reflog
@@ -151,7 +112,7 @@ curl -s localhost:7070/v1/kv/k                  # v
 curl -s -X PUT localhost:7070/v1/kv/k2 -d v2    # {"lsn":...}
 ```
 
-The endpoint list is in the [README](../README.md#api-tour). The server listens
+The endpoint list is in the [README](../README.md#go-api). The server listens
 on `127.0.0.1` by default. To expose it, add `--token` (or `LOGET_TOKEN`)
 and `--tls-cert` / `--tls-key`; see [operations](operations.md).
 
@@ -161,8 +122,9 @@ and `--tls-cert` / `--tls-key`; see [operations](operations.md).
 go get github.com/raman20/loget@main
 ```
 
-[`examples/tour/main.go`](../examples/tour/main.go) uses every index, time
-travel, branches, rewind, shred and verify on `mem://`. From a clone:
+[`examples/tour/main.go`](../examples/tour/main.go) uses KV, a scan, the
+example counter index, time travel, branches, rewind, shred and verify on
+`mem://`. From a clone:
 `go run ./examples/tour`.
 
 ```go
@@ -172,15 +134,15 @@ defer db.Close()
 db.Put(ctx, "config/model", []byte("small"))
 ```
 
-Options: `WithValueCacheBytes`, `WithInlineMax`, `WithKEK`,
+Options: `WithIndex` (register an index), `WithValueCacheBytes`, `WithInlineMax`, `WithKEK`,
 `WithSnapshotEvery`, `WithLogf` (see [operations.md](operations.md) and
 [pkg.go.dev](https://pkg.go.dev/github.com/raman20/loget)).
 
 ## The agent demo
 
 [`examples/agent-demo.sh`](../examples/agent-demo.sh) runs a server and walks
-an AI agent through memory, exactly-once tasks, undo, a branch plan and
-forgetting. It needs `jq` and `curl`:
+an AI agent through memory, tasks committed atomically with their
+results, undo, a branch plan and forgetting. It needs `jq` and `curl`:
 
 ```sh
 go build -o /tmp/loget ./cmd/loget && LOGET=/tmp/loget ./examples/agent-demo.sh

@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Before/after tables for docs/benchmarks.md "Changes since v0.1.0".
 
+Historical: v0.1.0 and every run it reads are freshDB, LogEt's predecessor
+(see docs/benchmarks.md). Kept so those tables stay reproducible.
+
 Reads only result JSON under bench/results; nothing is typed by hand.
 Usage: python3 bench/scripts/changes.py  (from the repo root)
 """

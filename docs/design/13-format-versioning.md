@@ -1,5 +1,13 @@
 # 13 — Format versioning, golden files, upgrade/downgrade policy
 
+> **Historical note.** Written for freshDB, LogEt's predecessor, before
+> the 2026-10-31 rename; names were updated, the content was not. Parts
+> about topics, documents or vectors describe code on the `index/*`
+> branches, "v0.1.0" is freshDB v0.1.0, and numbers were measured on
+> freshDB. LogEt changed every magic string and dropped the v0.1.0
+> golden (it cannot read freshDB data); see
+> [compatibility.md](../compatibility.md).
+
 ## Problem (audit S6.1–S6.3)
 
 - Manifests and segments had version stamps; a base or journal file from a

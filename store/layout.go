@@ -26,7 +26,7 @@ type Layout string
 const (
 	// LayoutNone is a missing or empty directory.
 	LayoutNone Layout = ""
-	// LayoutFiles is one file per object (FS; the v0.1.0 layout).
+	// LayoutFiles is one file per object (FS).
 	LayoutFiles Layout = "files"
 	// LayoutJournal is one append-only journal.fj (Journal).
 	LayoutJournal Layout = "journal"
@@ -74,7 +74,7 @@ func DetectLayout(dir string) (Layout, error) {
 }
 
 // OpenLocal opens dir in the layout it already has, or DefaultLayout if it
-// is new. Existing v0.1.0 directories keep the files layout; convert them
+// is new. Existing files-layout directories keep it; convert them
 // with Migrate.
 func OpenLocal(dir string) (Store, error) {
 	if dir == "" {

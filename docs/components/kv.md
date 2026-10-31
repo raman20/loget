@@ -30,7 +30,8 @@ what it does claim.
    sync), per the index import rule.
 6. **Values are not shared out.** `Version.Val` may alias an immutable
    run buffer; every caller copies it before it leaves the package
-   (`tx.open` `bytes.Clone`, compaction `Clone`, doc/vector decode).
+   (`tx.open` `bytes.Clone`, compaction `Clone`). Derived indexes see
+   values read-only and copy what they keep (index-authoring contract 8).
 
 ## Defects found and fixed
 

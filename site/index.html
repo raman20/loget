@@ -3,10 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>LogEt — One log. One binary. One API.</title>
-<meta name="description" content="LogEt: KV, streams, documents, vectors and transactions as indexes over one append-only log on object storage or local disk. Branch, rewind, provably forget. One Go binary, one API. Pre-1.0 prototype.">
-<meta property="og:title" content="LogEt — One log. One binary. One API.">
-<meta property="og:description" content="KV, streams, documents, vectors and transactions as indexes over one log. Branch, rewind, provably forget. Pre-1.0 prototype.">
+<title>LogEt — one log, different indexes over it</title>
+<meta name="description" content="LogEt (Danish/Norwegian for “the log”; “et” also means “one”): an embedded KV store built as an index over one append-only log on local disk or object storage, with transactions, branches, time travel and provable deletion. Pre-1.0, unreleased.">
+<meta property="og:title" content="LogEt — one log, different indexes over it">
+<meta property="og:description" content="A KV store as an index over one append-only log. Transactions, branches, time travel, provable deletion. KV first, more indexes one at a time. Pre-1.0.">
 <meta property="og:url" content="https://raman20.github.io/loget/">
 <meta name="twitter:card" content="summary">
 <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
@@ -17,7 +17,7 @@
   <div class="wrap nav-in">
     <a class="brand" href="#top"><img src="assets/favicon.svg" alt="" width="22" height="22"> LogEt</a>
     <div class="links">
-      <a href="#demo">Demo</a><a href="#install">Install</a><a href="#benchmarks">Benchmarks</a><a href="#how">How it works</a><a href="#limits">Limitations</a><a href="https://github.com/raman20/loget/blob/main/docs/index.md">Docs</a>
+      <a href="#demo">Demo</a><a href="#indexes">Indexes</a><a href="#install">Install</a><a href="#benchmarks">Benchmarks</a><a href="#status">Status</a><a href="https://github.com/raman20/loget/blob/main/docs/index.md">Docs</a>
       <a class="gh" href="https://github.com/raman20/loget">GitHub</a>
     </div>
   </div>
@@ -25,202 +25,165 @@
 
 <header class="hero" id="top">
   <div class="wrap">
-    <p class="eyebrow">Open source · Apache-2.0 · Go · pre-1.0 prototype</p>
-    <h1>One log. One binary.<br><span class="grad">One API.</span></h1>
-    <p class="lede">KV, streams, documents, vectors and transactions are <strong>indexes over a single append-only log</strong> on object storage or a local disk. Branch it, rewind it, and provably forget a user, from one Go binary with no other services.</p>
-    <p class="banner"><b>Pre-1.0 prototype — not for production.</b> The core is model-checked and simulation-tested. Compaction, the HNSW index, auth/TLS, push consumers, backup/restore, metrics and graceful shutdown are new; larger-than-RAM state, KMS clients and testing on real cloud object stores are not done yet. Readiness per area: <a href="https://github.com/raman20/loget/blob/main/docs/PRODUCTION_READINESS.md">PRODUCTION_READINESS.md</a>. Latest release: v0.1.0; this page describes unreleased <code>main</code>.</p>
+    <p class="eyebrow">Open source · Apache-2.0 · Go · pre-1.0, unreleased</p>
+    <h1>One log.<br><span class="grad">Different indexes over it.</span></h1>
+    <p class="lede"><strong>LogEt</strong> is Danish and Norwegian for <em>“the log”</em>, and <em>“et”</em> also means <em>“one”</em>. Everything is stored once, in one append-only log on a local disk or in an S3 bucket. An <strong>index</strong> is a pure fold over that log. The first one is <strong>KV</strong>, and every index gets transactions, branches, time travel and provable deletion from the log.</p>
+    <p class="banner"><b>Pre-1.0 and unreleased — not for production.</b> The log, transactions and shred are model-checked and simulation-tested. KV still keeps every key in RAM, only MinIO is tested among object stores, and the format may change before 1.0. <a href="https://github.com/raman20/loget/blob/main/docs/PRODUCTION_READINESS.md">Readiness per area</a>.</p>
     <div class="cta">
-      <a class="btn primary" href="https://github.com/raman20/loget">★ View on GitHub</a>
+      <a class="btn primary" href="https://github.com/raman20/loget">View on GitHub</a>
       <a class="btn" href="#install">Install</a>
       <a class="btn" href="https://github.com/raman20/loget/blob/main/docs/index.md">Read the docs</a>
-      <a class="btn" href="https://github.com/raman20/loget/releases">Releases</a>
     </div>
   </div>
 </header>
 
 <section class="wrap" id="demo">
   <h2>30-second demo</h2>
-  <p class="sub">Real output from <code>main</code>, on a fresh local directory. Hashes differ on every run.</p>
+  <p class="sub">Real output on a fresh local directory. Signatures differ on every run.</p>
 <pre class="term"><span class="p">$</span> loget put greeting "hello"
 {"lsn":1}
 <span class="p">$</span> loget put greeting "hello, world"
 {"lsn":2}
-<span class="p">$</span> loget get greeting --at 1                <i># time travel</i>
+<span class="p">$</span> loget get greeting --at 1          <i># time travel</i>
 hello
-<span class="p">$</span> loget pub events "signup: u17"            <i># topics + consumer groups</i>
-{"lsn":3}
-<span class="p">$</span> loget branch create exp                  <i># zero-copy branch</i>
-{"heads":{"exp":3,"main":3},"ok":true}
-<span class="p">$</span> loget rewind main 1                      <i># undo</i>
-{"heads":{"exp":3,"main":1},"ok":true}
 <span class="p">$</span> loget put user/u17/email alice@example.com --subject alice
-{"lsn":2}
-<span class="p">$</span> loget shred alice                        <i># forget, provably</i>
-{"certificate":{…,"dek_deleted":true,…,"shred_lsn":3,…},"valid_signature":true}
+{"lsn":3}
+<span class="p">$</span> loget tx '[{"op":"put","key":"stock/apple","value":"9"},…]'
+{"lsn":4,"ops":2}
+<span class="p">$</span> loget branch create exp            <i># zero-copy branch</i>
+{"heads":{"exp":4,"main":4},"ok":true}
+<span class="p">$</span> loget put stock/apple 1000         <i># a bad write…</i>
+{"lsn":5}
+<span class="p">$</span> loget rewind main 4                <i># …undone</i>
+{"heads":{"exp":4,"main":4},"ok":true}
+<span class="p">$</span> loget shred alice                  <i># forget, provably</i>
+{"certificate":{…,"dek_deleted":true,"indexes_purged":["kv"],…},"valid_signature":true}
 <span class="p">$</span> loget get user/u17/email
 <b class="warn">error (404): loget: not found</b>
-<span class="p">$</span> loget verify                             <i># CRCs, hash chains, fencing, shred proofs</i>
+<span class="p">$</span> loget verify                       <i># CRCs, hash chains, fencing, shred proofs</i>
 {…,"ok":true,…}</pre>
-  <p class="note">Longer walk-throughs: the <a href="https://github.com/raman20/loget/blob/main/README.md#5-minute-quickstart">README quickstart</a>, <a href="https://github.com/raman20/loget/blob/main/docs/getting-started.md">getting started</a> (documents, vectors, exactly-once from the CLI) and the <a href="https://github.com/raman20/loget/blob/main/examples/agent-demo.out">agent demo</a> (memory, undo, branch plans, forget).</p>
+  <p class="note">More: the <a href="https://github.com/raman20/loget/blob/main/README.md#quickstart">README quickstart</a>, <a href="https://github.com/raman20/loget/blob/main/docs/getting-started.md">getting started</a> and the <a href="https://github.com/raman20/loget/blob/main/examples/agent-demo.out">agent demo</a> (memory, undo, branch plans, forget).</p>
 </section>
 
-<section class="wrap">
-  <h2>Six systems → one log</h2>
-  <p class="sub">A typical app or agent backend glues these together. Each one has its own failure modes, backups and "delete this user" story.</p>
-  <div class="six"><div>Postgres<br><small>state</small></div><div>Redis<br><small>cache, locks</small></div><div>Kafka / SQS<br><small>events</small></div><div>Vector DB<br><small>memory</small></div><div>Outbox table<br><small>consistency</small></div><div>Scripts<br><small>backups, GDPR</small></div></div>
-  <div class="one">one append-only log on S3  →  indexes: KV · topics · docs · vectors · transactions</div>
+<section class="band" id="indexes">
+  <div class="wrap">
+  <h2>One log, different indexes</h2>
+  <p class="sub">The log is the only state. Each index folds it into whatever answers its queries fast, and can be rebuilt from it at any time.</p>
+  <div class="one">one append-only log  →  indexes: <b>KV</b> · your index · next: topics · documents · vectors · full-text</div>
   <div class="cards3" style="margin-top:26px">
-    <div class="card"><h3>One transaction for everything</h3><p>Consume a message, write the result and ack it atomically. Exactly-once processing with no outbox and no 2PC.</p></div>
-    <div class="card"><h3>Branch, rewind, time travel</h3><p>A branch is "parent log + LSN", so no data is copied. Undo a bad agent run, try a plan on a branch, or read any key as of any LSN.</p></div>
-    <div class="card"><h3>Provable deletion</h3><p>Shredding destroys a subject's key, so its data is unreadable on every index, branch and point in history. You get a signed certificate, and the hash chain still verifies.</p></div>
-    <div class="card"><h3>Simple to run</h3><p>A single static Go binary with no CGO. One URL: <code>./data</code> or <code>s3://bucket/prefix</code>. No ZooKeeper, no Raft, no brokers.</p></div>
-    <div class="card"><h3>Fencing without clocks</h3><p>Create-only writes (<code>If-None-Match: *</code>) plus epochs. A zombie writer can never commit after a new one opens.</p></div>
-    <div class="card"><h3>Correctness you can rerun</h3><p>TLA+ models checked by TLC, a deterministic fault-injecting simulator, property tests and kill -9 crash tests. All of them run in CI.</p></div>
+    <div class="card"><h3>Transactions for every index</h3><p>Serializable optimistic concurrency with a single writer and group commit. An index tells the core what its answers read, and conflicts retry.</p></div>
+    <div class="card"><h3>Branch, rewind, time travel</h3><p>A branch is “parent log + LSN”, so nothing is copied. Read any key as of any LSN, undo a bad run, try a plan on a branch and promote it.</p></div>
+    <div class="card"><h3>Provable deletion</h3><p>Shredding a subject deletes its key: its values are unreadable on every index, branch and point in history. You get a signed certificate and the hash chain still verifies.</p></div>
+    <div class="card"><h3>Write your own index</h3><p>Declare the key spaces you own, fold records with <code>Apply</code>, drop a subject with <code>DropSubject</code>, optionally snapshot. <a href="https://github.com/raman20/loget/blob/main/docs/index-authoring.md">How to write an index →</a></p></div>
+    <div class="card"><h3>Simple to run</h3><p>One static Go binary, no CGO. One URL: <code>./data</code> or <code>s3://bucket/prefix</code>. No brokers, no Raft, no ZooKeeper.</p></div>
+    <div class="card"><h3>Fencing without clocks</h3><p>Create-only writes plus epochs. A zombie writer can never commit after a newer one opens.</p></div>
   </div>
-  <p class="note">LogEt doesn't try to be the fastest at any one job. It tries to be the simplest thing that is good enough for small and medium apps and agents. <a href="https://github.com/raman20/loget/blob/main/docs/design-principles.md">Design principles, and what we refuse to build →</a></p>
+  <p class="note"><b>KV first.</b> Indexes reach <code>main</code> one at a time, each finished and benchmarked before the next. Topics, documents, vectors and cross-index transactions wait on branches. <a href="https://github.com/raman20/loget/blob/main/docs/PIPELINE.md">The pipeline →</a></p>
+  </div>
 </section>
 
-<section class="band" id="install">
-  <div class="wrap qs">
-    <h2>Install</h2>
-    <p class="sub">One static binary (no CGO): CLI, HTTP server and the engine. Go 1.27+.</p>
-    <div class="split">
-      <div>
-<p>Latest <code>main</code> (journal storage, faster vectors, everything on this page):</p>
-<pre class="code"><code>go install github.com/raman20/loget/cmd/loget@main
-loget version</code></pre>
-<p>Or build from source:</p>
+<section class="wrap" id="install">
+  <h2>Install</h2>
+  <p class="sub">No release yet. Build from source with Go 1.27+: one binary for the CLI, the HTTP server and the engine.</p>
+  <div class="split">
+    <div>
 <pre class="code"><code>git clone https://github.com/raman20/loget
-cd loget &amp;&amp; go build ./cmd/loget</code></pre>
-<p>The v0.1.0 release has binaries for Linux, macOS and Windows on <a href="https://github.com/raman20/loget/releases">Releases</a> (and is what <code>@latest</code> installs), but predates the changes since.</p>
-      </div>
-      <div>
-<p>Same commands on S3 or MinIO: change the URL.</p>
+cd loget &amp;&amp; go build -o loget ./cmd/loget
+./loget version</code></pre>
+<p>Or: <code>go install github.com/raman20/loget/cmd/loget@main</code></p>
+<p>On S3 or MinIO, change the URL:</p>
 <pre class="code"><code><span class="k">export</span> LOGET_URL=<span class="s">'s3://my-bucket/app1?endpoint=127.0.0.1:9000&amp;insecure=1&amp;create=1'</span>
 loget put hello world</code></pre>
-<p>Run the same engine as a JSON/HTTP server:</p>
+    </div>
+    <div>
+<p>As a JSON/HTTP server:</p>
 <pre class="code"><code>loget serve --listen 127.0.0.1:7070 &amp;
 curl -X PUT localhost:7070/v1/kv/k -d v
 curl localhost:7070/v1/kv/k</code></pre>
-<p>Or embed it in Go:</p>
+<p>Embedded in Go (<code>github.com/raman20/loget</code>):</p>
 <pre class="code"><code>db, _ := loget.Open(ctx, <span class="s">"./data"</span>)
 db.Update(ctx, <span class="k">func</span>(tx *loget.Tx) error {
-  g := tx.Topic(<span class="s">"tasks"</span>).Group(<span class="s">"worker"</span>)
-  msgs, _ := g.Fetch(1)
-  tx.Put(<span class="s">"result/1"</span>, out, loget.Subject(<span class="s">"alice"</span>))
-  <span class="k">return</span> g.Ack(msgs[0])   <span class="c">// atomic with the write</span>
+  v, _ := tx.Get(<span class="s">"stock/apple"</span>)
+  <span class="k">return</span> tx.Put(<span class="s">"stock/apple"</span>, next(v))  <span class="c">// retried on conflict</span>
 })</code></pre>
-      </div>
     </div>
-    <p class="note">Storage URLs, migrating v0.1.0 directories, cache sizing and backups: <a href="https://github.com/raman20/loget/blob/main/docs/operations.md">operations guide</a>.</p>
   </div>
+  <p class="note">Storage URLs, cache sizing, GC and backups: <a href="https://github.com/raman20/loget/blob/main/docs/operations.md">operations guide</a>.</p>
 </section>
 
-<section class="wrap" id="benchmarks">
-  <h2>Benchmarks, with the caveats up front</h2>
-  <p class="sub">Single runs on one shared, noisy 8-vCPU VM; every engine embedded in one Go process; fsync on. Other engines were run once at v0.1.0 and not rerun. Not a performance claim. <a href="https://github.com/raman20/loget/blob/main/docs/benchmarks.md">Full tables, method and raw JSON →</a></p>
+<section class="band" id="benchmarks">
+  <div class="wrap">
+  <h2>Benchmarks, caveats first</h2>
+  <p class="sub">Single runs on one shared, noisy 8-vCPU VM; engines embedded in one Go process; fsync on. Measured on freshDB, LogEt's predecessor, with the same KV path. Not a performance claim. <a href="https://github.com/raman20/loget/blob/main/docs/benchmarks.md">Method and raw data →</a></p>
   <div class="tblwrap"><table class="tbl">
-    <tr><th>YCSB, 1M × 1 KiB, ops/s</th><th class="n">LogEt main</th><th class="n">LogEt v0.1.0</th><th class="n">Pebble</th><th class="n">bbolt</th><th class="n">Badger</th></tr>
-    <tr><td>C read-only, 8 clients</td><td class="n">1.83M</td><td class="n">2.82M</td><td class="n">197k</td><td class="n">752k</td><td class="n">261k</td></tr>
-    <tr><td>B 95% read, 64 clients</td><td class="n">1.15M</td><td class="n">697k</td><td class="n">194k</td><td class="n">242k</td><td class="n">159k</td></tr>
-    <tr><td>A 50% update, 1 client</td><td class="n">46k</td><td class="n">3.7k</td><td class="n">32k</td><td class="n">22k</td><td class="n">19k</td></tr>
-    <tr><td>A 50% update, 64 clients</td><td class="n">231k</td><td class="n">81k</td><td class="n">119k</td><td class="n">24k</td><td class="n">25k</td></tr>
-    <tr><td>F read-modify-write, 64 clients</td><td class="n">131k</td><td class="n">67k + 9,660 gave up</td><td class="n">81k</td><td class="n">22k</td><td class="n">28k + 1,045 gave up</td></tr>
-    <tr><td>Peak RSS, whole run</td><td class="n">1.55 GiB</td><td class="n">7.1 GiB</td><td class="n">0.7 GiB</td><td class="n">1.7 GiB</td><td class="n">3.5 GiB</td></tr>
+    <tr><th>YCSB, 1M × 1 KiB, ops/s</th><th class="n">LogEt</th><th class="n">Pebble</th><th class="n">bbolt</th><th class="n">Badger</th><th class="n">SQLite</th></tr>
+    <tr><td>C read-only, 8 clients</td><td class="n">1.83M</td><td class="n">197k</td><td class="n">752k</td><td class="n">261k</td><td class="n">37k</td></tr>
+    <tr><td>B 95% read, 64 clients</td><td class="n">1.15M</td><td class="n">194k</td><td class="n">242k</td><td class="n">159k</td><td class="n">34k</td></tr>
+    <tr><td>A 50% update, 1 client</td><td class="n">46k</td><td class="n">32k</td><td class="n">22k</td><td class="n">19k</td><td class="n">9.3k</td></tr>
+    <tr><td>A 50% update, 64 clients</td><td class="n">231k</td><td class="n">119k</td><td class="n">24k</td><td class="n">25k</td><td class="n">13k</td></tr>
+    <tr><td>F read-modify-write, 64 clients</td><td class="n">131k</td><td class="n">81k</td><td class="n">22k</td><td class="n">28k</td><td class="n">8.9k</td></tr>
+    <tr><td>Peak RSS</td><td class="n">1.55 GiB</td><td class="n">0.7 GiB</td><td class="n">1.7 GiB</td><td class="n">3.5 GiB</td><td class="n">0.3 GiB</td></tr>
   </table></div>
   <div class="split" style="margin-top:22px">
-    <div class="card"><span class="tag ok">Better since v0.1.0</span><p>Durable single-client writes 12× faster (journal storage is now the default). Memory down from 7.1 to 1.55 GiB. No read-modify-write gives up any more. Exact vector search at 100k × 128-d: 19 → 1,051 QPS, recall 1.0. Durable publish: 119k msgs/s (NATS JetStream with <code>SyncAlways</code>: 8.5k). Opt-in HNSW: recall@10 0.988 at 3.3k QPS on 100k vectors (exact: 910). Push consumers: p99 at 1k msgs/s 1–15 ms vs 99 ms for a 100 ms poller.</p></div>
-    <div class="card"><span class="tag bad">Where it still loses</span><p>Memory vs Pebble: 1.55 vs 0.7 GiB peak, and ~1.5 vs ~0.09 GiB after Pebble’s bulk load (its data sits in the OS page cache). Point reads are below v0.1.0 (values now come from the log through a cache). Streaming p99 at 1k msgs/s is 3–43 ms across runs vs 1.9 ms for NATS. Badger commits more on one very hot key. HNSW at 1M vectors: recall@10 0.92 at the default ef 128 (725 QPS, one client); the graph is saved only on a clean close.</p></div>
+    <div class="card"><span class="tag ok">Where it does well</span><p>Reads while the key index fits in RAM, durable single-client writes on the journal layout (one <code>write</code> + <code>fdatasync</code> per commit), and concurrent writers through group commit. No read-modify-write gave up.</p></div>
+    <div class="card"><span class="tag bad">Where it loses</span><p>Memory: every key and version is indexed in RAM (~30 B/key heap at 10M keys); Pebble holds ~0.09 GiB after its load and leans on the page cache. Range reads are prefix-only. Compaction pauses commits for 11–14 ms. These are the next items on the roadmap.</p></div>
   </div>
-</section>
-
-<section class="band" id="how">
-  <div class="wrap">
-    <h2>How it works</h2>
-    <p class="sub">Everything is the log. Indexes are pure folds over it, and object storage is the only coordination primitive.</p>
-    <div class="flow">
-      <div class="node src"><b>Go API · HTTP · CLI</b><span>one code path</span><small>embedded or <code>loget serve</code></small></div>
-      <div class="arrow">→</div>
-      <div class="node rec"><b>Transactions</b><span>OCC, serializable</span><small>single writer per database</small></div>
-      <div class="arrow">→</div>
-      <div class="node"><b>Group commit</b><span>1 immutable segment per batch</span><small>per-subject AES-GCM values</small></div>
-      <div class="arrow">→</div>
-      <div class="node out"><b>Storage</b><span>create-only writes</span><small>S3 · MinIO · R2 · local journal file</small></div>
-    </div>
-    <div class="flow2">
-      <div class="node act"><b>Indexes</b><span>KV (MVCC) · topics + groups · docs + indexes · vectors</span><small>state == fold(redact(log, shredded))</small></div>
-      <div class="node"><b>Manifests</b><span>epoch · branches · reflog</span><small>create-only, dense ids = fencing</small></div>
-      <div class="node"><b>Segments</b><span>CRC32C frames · SHA-256 hash chain</span><small>torn tail repaired, never silent loss</small></div>
-    </div>
-    <p class="note">Read more: <a href="https://github.com/raman20/loget/blob/main/docs/architecture.md">architecture</a> · <a href="https://github.com/raman20/loget/blob/main/docs/formats.md">on-storage formats</a> · <a href="https://github.com/raman20/loget/blob/main/docs/index-authoring.md">index authoring</a></p>
   </div>
 </section>
 
 <section class="wrap" id="correctness">
   <h2>Correctness, shown rather than claimed</h2>
-  <p class="sub">Every bounded model ran its full state space with no errors. CI reruns them, plus 2,000 simulator seeds, fuzzing and MinIO tests, on every push. <a href="https://github.com/raman20/loget/blob/main/spec/RESULTS.md">spec/RESULTS.md</a></p>
+  <p class="sub">Bounded TLA+ models checked by TLC, a deterministic fault-injecting simulator, property tests, fuzzers and crash tests, all in CI. <a href="https://github.com/raman20/loget/blob/main/spec/RESULTS.md">spec/RESULTS.md</a></p>
   <div class="tblwrap"><table class="tbl">
-    <tr><th>TLA+ spec (TLC)</th><th>What it checks</th><th class="n">States</th><th class="n">Distinct</th></tr>
-    <tr><td>LogEtLog</td><td>durability, no holes, epoch monotone (no split brain), no double-apply, torn tail only unacked</td><td class="n">10,415,103</td><td class="n">2,475,220</td></tr>
-    <tr><td>LogEtTxn</td><td>exactly-once, atomic cursor, serializable, durable prefix</td><td class="n">21,685,744</td><td class="n">2,421,454</td></tr>
-    <tr><td>LogEtBranch</td><td>rewind exact, old head kept, append-only, time travel stable</td><td class="n">3,430,206</td><td class="n">1,845,287</td></tr>
-    <tr><td>LogEtMigrate</td><td>files ↔ journal migration: original always reachable, never a partial copy, resume finishes</td><td class="n">149</td><td class="n">88</td></tr>
-    <tr><td>LogEtCompact</td><td>compaction: no loss, fenced compactors can't commit, garbage is final, readers safe within the grace period</td><td class="n">1,557,725</td><td class="n">315,903</td></tr>
-        <tr><td>LogEtGC</td><td>GC with retention: nothing reachable deleted, window kept, deleted manifests can't be reused by a zombie writer</td><td class="n">6,582,415</td><td class="n">1,598,697</td></tr>
-    <tr><td>LogEtShred</td><td>shredded never revealed, no writes after shred, chain verifiable, key eventually gone</td><td class="n">25,570</td><td class="n">6,481</td></tr>
+    <tr><th>TLA+ spec</th><th>What it checks</th><th class="n">States</th></tr>
+    <tr><td>LogEtLog</td><td>durability, no holes, no split brain, torn tails, checkpoints</td><td class="n">22,587,747</td></tr>
+    <tr><td>LogEtTxn</td><td>serializable OCC, atomic commits, durable prefix</td><td class="n">21,685,744</td></tr>
+    <tr><td>LogEtGC</td><td>nothing reachable deleted, retention window kept, no zombie reuse</td><td class="n">6,582,415</td></tr>
+    <tr><td>LogEtBranch</td><td>rewind exact, old head kept, time travel stable</td><td class="n">3,430,206</td></tr>
+    <tr><td>LogEtCompact</td><td>no loss, fenced compactors can't commit, readers safe in the grace period</td><td class="n">1,557,725</td></tr>
+    <tr><td>LogEtShred</td><td>shredded data never revealed, no writes after shred, chain verifiable</td><td class="n">25,570</td></tr>
   </table></div>
-  <div class="cards3" style="margin-top:18px">
-    <div class="card"><h3>Deterministic simulation</h3><p>50,000 seeds, plus 10,000 on the final code. That run covered 137,293 acked transactions, 75,537 crashes, 29,979 writer takeovers and 114,926 injected storage faults, each checked against a reference model.</p></div>
-    <div class="card"><h3>Property tests + crash tests</h3><p><code>index == fold(log)</code> and <code>DropSubject == fold(redacted)</code> with rapid. 200 kill -9 rounds with 4 concurrent writers, and no acked write was lost.</p></div>
-    <div class="card"><h3>Bugs found, then fixed</h3><p>TLC found a stale-opener race that could brick the log. Fuzzing found non-canonical varints. The other tools found a vector index state that wasn't canonical, and a late-landing DEK.</p></div>
-  </div>
-  <p class="note">The specs are bounded and matched to the code by hand. That is evidence, not proof.</p>
+  <p class="note">Bounded models matched to the code by hand: evidence, not proof.</p>
 </section>
 
-<section class="band" id="limits">
+<section class="band" id="status">
   <div class="wrap">
-    <h2>Honest limitations</h2>
-    <p class="sub">A pre-1.0 prototype. Please don't put real personal data in it yet.</p>
+    <h2>Honest status</h2>
+    <p class="sub">Pre-1.0 and unreleased. Please don't put real personal data in it yet.</p>
     <div class="split">
       <ul class="lim">
-        <li>Keys, KV history, topics, documents and vectors live in RAM. Old versions are only dropped by <code>loget compact</code> / <code>loget gc</code> (new; GC keeps a configurable time-travel window), which keep every topic message; the journal file shrinks only offline (<code>gc --shrink</code>).</li>
-        <li>The opt-in HNSW vector index is saved on a clean close and reloaded on open (10 s at 1M vectors, was 17 min); after a crash, newer vectors are re-inserted, and building it is single-threaded.</li>
-        <li>One writer per database, with no HA and no read replicas yet.</li>
-        <li>Only MinIO is tested (with fault injection). AWS S3 and R2 document the needed conditional writes but are untested; <code>loget s3check</code> probes an endpoint.</li>
-        <li>The journal layout is new; its 8 MiB growth step stalls the commit path briefly.</li>
+        <li><b>KV gaps, by impact:</b> the key index is in RAM; prefix scans only (no bounded or reverse iterators); no bulk load; compaction pauses commits and rewrites live data; no TTL; no value compression.</li>
+        <li>One writer per database, no HA, no replicas.</li>
+        <li>Only MinIO is tested (with fault injection). Run <code>loget s3check</code> before trying AWS S3 or R2.</li>
       </ul>
       <ul class="lim">
-        <li>The HTTP server has bearer tokens scoped read/write/admin (optionally per collection) and optional TLS, both reloaded without a restart; no mTLS or per-branch rights. It binds to 127.0.0.1 by default.</li>
-        <li>In dev mode the KEK lives in the bucket. Backups taken before a shred can still decrypt that subject.</li>
-        <li>Keys and values without a subject are plaintext and are not covered by shred.</li>
+        <li>Keys and values without a subject are plaintext and are not covered by shred. In dev-key mode the key lives next to the data. Backups taken before a shred can still decrypt it.</li>
+        <li>The server has scoped bearer tokens and TLS and binds to 127.0.0.1 by default; no mTLS.</li>
         <li>The on-storage format may change before 1.0.</li>
       </ul>
     </div>
-    <p class="note">Full list: <a href="https://github.com/raman20/loget/blob/main/README.md#status-and-limitations">status and limitations</a> · <a href="https://github.com/raman20/loget/blob/main/docs/security.md">security notes</a></p>
+    <p class="note"><a href="https://github.com/raman20/loget/blob/main/docs/ROADMAP.md">Roadmap: perfect KV first →</a> · <a href="https://github.com/raman20/loget/blob/main/docs/security.md">security notes</a></p>
   </div>
 </section>
 
 <section class="wrap" id="roadmap">
-  <h2>Roadmap</h2>
-  <p class="sub">No dates. Everything has to respect the design principles. <a href="https://github.com/raman20/loget/blob/main/ROADMAP.md">ROADMAP.md</a></p>
+  <h2>Next: perfect KV, one measured item at a time</h2>
+  <p class="sub">Each with a design note, tests, a before/after benchmark against Pebble, and docs.</p>
   <div class="road">
-    <div><b>Topic retention + TTL</b><br>on top of GC (history windows now on main)</div>
-    <div><b>Persisted index snapshots</b><br>open in O(tail), not O(history)</div>
-    <div><b>Disk-backed indexes</b><br>datasets larger than RAM</div>
-    <div><b>Persisted ANN index</b><br>HNSW is on main; save it with snapshots</div>
-    <div><b>KMS clients + rekey</b><br>token auth, TLS, KeyProvider on main</div>
-    <div><b>Read replicas, no Raft</b><br>tail the log from S3</div>
-    <div><b>SQL layer</b><br>outside the core</div>
-    <div><b>Lakehouse export</b><br>Iceberg / Parquet by LSN range</div>
-    <div><b>Multi-writer</b><br>later, only if it stays simple</div>
+    <div><b>1. Disk-backed key index</b><br>databases larger than RAM</div>
+    <div><b>2. Range scans</b><br>bounded, reverse, streaming iterators</div>
+    <div><b>3. Batch API</b><br>write-only batches, bulk load</div>
+    <div><b>4. TTL</b><br>expiry as a pure function of the log</div>
+    <div><b>5. Snapshots</b><br>pinned handles compaction respects</div>
+    <div><b>6. Compaction</b><br>incremental, without a commit pause</div>
   </div>
-  <p class="note">Want to help? See the <a href="https://github.com/raman20/loget/blob/main/ROADMAP.md#good-first-issues">good first issues</a> and <a href="https://github.com/raman20/loget/blob/main/CONTRIBUTING.md">CONTRIBUTING.md</a>.</p>
+  <p class="note">Then the indexes on the <a href="https://github.com/raman20/loget/blob/main/docs/PIPELINE.md">pipeline</a>: topics, documents, cross-index transactions, vectors, full-text, lakehouse export.</p>
 </section>
 
 <footer class="foot">
   <div class="wrap foot-in">
-    <span>LogEt · Apache-2.0 · pre-1.0 prototype</span>
-    <span><a href="https://github.com/raman20/loget">GitHub</a> · <a href="https://github.com/raman20/loget/blob/main/docs/index.md">Docs</a> · <a href="https://github.com/raman20/loget/releases">Releases</a> · <a href="https://github.com/raman20/loget/blob/main/CHANGELOG.md">Changelog</a> · <a href="https://pkg.go.dev/github.com/raman20/loget">Go docs</a> · <a href="https://github.com/raman20/loget/blob/main/SECURITY.md">Security</a></span>
+    <span>LogEt · Apache-2.0 · pre-1.0 · evolved from freshDB</span>
+    <span><a href="https://github.com/raman20/loget">GitHub</a> · <a href="https://github.com/raman20/loget/blob/main/docs/index.md">Docs</a> · <a href="https://github.com/raman20/loget/blob/main/CHANGELOG.md">Changelog</a> · <a href="https://pkg.go.dev/github.com/raman20/loget">Go docs</a> · <a href="https://github.com/raman20/loget/blob/main/SECURITY.md">Security</a></span>
   </div>
 </footer>
 </body>

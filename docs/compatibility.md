@@ -9,7 +9,7 @@ reasoning and [formats.md](formats.md) for the byte layouts.
 `loget version` prints the formats the binary reads and writes:
 
 ```
-formats: manifest 1-2, segment 1, base 1, journal 1, snapshot 2 (KV2), checkpoint 1, ann 1
+formats: manifest 1-2, segment 1, base 1, journal 1, snapshot 2 (KV2), checkpoint 1
 ```
 
 | object | stamp | unknown version |
@@ -18,9 +18,8 @@ formats: manifest 1-2, segment 1, base 1, journal 1, snapshot 2 (KV2), checkpoin
 | segment (`.seg`) | magic `LGETSEG1` + u16 version | open fails, `ErrVersion` |
 | base (`.base`) | magic `LGETBAS1` (last byte = version) | open fails, `ErrVersion` |
 | journal file (`journal.fj`) | magic `LOGETJ1\0` (byte 6 = version) | open fails, `ErrVersion` |
-| KV/topic snapshot (`.snap`) | magic `LGSNAP2\n` (v2, bound to its log and hash chain); `KV2` tag inside | ignored, rebuilt from the log (cache). v1 snapshots (no magic) are ignored by this build; older builds ignore v2 ones |
+| snapshot (`.snap`) | magic `LGSNAP2\n` (v2, bound to its log and hash chain); `KV2` tag inside, then one section per derived index named `name@version` | ignored, rebuilt from the log (cache); a section of another index version is ignored and that index replays |
 | segment-index checkpoint (`.idx`) | magic `LGETIDX1` (last byte = version) | ignored, the segments are scanned (cache). Older builds ignore `.idx` objects; their GC leaves them behind (a few bytes each) |
-| HNSW snapshot (`ann/`) | magic `LHNSW1` | ignored, rebuilt (cache) |
 | value chunk (`.val`) | magic `LGETVAL1`, not checked | gated by the manifest format (each value has its own CRC) |
 | keys (`keys/…`), shred certificates, token file | none | gated by the manifest format |
 
@@ -51,30 +50,31 @@ database rather than misreading one object.
 
 ## Tested matrix
 
-| written by → read by | v0.1.0 | main |
-|---|---|---|
-| v0.1.0 (files layout) | yes | yes (golden `v0.1.0`, files and after `migrate` to journal) |
-| main, uncompacted, files layout | yes (reads the same state; drops the `ann` setting from the manifest it writes, so HNSW is off after going back) | yes (golden `main`) |
-| main, compacted (manifest 2) | refused: "manifest format 2 not supported by this binary" | yes (golden `main-compacted`) |
-| main, journal layout | **not recognised**: v0.1.0 treats the directory as empty and creates a new files-layout database next to `journal.fj` (main keeps using the journal and ignores those files) | yes |
+No LogEt version has been released, so there is nothing older to read
+yet. LogEt does **not** read freshDB data: every magic string changed at
+the rename ([rebrand notes](rebrand/README.md)), and freshDB's golden
+`v0.1.0` database was dropped with it. A freshDB binary does not
+recognise LogEt objects either.
 
-The v0.1.0 column was run once by hand with the v0.1.0 code
-(`testdata/golden/gen`, see its README), not in CI.
+| written by → read by | main |
+|---|---|
+| main, uncompacted (files and journal layouts) | yes (golden `main`) |
+| main, compacted (manifest 2) | yes (golden `main-compacted`) |
+
+The first LogEt release adds its own golden directory and a column here.
 
 ## Golden files
 
 `testdata/golden/<version>/db` holds a database written by that version's
 code with one fixed workload (KV with inline and out-of-line values,
-deletes, topics, a consumer group, documents with an index, vectors, a
-shredded subject, a branch), and `dump.txt` what that version read back.
+deletes, records of a second record-store index, a shredded subject, a
+branch), and `dump.txt` what that version read back.
 
 - `TestGoldenRead` opens a copy of each one (files layout, and journal
   after `store.Migrate`) and must read exactly `dump.txt`.
 - `TestGoldenBytes` rebuilds `main` and `main-compacted` with fixed clock
   and randomness and requires every object to be byte-identical, so an
   encoder change cannot alter the on-storage format without a failing test.
-  (HNSW snapshots are compared on amd64 only: fused multiply-adds on arm64
-  can change float bits; they are a cache.)
 - An intended format change: bump the stamp, copy the current `main*`
   directories to `testdata/golden/<last release or commit>` so they stay
   under `TestGoldenRead`, then `LOGET_UPDATE_GOLDEN=1 go test -run

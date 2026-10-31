@@ -14,8 +14,8 @@ import (
 	"github.com/raman20/loget/store"
 )
 
-// v010DB builds a database in the v0.1.0 files layout with KV, topic and
-// branch data, and returns a digest of its state.
+// v010DB builds a database in the files layout (freshDB v0.1.0's only
+// layout) with KV, test-index records and branch data, and returns a digest of its state.
 func v010DB(t *testing.T, dir string) string {
 	t.Helper()
 	db, err := Open(ctx, "fs://"+dir, quiet(), WithIndex(tallyKind()))
@@ -51,7 +51,7 @@ func digestDB(t *testing.T, db *DB) string {
 	return out
 }
 
-// A v0.1.0 directory opens unchanged under the default URL, and after
+// A files-layout directory opens unchanged under the default URL, and after
 // `loget migrate` opens as a journal with identical index state.
 func TestMigrateDatabase(t *testing.T) {
 	if runtime.GOOS == "windows" {

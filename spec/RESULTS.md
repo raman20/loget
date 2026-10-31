@@ -4,10 +4,18 @@
 branches, compaction, GC, migration, journal growth, notification and
 shredding. LogEtANN (persisted HNSW graphs) and LogEtRetain (topic retention
 vs consumer groups) moved with their indexes to the `index/vectors` and
-`index/topics` branches. The `Fresh*` names are historical (freshDB) and kept
-so results stay comparable. LogEtTxn still models its transaction as
+`index/topics` branches. The specs were renamed from `Fresh*` (freshDB) to
+`LogEt*` with no change to their logic; the rename re-run is recorded
+below. LogEtTxn still models its transaction as
 "consume a message + write KV + advance a cursor"; on main that is the shape
 of any read-modify-write over two keys and a counter, so the model stands.
+
+**Rename re-run (2026-10-31 21:17–21:20 IST).** All nine `LogEt*` specs
+on main, `spec/run_tlc.sh` with the pinned v1.7.4 jar (sha 936a2620…),
+Java 21, `-workers auto` on the 8-vCPU dev box: no error, and every state
+count and depth equals the table below (LogEtLog 22,587,747 / 5,697,022,
+depth 32; LogEtGC 6,582,415 / 1,598,697, depth 28). The mutant configs
+were not re-run under the new names.
 
 TLC 2.19 (tla2tools v1.8.0), Java 21, 8 workers, on the dev box (2026-10-27).
 
@@ -142,4 +150,4 @@ the first run reported 32 with identical state counts.
   tests (see README) check the code itself against reference models.
 - Torn writes are over-approximated as any subset of a batch's frames (the
   real format keeps a prefix).
-- Snapshots, vector/doc indexes and the HTTP layer are not modelled.
+- Snapshots, derived indexes (the index framework) and the HTTP layer are not modelled.

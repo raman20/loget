@@ -1,5 +1,11 @@
 # 16. Operational safety (item 17; gaps S2.3, S2.4, S2.5, S2.7)
 
+> **Historical note.** Written for freshDB, LogEt's predecessor, before
+> the 2026-10-31 rename; names were updated, the content was not. Parts
+> about topics, documents or vectors describe code on the `index/*`
+> branches, "v0.1.0" is freshDB v0.1.0, and numbers were measured on
+> freshDB.
+
 ## Problems (found in the audit, confirmed by tests before the fix)
 
 - **Shutdown (S2.3).** `serve` called `ListenAndServe`; on SIGTERM a

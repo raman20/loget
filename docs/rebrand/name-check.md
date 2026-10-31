@@ -76,7 +76,8 @@ Checked on 2026-10-31 (~21:00 IST) from the box:
 | GitHub repo search "loget" in name | 53 hits, all tiny and unrelated (top: a 2-star RPL routing project, a 1-star blog tool `Matt-SD/Loget`); no database or log engine |
 
 Not a trademark search. Risk: English readers may say "lo-get"; the
-README tagline ("the log") says what it means.
+README tagline ("One log, different indexes over it.") and the
+meaning line ("the log"; "et" = one) say what it means.
 
 ## Names considered and dropped
 

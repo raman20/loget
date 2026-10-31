@@ -1,7 +1,7 @@
 # Architecture
 
-> Status: describes unreleased `main` (pre-1.0 prototype); v0.1.0 differences
-> are noted. See [formats.md](formats.md) for byte layouts and
+> Status: describes `main` (pre-1.0, unreleased; KV is the only built-in
+> index). See [formats.md](formats.md) for byte layouts and
 > [operations.md](operations.md) for running it.
 
 ```mermaid
@@ -11,7 +11,7 @@ flowchart LR
     TX --> W["writer<br/>sequencer + group commit"]
     W -->|"encrypt values<br/>per subject (AES-GCM)"| W
     subgraph Indexes["indexes = pure folds over the log"]
-      KV["KV (MVCC)"]; TOP["topics + groups"]; DOC["docs + indexes"]; VEC["vectors"]
+      KV["KV (record store, MVCC)"]; YOU["derived indexes<br/>(WithIndex)"]
     end
     W -->|"apply after ack"| Indexes
     TX -->|reads| Indexes
@@ -32,7 +32,7 @@ get/list/delete and ranged reads, it has one key primitive: `PutIfAbsent`
   Unix): every object is a record in one preallocated append-only file,
   `journal.fj`, indexed in memory. A create-only put is one `write` plus one
   `fdatasync`. An exclusive `flock` guards writers.
-- **Files** (`fs://`, the v0.1.0 layout and the Windows default): one file per
+- **Files** (`fs://`, and the Windows default): one file per
   object, written as a temp file plus `renameat2(RENAME_NOREPLACE)` (or
   `link`), with fsync of the file and the directory.
 - `mem://` for tests, and `store.Faulty`, which wraps any store to inject
@@ -44,7 +44,7 @@ own, and `loget migrate` converts offline (model-checked in
 
 **Manifest** (`manifest.go`). A small JSON document holding the writer epoch,
 the logs (each with an optional parent and fork LSN), branch refs → log ids,
-the reflog and declared doc indexes. Manifests are numbered densely
+the reflog and garbage awaiting deletion. Manifests are numbered densely
 (`manifest/00000000000000000007.mf`) and are only ever *created*, never
 overwritten. Whoever creates id N+1 owns the database from then on.
 
@@ -82,20 +82,26 @@ only after that object is durable. If a PUT's outcome is unknown (for example
 a timeout), the writer reads the object back. If it still can't tell, it
 returns `ErrUnknownOutcome` and never acks.
 
-**Indexes** (`index/`). KV with full version history (MVCC), topics with
-consumer-group cursors, documents with secondary indexes, and vectors with
-cosine search. Each is a deterministic fold over log entries; see
-[index-authoring.md](index-authoring.md). Index state lives in memory, with one
-exception: the KV index keeps values larger than `InlineMax` (64 B) as a
+**Indexes** (`index/`, `records.go`). The log carries records
+`(space, key, value, subject)`; each index kind declares the key spaces it
+owns (`index.Kind`, registered with `WithIndex`). All records are stored
+in one MVCC record store, the KV structure (`index/kv.go`): recent
+versions in a hash map, older ones frozen into immutable, front-coded,
+hash-indexed runs that merge incrementally
+([components/kv.md](components/kv.md)). KV itself is a record store with
+the `kv` space. A *derived* index additionally folds its records into its
+own state; the core replays the compaction base and the log into it. See
+[index-authoring.md](index-authoring.md) and
+[design 20](design/20-index-framework.md). Index state lives in memory,
+with one exception: the KV index keeps values larger than `InlineMax` (64 B) as a
 position (segment, offset, length, CRC-32C) in their immutable segment, and
 reads them back on demand through the **value cache** (`vcache.go`: 64
 shards of byte rings in one off-heap `mmap` arena, default 256 MiB,
 `WithValueCacheBytes`). Every value read from storage is CRC-checked before
 it is returned or cached, and values are copied on the way in and out.
-Vectors live in one contiguous `float32` slab per collection; search is an
-exact, parallel scan with a bounded top-k heap. KV and topic indexes can be
-checkpointed to `snap/` (off by default), but checkpoints are an
-optimisation, never the source of truth.
+Index state can be checkpointed to `snap/` (`WithSnapshotEvery`, off by
+default): the KV image plus one section per derived index that can
+snapshot. Checkpoints are an optimisation, never the source of truth.
 
 **Branches** (`branch.go`). A branch is a log with a parent and a fork LSN, so
 creating one copies no data. Reads on a branch see the parent's entries up to
@@ -120,9 +126,9 @@ ciphertext stays in old segments. Because the hash chain covers the stored
 ciphertext, it still verifies. `Verify` re-checks everything and sweeps any
 DEK that landed late.
 
-**Compaction** (`compact.go`, `main` only). Runs on the writer with commits
-paused. For each log it writes a *base image* at the head (latest live KV
-versions, every topic message, large values in ≤ 64 MiB chunks), then commits
+**Compaction** (`compact.go`). For each log it writes a *base image* at the
+head (the latest live version of every record, large values in ≤ 64 MiB
+chunks), then, with commits briefly paused, commits
 one create-only manifest that points the log at its base, drops the parent
 link and lists the replaced segments, bases and snapshots as garbage with a
 not-before time (the grace period). Due garbage, and orphan bases from an
@@ -131,12 +137,14 @@ older epoch, are swept at the next compaction. Reads below the base return
 [`spec/LogEtCompact.tla`](../spec/LogEtCompact.tla); details in
 [design/03-compaction.md](design/03-compaction.md).
 
-## Why one log is enough for exactly-once
+## Why one log is enough for cross-index transactions
 
-A consumer group's cursor is just another key in the log. "Fetch message,
-write result, advance cursor" is one serializable transaction, so it commits
-entirely or not at all. There is no separate outbox and no two-phase commit.
-The LogEtTxn TLA+ model checks this (`ExactlyOnce`, `AtomicCursor`).
+Every index's records are entries in the same log, and a transaction
+commits as one frame. So a transaction that writes KV and, say, a
+consumer group's cursor (when topics return, [PIPELINE.md](PIPELINE.md))
+commits entirely or not at all, with no outbox and no two-phase commit.
+The LogEtTxn TLA+ model checks this with a consume-and-ack workload
+(`ExactlyOnce`, `AtomicCursor`).
 
 ## What runs where
 
