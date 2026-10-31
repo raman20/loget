@@ -42,7 +42,7 @@ LogEt is a database, so changes to its core carry a higher bar:
 | You changed… | Also do this |
 |---|---|
 | anything | `gofmt`, `go vet`, `staticcheck`, `go test -race ./...` |
-| a lens | keep `lens == fold(log)` and `DropSubject == fold(redacted)`; property tests in `lens/` |
+| an index | keep `index == fold(log)` and `DropSubject == fold(redacted)`; property tests in `index/` |
 | writer, recovery, fencing, branches, shred | run the simulator with more seeds: `go test ./sim -run TestSimulation -seeds=5000` |
 | the protocol (what is written to storage, and when) | update the TLA+ spec in `spec/`, run `spec/run_tlc.sh`, update `spec/RESULTS.md` |
 | the on-storage format | update `docs/formats.md`, bump the version, add a CHANGELOG entry |

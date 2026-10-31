@@ -66,7 +66,7 @@ func TestValuesByPosition(t *testing.T) {
 				}
 				check(db, "main", 0, 1)
 				check(db, "main", mid, 0)
-				// the lens keeps positions for large values, bytes for small ones
+				// the index keeps positions for large values, bytes for small ones
 				v := db.views[db.man.Refs["main"]]
 				if ver, ok := v.kv.Get(spaceKV, "k1", v.head); !ok || !ver.Ref() || ver.Val != nil {
 					t.Fatalf("large value not kept as a position: %+v", ver)
@@ -90,7 +90,7 @@ func TestValuesByPosition(t *testing.T) {
 }
 
 // Subject-encrypted large values are positions too: they decrypt with the
-// op index kept in the lens, and become unreadable after Shred.
+// op index kept in the index, and become unreadable after Shred.
 func TestEncryptedValuesByPosition(t *testing.T) {
 	db := mustOpen(t, store.NewMem(), WithInlineMax(-1))
 	defer db.Close()
@@ -119,7 +119,7 @@ func TestEncryptedValuesByPosition(t *testing.T) {
 	}
 }
 
-// A value whose bytes change under the lens is reported, never returned.
+// A value whose bytes change under the index is reported, never returned.
 func TestValueChecksumDetectsCorruption(t *testing.T) {
 	st := store.NewMem()
 	db := mustOpen(t, st, WithValueCacheBytes(-1))
@@ -143,7 +143,7 @@ func TestValueChecksumDetectsCorruption(t *testing.T) {
 }
 
 // Values returned by Get and Scan belong to the caller: scribbling on them
-// must not change what later reads see (the value cache and inline lens
+// must not change what later reads see (the value cache and inline index
 // values are shared between reads).
 func TestReturnedValuesAreCallerOwned(t *testing.T) {
 	db := mustOpen(t, store.NewMem())
@@ -192,8 +192,8 @@ func TestReturnedValuesAreCallerOwned(t *testing.T) {
 	}
 }
 
-// Buffers passed to Put/Publish may be reused by the caller once the call
-// returns, and topic messages read back belong to the caller too.
+// Buffers passed to Put/PutRecord may be reused by the caller once the
+// call returns, and values read back belong to the caller too.
 func TestWrittenBuffersAreNotRetained(t *testing.T) {
 	db := mustOpen(t, store.NewMem())
 	for _, n := range []int{8, 4000} {
@@ -203,7 +203,7 @@ func TestWrittenBuffersAreNotRetained(t *testing.T) {
 			if err := tx.Put(key, buf); err != nil {
 				return err
 			}
-			return tx.Topic("t").Publish(buf)
+			return tx.PutRecord("t:b", key, buf)
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -215,17 +215,17 @@ func TestWrittenBuffersAreNotRetained(t *testing.T) {
 			t.Fatalf("Get %s after the caller reused its Put buffer: %q %v", key, got[:4], err)
 		}
 		for round := 0; round < 2; round++ {
-			var msgs []Message
+			var recs []Record
 			if err := db.View(ctx, func(tx *Tx) error {
 				var err error
-				msgs, err = tx.Topic("t").Read(0, 10)
+				recs, err = tx.ScanRecords("t:b", key)
 				return err
 			}); err != nil {
 				t.Fatal(err)
 			}
-			last := msgs[len(msgs)-1].Value
+			last := recs[len(recs)-1].Value
 			if !bytes.Equal(last, want) {
-				t.Fatalf("topic read (n=%d round %d): %q", n, round, last[:4])
+				t.Fatalf("record scan (n=%d round %d): %q", n, round, last[:4])
 			}
 			for i := range last {
 				last[i] = 'Q'

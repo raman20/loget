@@ -10,6 +10,7 @@ import (
 	"log"
 
 	"github.com/raman20/loget"
+	"github.com/raman20/loget/examples/counter"
 )
 
 func must(err error) {
@@ -21,7 +22,7 @@ func must(err error) {
 func main() {
 	ctx := context.Background()
 	// One URL: a directory, s3://bucket/prefix?endpoint=..., or mem:// for tests.
-	db, err := loget.Open(ctx, "mem://tour", loget.WithLogf(func(string, ...any) {}))
+	db, err := loget.Open(ctx, "mem://tour", loget.WithLogf(func(string, ...any) {}), loget.WithIndex(counter.Kind()))
 	must(err)
 	defer db.Close()
 
@@ -30,44 +31,28 @@ func main() {
 	v, _ := db.Get(ctx, "config/model")
 	fmt.Printf("kv: config/model = %s\n", v)
 
-	// Topics + consumer groups: the result write and the ack are one transaction.
+	// Transactions: serializable, optimistic. Reads are checked at
+	// commit; a conflicting commit is retried by Update.
 	must(db.Update(ctx, func(tx *loget.Tx) error {
-		tx.Topic("tasks").Publish([]byte("summarise inbox"))
-		return tx.Topic("tasks").Publish([]byte("draft reply"))
+		tx.Put("user/alice/email", []byte("alice@example.com"), loget.Subject("alice"))
+		tx.Put("user/bob/email", []byte("bob@example.com"), loget.Subject("bob"))
+		return tx.Put("users", []byte("2"))
 	}))
-	must(db.Update(ctx, func(tx *loget.Tx) error {
-		g := tx.Topic("tasks").Group("worker")
-		msgs, err := g.Fetch(1)
-		if err != nil || len(msgs) == 0 {
-			return err
-		}
-		fmt.Printf("topic: worker got offset %d %q\n", msgs[0].Offset, msgs[0].Value)
-		if err := tx.Put("result/0", []byte("3 unread, 1 urgent")); err != nil {
-			return err
-		}
-		return g.Ack(msgs[0]) // commits atomically with result/0, or not at all
-	}))
-
-	// Documents + a secondary index added later (built by replaying the log).
-	must(db.Update(ctx, func(tx *loget.Tx) error {
-		tx.Doc("memories").Put("m1", map[string]any{"user": "alice", "text": "allergic to peanuts"}, loget.Subject("alice"))
-		return tx.Doc("memories").Put("m2", map[string]any{"user": "bob", "text": "likes window seats"}, loget.Subject("bob"))
-	}))
-	must(db.RegisterIndex(ctx, "memories", "user"))
 	must(db.View(ctx, func(tx *loget.Tx) error {
-		ids, err := tx.Doc("memories").Find("user", "alice")
-		fmt.Printf("docs: memories where user=alice -> %v\n", ids)
+		kvs, err := tx.Scan("user/")
+		fmt.Printf("scan user/: %d keys, first %s\n", len(kvs), kvs[0].Key)
 		return err
 	}))
 
-	// Vectors (cosine, brute force).
+	// An index: examples/counter keeps live counts per value as it folds
+	// the log (docs/index-authoring.md).
 	must(db.Update(ctx, func(tx *loget.Tx) error {
-		tx.Vector("mem").Put("m1", []float32{0.9, 0.1, 0}, loget.Subject("alice"))
-		return tx.Vector("mem").Put("m2", []float32{0.1, 0.9, 0}, loget.Subject("bob"))
+		counter.Set(tx, "lunch", "alice", "tacos", loget.Subject("alice"))
+		return counter.Set(tx, "lunch", "bob", "soup", loget.Subject("bob"))
 	}))
 	must(db.View(ctx, func(tx *loget.Tx) error {
-		hits, err := tx.Vector("mem").Search([]float32{1, 0, 0}, 1)
-		fmt.Printf("vectors: nearest to [1 0 0] -> %s (%.3f)\n", hits[0].ID, hits[0].Score)
+		c, err := counter.Counts(tx, "lunch")
+		fmt.Printf("index: lunch votes %v\n", c)
 		return err
 	}))
 
@@ -96,9 +81,9 @@ func main() {
 	must(err)
 	fmt.Printf("shred: certificate for LSN %d, DEK deleted=%v, signed=%v\n", cert.ShredLSN, cert.DEKDeleted, cert.Signature != "")
 	must(db.View(ctx, func(tx *loget.Tx) error {
-		ids, _ := tx.Doc("memories").Find("user", "alice")
-		hits, _ := tx.Vector("mem").Search([]float32{1, 0, 0}, 1)
-		fmt.Printf("after shred: docs(user=alice) -> %v, nearest -> %s\n", ids, hits[0].ID)
+		_, err := tx.Get("user/alice/email")
+		c, _ := counter.Counts(tx, "lunch")
+		fmt.Printf("after shred: user/alice/email -> %v, lunch votes %v\n", err, c)
 		return nil
 	}))
 	err = db.Update(ctx, func(tx *loget.Tx) error { return tx.Put("x", []byte("y"), loget.Subject("alice")) })

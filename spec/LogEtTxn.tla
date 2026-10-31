@@ -1,12 +1,12 @@
 ---------------------------- MODULE LogEtTxn ----------------------------
 (***************************************************************************)
-(* Serializable OCC transactions across lenses (writer.go conflict()),    *)
+(* Serializable OCC transactions across indexes (writer.go conflict()),    *)
 (* the "consume a message + write KV + ack cursor in one txn" pattern.    *)
 (*                                                                         *)
 (* A txn reads at snapshot LSN `snap`, records its read set, and at commit *)
 (* the single writer aborts it if any key in its read set was written at   *)
 (* an LSN > snap (blind writes never conflict). A committed txn is ONE log *)
-(* entry, so all its lens effects (topic cursor, KV) are atomic; a crash   *)
+(* entry, so all its index effects (topic cursor, KV) are atomic; a crash   *)
 (* loses a suffix of entries, never part of one.                          *)
 (***************************************************************************)
 EXTENDS Naturals, Sequences, FiniteSets

@@ -7,16 +7,14 @@
 //	GET    /v1/kv/{key}?at=             read (time travel with at=LSN)
 //	PUT    /v1/kv/{key}                 write (body = value)
 //	DELETE /v1/kv/{key}
-//	POST   /v1/topics/{t}               publish (body = message)
-//	GET    /v1/topics/{t}?from=&max=&at=&wait=   (wait=30s: long-poll, max 60s)
-//	POST   /v1/topics/{t}/groups/{g}/next?max=&wait=   fetch + ack in ONE txn
-//	GET    /v1/topics/{t}/stream?from=   server-sent events (Last-Event-ID resumes)
-//	PUT    /v1/docs/{coll}/{id}  GET /v1/docs/{coll}/{id}  GET /v1/docs/{coll}?field=&value=
-//	PUT    /v1/vectors/{coll}/{id} (body [f,...])  POST /v1/vectors/{coll}/search {"vector":[..],"k":5}
 //	GET    /v1/branches   POST /v1/branches {"name","from","at"}
 //	POST   /v1/branches/{b}/rewind {"lsn"}   POST /v1/branches/{b}/promote {"to"}
 //	DELETE /v1/branches/{b}
 //	GET    /v1/log?branch=&from=          POST /v1/shred/{subject}    GET /v1/verify
+//	POST   /v1/compact  POST /v1/gc  POST /v1/backup?to=  GET /metrics   (admin)
+//
+// Only the KV index is served over HTTP. Other indexes are embedded-only
+// until they are ported back from their branches (docs/PIPELINE.md).
 package server
 
 import (
@@ -29,38 +27,25 @@ import (
 	"net/http"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/raman20/loget"
 	"github.com/raman20/loget/format"
-	"github.com/raman20/loget/lens"
 	"github.com/raman20/loget/store"
 )
 
 type Server struct {
 	DB *loget.DB
 
-	streams, waiters chan struct{} // nil: no cap
-	maxBody          int64
-	obs              *observer
-	pprof            bool
-	drainCtx         context.Context // canceled when Options.Drain closes; nil: never
-	readTO, writeTO  time.Duration
+	maxBody         int64
+	obs             *observer
+	pprof           bool
+	drainCtx        context.Context // canceled when Options.Drain closes; nil: never
+	readTO, writeTO time.Duration
 }
 
 func newServer(db *loget.DB, o Options) *Server {
 	s := &Server{DB: db, obs: newObserver(o), pprof: o.Pprof && (o.Token != "" || o.Auth != nil)}
-	mk := func(n, def int) chan struct{} {
-		if n == 0 {
-			n = def
-		}
-		if n < 0 {
-			return nil
-		}
-		return make(chan struct{}, n)
-	}
-	s.streams, s.waiters = mk(o.MaxStreams, 1024), mk(o.MaxWaiters, 4096)
 	s.maxBody = int64(o.MaxBody)
 	if s.maxBody <= 0 {
 		s.maxBody = DefaultMaxBody
@@ -81,17 +66,6 @@ func newServer(db *loget.DB, o Options) *Server {
 }
 
 func (s *Server) draining() bool { return s.drainCtx != nil && s.drainCtx.Err() != nil }
-
-// drainable returns ctx, also canceled when draining starts (for streams
-// and long polls).
-func (s *Server) drainable(ctx context.Context) (context.Context, context.CancelFunc) {
-	ctx, cancel := context.WithCancel(ctx)
-	if s.drainCtx == nil {
-		return ctx, cancel
-	}
-	stop := context.AfterFunc(s.drainCtx, cancel)
-	return ctx, func() { stop(); cancel() }
-}
 
 // deadlineBody clears the connection's read deadline once the body is
 // read, so it bounds the upload only, not the handler.
@@ -157,16 +131,6 @@ func (s *Server) routes() http.Handler {
 	h("PUT /v1/kv/{key...}", W, "kv", path("key"), s.put)
 	h("DELETE /v1/kv/{key...}", W, "kv", path("key"), s.del)
 	h("POST /v1/tx", W, "tx", nil, s.tx)
-	h("POST /v1/topics/{t}", W, "topic", path("t"), s.pub)
-	h("GET /v1/topics/{t}", R, "topic", path("t"), s.read)
-	h("POST /v1/topics/{t}/groups/{g}/next", R, "topic", path("t"), s.next)
-	h("GET /v1/topics/{t}/stream", R, "topic", path("t"), s.stream)
-	h("PUT /v1/docs/{c}/{id}", W, "docs", path("c"), s.docPut)
-	h("GET /v1/docs/{c}/{id}", R, "docs", path("c"), s.docGet)
-	h("GET /v1/docs/{c}", R, "docs", path("c"), s.docFind)
-	h("PUT /v1/vectors/{c}/{id}", W, "vectors", path("c"), s.vecPut)
-	h("DELETE /v1/vectors/{c}/{id}", W, "vectors", path("c"), s.vecDel)
-	h("POST /v1/vectors/{c}/search", R, "vectors", path("c"), s.vecSearch)
 	h("GET /v1/branches", R, "", nil, s.branches)
 	h("POST /v1/branches", W, "", nil, s.branchCreate)
 	h("POST /v1/branches/{b}/rewind", A, "", nil, s.rewind)
@@ -175,8 +139,6 @@ func (s *Server) routes() http.Handler {
 	h("GET /v1/log", R, "", nil, s.log)
 	h("POST /v1/shred/{subject}", A, "", nil, s.shred)
 	h("GET /v1/verify", R, "", nil, s.verify)
-	h("POST /v1/indexes", A, "", nil, s.index)
-	h("POST /v1/vectors/{c}/ann", A, "", nil, s.vecANN)
 	h("POST /v1/compact", A, "", nil, s.compact)
 	h("POST /v1/gc", A, "", nil, s.gc)
 	h("POST /v1/backup", A, "", nil, s.backup)
@@ -185,21 +147,6 @@ func (s *Server) routes() http.Handler {
 		pprofRoutes(func(p string, f http.HandlerFunc) { h(p, A, "", nil, f) })
 	}
 	return m
-}
-
-// acquire takes a slot of a capped pool, or answers 503.
-func acquire(w http.ResponseWriter, pool chan struct{}, what string) (release func(), ok bool) {
-	if pool == nil {
-		return func() {}, true
-	}
-	select {
-	case pool <- struct{}{}:
-		return func() { <-pool }, true
-	default:
-		w.Header().Set("Retry-After", "1")
-		fail(w, fmt.Errorf("%w: too many concurrent %s (limit %d)", errBusy, what, cap(pool)))
-		return nil, false
-	}
 }
 
 var errBusy = errors.New("busy")
@@ -355,13 +302,9 @@ func (s *Server) scan(w http.ResponseWriter, r *http.Request) {
 
 // TxOp is one operation of an atomic POST /v1/tx batch.
 type TxOp struct {
-	Op      string          `json:"op"` // put, del, pub, ack, doc, vec
+	Op      string          `json:"op"` // put or del
 	Key     string          `json:"key,omitempty"`
-	Value   json.RawMessage `json:"value,omitempty"` // string for put/pub, object for doc, array for vec
-	Topic   string          `json:"topic,omitempty"`
-	Group   string          `json:"group,omitempty"`
-	Offset  uint64          `json:"offset,omitempty"`
-	Coll    string          `json:"coll,omitempty"`
+	Value   json.RawMessage `json:"value,omitempty"` // a JSON string (its bytes) or any other JSON value (its raw text)
 	Subject string          `json:"subject,omitempty"`
 }
 
@@ -381,16 +324,7 @@ func (s *Server) tx(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, o := range ops {
-		kind, name := "kv", o.Key
-		switch o.Op {
-		case "pub", "ack":
-			kind, name = "topic", o.Topic
-		case "doc":
-			kind, name = "docs", o.Coll
-		case "vec":
-			kind, name = "vectors", o.Coll
-		}
-		if err := permit(r, ScopeWrite, kind, name); err != nil {
+		if err := permit(r, ScopeWrite, "kv", o.Key); err != nil {
 			fail(w, err)
 			return
 		}
@@ -407,17 +341,6 @@ func (s *Server) tx(w http.ResponseWriter, r *http.Request) {
 				err = tx.Put(o.Key, asBytes(o.Value), wo...)
 			case "del":
 				err = tx.Delete(o.Key)
-			case "pub":
-				err = tx.Topic(o.Topic).Publish(asBytes(o.Value), wo...)
-			case "ack":
-				err = tx.Topic(o.Topic).Group(o.Group).Seek(o.Offset + 1)
-			case "doc":
-				err = tx.Doc(o.Coll).Put(o.Key, o.Value, wo...)
-			case "vec":
-				var v []float32
-				if err = json.Unmarshal(o.Value, &v); err == nil {
-					err = tx.Vector(o.Coll).Put(o.Key, v, wo...)
-				}
 			default:
 				err = fmt.Errorf("%w: unknown op %q", errBad, o.Op)
 			}
@@ -432,443 +355,6 @@ func (s *Server) tx(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	reply(w, map[string]any{"lsn": lsn, "ops": len(ops)})
-}
-
-// ---- topics ----
-
-type msgOut struct {
-	Offset   uint64 `json:"offset"`
-	LSN      uint64 `json:"lsn"`
-	Value    string `json:"value"`
-	Redacted bool   `json:"redacted,omitempty"`
-}
-
-func msgs(ms []loget.Message) []msgOut {
-	out := []msgOut{}
-	for _, m := range ms {
-		out = append(out, msgOut{m.Offset, m.LSN, string(m.Value), m.Redacted})
-	}
-	return out
-}
-
-func (s *Server) pub(w http.ResponseWriter, r *http.Request) {
-	r = s.with(r)
-	b, err := body(r)
-	if err != nil {
-		fail(w, err)
-		return
-	}
-	lsn, err := update(r, func(tx *loget.Tx) error { return tx.Topic(r.PathValue("t")).Publish(b, opts(r)...) })
-	if err != nil {
-		fail(w, err)
-		return
-	}
-	reply(w, map[string]any{"lsn": lsn})
-}
-
-func (s *Server) read(w http.ResponseWriter, r *http.Request) {
-	r = s.with(r)
-	from, _, err := u64(r, "from")
-	if err != nil {
-		fail(w, err)
-		return
-	}
-	max, _, _ := u64(r, "max")
-	max = capMax(max)
-	_, timeTravel, _ := u64(r, "at")
-	wait, err := waitParam(r)
-	if err != nil {
-		fail(w, err)
-		return
-	}
-	if wait > 0 {
-		release, ok := acquire(w, s.waiters, "long-polls")
-		if !ok {
-			return
-		}
-		defer release()
-		writeDeadline(w, wait+s.writeTO)
-	}
-	dctx, dcancel := s.drainable(r.Context())
-	defer dcancel()
-	ctx, cancel := context.WithTimeout(dctx, wait)
-	defer cancel()
-	for {
-		var ms []loget.Message
-		var at uint64
-		err = view(r, func(tx *loget.Tx) (err error) {
-			at = tx.At()
-			ms, err = tx.Topic(r.PathValue("t")).Read(from, int(max))
-			return
-		})
-		if err != nil {
-			fail(w, err)
-			return
-		}
-		if len(ms) > 0 || wait == 0 || timeTravel {
-			reply(w, msgs(ms))
-			return
-		}
-		if more, err := s.waitHead(ctx, r, at); err != nil {
-			fail(w, err)
-			return
-		} else if !more {
-			reply(w, msgs(ms))
-			return
-		}
-	}
-}
-
-// maxWait caps ?wait= for long-polls.
-const maxWait = 60 * time.Second
-
-// waitParam parses ?wait= (a Go duration like 30s, or seconds); 0 = none.
-func waitParam(r *http.Request) (time.Duration, error) {
-	v := r.URL.Query().Get("wait")
-	if v == "" {
-		return 0, nil
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil {
-		n, err2 := strconv.ParseUint(v, 10, 32)
-		if err2 != nil {
-			return 0, fmt.Errorf("%w: wait", errBad)
-		}
-		d = time.Duration(n) * time.Second
-	}
-	if d < 0 {
-		return 0, fmt.Errorf("%w: wait", errBad)
-	}
-	return min(d, maxWait), nil
-}
-
-// waitHead waits for the branch head to move past seen. It returns false
-// (and no error) when the wait is over: deadline passed or client gone.
-func (s *Server) waitHead(ctx context.Context, r *http.Request, seen uint64) (bool, error) {
-	b := r.URL.Query().Get("branch")
-	if b == "" {
-		b = "main"
-	}
-	_, err := s.DB.WaitHead(ctx, b, seen)
-	if err == nil {
-		return true, nil
-	}
-	if ctx.Err() != nil {
-		return false, nil
-	}
-	return false, err
-}
-
-// maxMessages bounds one topic read or group fetch over HTTP; max=0 (or
-// none, for reads) means this many. Without it one request could make the
-// server materialize, and a group fetch acknowledge, a whole topic.
-const maxMessages = 1000
-
-func capMax(max uint64) uint64 {
-	if max == 0 || max > maxMessages {
-		return maxMessages
-	}
-	return max
-}
-
-// next fetches up to max messages for a consumer group and advances its
-// cursor in the same transaction (at-most-once delivery to the HTTP client;
-// embed loget and use Fetch/Ack inside your own Update for exactly-once).
-func (s *Server) next(w http.ResponseWriter, r *http.Request) {
-	r = s.with(r)
-	max, ok, _ := u64(r, "max")
-	if !ok {
-		max = 10
-	}
-	max = capMax(max)
-	wait, err := waitParam(r)
-	if err != nil {
-		fail(w, err)
-		return
-	}
-	if wait > 0 {
-		release, ok := acquire(w, s.waiters, "long-polls")
-		if !ok {
-			return
-		}
-		defer release()
-		writeDeadline(w, wait+s.writeTO)
-	}
-	dctx, dcancel := s.drainable(r.Context())
-	defer dcancel()
-	ctx, cancel := context.WithTimeout(dctx, wait)
-	defer cancel()
-	for {
-		var ms []loget.Message
-		var at uint64
-		_, err := update(r, func(tx *loget.Tx) (err error) {
-			at = tx.At()
-			g := tx.Topic(r.PathValue("t")).Group(r.PathValue("g"))
-			if ms, err = g.Fetch(int(max)); err != nil || len(ms) == 0 {
-				return err
-			}
-			return g.Ack(ms[len(ms)-1])
-		})
-		if err != nil {
-			fail(w, err)
-			return
-		}
-		if len(ms) > 0 || wait == 0 {
-			reply(w, msgs(ms))
-			return
-		}
-		if more, err := s.waitHead(ctx, r, at); err != nil {
-			fail(w, err)
-			return
-		} else if !more {
-			reply(w, msgs(ms))
-			return
-		}
-	}
-}
-
-// stream sends a topic as server-sent events from ?from= (or the
-// Last-Event-ID header + 1) until the client goes away.
-func (s *Server) stream(w http.ResponseWriter, r *http.Request) {
-	r = s.with(r)
-	from, _, err := u64(r, "from")
-	if err != nil {
-		fail(w, err)
-		return
-	}
-	if id := r.Header.Get("Last-Event-ID"); id != "" {
-		n, err := strconv.ParseUint(id, 10, 64)
-		if err != nil {
-			fail(w, fmt.Errorf("%w: Last-Event-ID", errBad))
-			return
-		}
-		from = n + 1
-	}
-	fl, ok := w.(http.Flusher)
-	if !ok {
-		fail(w, errors.New("streaming unsupported"))
-		return
-	}
-	release, ok := acquire(w, s.streams, "streams")
-	if !ok {
-		return
-	}
-	defer release()
-	h := w.Header()
-	h.Set("Content-Type", "text/event-stream")
-	h.Set("Cache-Control", "no-cache")
-	h.Set("X-Accel-Buffering", "no")
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprint(w, ": loget stream\n\n")
-	fl.Flush()
-	b := r.URL.Query().Get("branch")
-	if b == "" {
-		b = "main"
-	}
-	ctx, cancel := s.drainable(r.Context())
-	defer cancel()
-	for {
-		writeDeadline(w, s.writeTO)
-		// a token revoked (or narrowed) by a reload ends its streams
-		if err := permit(r, ScopeRead, "topic", r.PathValue("t")); err != nil {
-			fmt.Fprintf(w, "event: error\ndata: %q\n\n", err.Error())
-			fl.Flush()
-			return
-		}
-		var ms []loget.Message
-		var at uint64
-		err := br(r).View(ctx, func(tx *loget.Tx) (err error) {
-			at = tx.At()
-			ms, err = tx.Topic(r.PathValue("t")).Read(from, 256)
-			return
-		})
-		if err != nil {
-			fmt.Fprintf(w, "event: error\ndata: %q\n\n", err.Error())
-			fl.Flush()
-			return
-		}
-		for _, m := range msgs(ms) {
-			j, _ := json.Marshal(m)
-			fmt.Fprintf(w, "event: message\nid: %d\ndata: %s\n\n", m.Offset, j)
-			from = m.Offset + 1
-		}
-		if len(ms) > 0 {
-			fl.Flush()
-			continue
-		}
-		pctx, pcancel := context.WithTimeout(ctx, streamPing)
-		_, err = s.DB.WaitHead(pctx, b, at)
-		pcancel()
-		if ctx.Err() != nil {
-			if r.Context().Err() == nil { // draining: tell the client to resume elsewhere/later
-				writeDeadline(w, s.writeTO)
-				fmt.Fprint(w, "event: shutdown\ndata: \"server shutting down; reconnect with Last-Event-ID\"\n\n")
-				fl.Flush()
-			}
-			return
-		}
-		if errors.Is(err, context.DeadlineExceeded) {
-			fmt.Fprint(w, ": ping\n\n")
-			fl.Flush()
-		} else if err != nil {
-			fmt.Fprintf(w, "event: error\ndata: %q\n\n", err.Error())
-			fl.Flush()
-			return
-		}
-	}
-}
-
-// streamPing is the SSE keep-alive interval.
-var streamPing = 15 * time.Second
-
-// ---- docs & vectors ----
-
-func (s *Server) docPut(w http.ResponseWriter, r *http.Request) {
-	r = s.with(r)
-	b, err := body(r)
-	if err != nil || !json.Valid(b) {
-		fail(w, fmt.Errorf("%w: body must be JSON", errBad))
-		return
-	}
-	lsn, err := update(r, func(tx *loget.Tx) error {
-		return tx.Doc(r.PathValue("c")).Put(r.PathValue("id"), json.RawMessage(b), opts(r)...)
-	})
-	if err != nil {
-		fail(w, err)
-		return
-	}
-	reply(w, map[string]any{"lsn": lsn})
-}
-
-func (s *Server) docGet(w http.ResponseWriter, r *http.Request) {
-	r = s.with(r)
-	var d json.RawMessage
-	err := view(r, func(tx *loget.Tx) (err error) { d, err = tx.Doc(r.PathValue("c")).Get(r.PathValue("id")); return })
-	if err != nil {
-		fail(w, err)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Write(d)
-}
-
-func (s *Server) docFind(w http.ResponseWriter, r *http.Request) {
-	r = s.with(r)
-	var val any
-	raw := r.URL.Query().Get("value")
-	d := json.NewDecoder(strings.NewReader(raw))
-	d.UseNumber() // exact: a float64 would round 12345678901234567891
-	if d.Decode(&val) != nil || d.More() {
-		val = raw // bare strings are allowed
-	}
-	var ids []string
-	err := view(r, func(tx *loget.Tx) (err error) {
-		ids, err = tx.Doc(r.PathValue("c")).Find(r.URL.Query().Get("field"), val)
-		return
-	})
-	if err != nil {
-		fail(w, err)
-		return
-	}
-	if ids == nil {
-		ids = []string{}
-	}
-	reply(w, ids)
-}
-
-func (s *Server) vecPut(w http.ResponseWriter, r *http.Request) {
-	r = s.with(r)
-	var v []float32
-	if err := json.NewDecoder(r.Body).Decode(&v); err != nil {
-		fail(w, fmt.Errorf("%w: body must be a JSON array of numbers", errBad))
-		return
-	}
-	lsn, err := update(r, func(tx *loget.Tx) error { return tx.Vector(r.PathValue("c")).Put(r.PathValue("id"), v, opts(r)...) })
-	if err != nil {
-		fail(w, err)
-		return
-	}
-	reply(w, map[string]any{"lsn": lsn})
-}
-
-func (s *Server) vecDel(w http.ResponseWriter, r *http.Request) {
-	r = s.with(r)
-	lsn, err := update(r, func(tx *loget.Tx) error { return tx.Vector(r.PathValue("c")).Delete(r.PathValue("id")) })
-	if err != nil {
-		fail(w, err)
-		return
-	}
-	reply(w, map[string]any{"lsn": lsn})
-}
-
-func (s *Server) vecSearch(w http.ResponseWriter, r *http.Request) {
-	r = s.with(r)
-	var q struct {
-		Vector []float32 `json:"vector"`
-		K      int       `json:"k"`
-		Exact  bool      `json:"exact"` // always scan, even with an HNSW graph
-		Ef     int       `json:"ef"`    // HNSW beam width (0 = the collection's)
-	}
-	if err := json.NewDecoder(r.Body).Decode(&q); err != nil {
-		fail(w, fmt.Errorf("%w: %w", errBad, err))
-		return
-	}
-	if q.K == 0 {
-		q.K = 5
-	}
-	type hit struct {
-		ID    string  `json:"id"`
-		Score float32 `json:"score"`
-	}
-	out := []hit{}
-	err := view(r, func(tx *loget.Tx) error {
-		vt := tx.Vector(r.PathValue("c"))
-		var hs []lens.Hit
-		var err error
-		if q.Exact {
-			hs, err = vt.SearchExact(q.Vector, q.K)
-		} else {
-			hs, err = vt.SearchANN(q.Vector, q.K, q.Ef)
-		}
-		for _, h := range hs {
-			out = append(out, hit{h.ID, h.Score})
-		}
-		return err
-	})
-	if err != nil {
-		fail(w, err)
-		return
-	}
-	reply(w, out)
-}
-
-// vecANN enables (or reconfigures) the HNSW graph of a vector collection.
-func (s *Server) vecANN(w http.ResponseWriter, r *http.Request) {
-	var o loget.ANNOptions
-	if r.ContentLength != 0 {
-		if err := json.NewDecoder(r.Body).Decode(&o); err != nil {
-			fail(w, fmt.Errorf("%w: %w", errBad, err))
-			return
-		}
-	}
-	if err := s.DB.EnableANN(r.Context(), r.PathValue("c"), o); err != nil {
-		fail(w, err)
-		return
-	}
-	reply(w, map[string]any{"ok": true})
-}
-
-func (s *Server) index(w http.ResponseWriter, r *http.Request) {
-	var q struct{ Coll, Field string }
-	if err := json.NewDecoder(r.Body).Decode(&q); err != nil {
-		fail(w, fmt.Errorf("%w: %w", errBad, err))
-		return
-	}
-	if err := s.DB.RegisterIndex(r.Context(), q.Coll, q.Field); err != nil {
-		fail(w, err)
-		return
-	}
-	reply(w, map[string]any{"ok": true})
 }
 
 // ---- branches ----
@@ -994,15 +480,9 @@ func (s *Server) shred(w http.ResponseWriter, r *http.Request) {
 }
 
 // compact runs a compaction; ?grace=DURATION (default 5m) delays deleting
-// replaced objects for readers of older manifests; topic-max-age,
-// topic-max-messages and topic-ignore-groups set topic retention.
+// replaced objects for readers of older manifests.
 func (s *Server) compact(w http.ResponseWriter, r *http.Request) {
 	o := loget.CompactOptions{Grace: 5 * time.Minute}
-	var err error
-	if o.Topics, err = ParseTopicRetention(r.URL.Query().Get); err != nil {
-		fail(w, fmt.Errorf("%w: %w", errBad, err))
-		return
-	}
 	if g := r.URL.Query().Get("grace"); g != "" {
 		d, err := time.ParseDuration(g)
 		if err != nil || d < 0 {
@@ -1045,8 +525,7 @@ func (s *Server) backup(w http.ResponseWriter, r *http.Request) {
 }
 
 // gc runs GC with retention: ?grace= (default 5m), keep-for=DURATION,
-// keep-commits=N, keep-reflog=N, keep-manifests=N and the topic retention
-// options (see loget.GCOptions, ParseTopicRetention).
+// keep-commits=N, keep-reflog=N and keep-manifests=N (see loget.GCOptions).
 func (s *Server) gc(w http.ResponseWriter, r *http.Request) {
 	o, err := ParseGCOptions(r.URL.Query().Get, 5*time.Minute)
 	if err != nil {
@@ -1061,38 +540,8 @@ func (s *Server) gc(w http.ResponseWriter, r *http.Request) {
 	reply(w, st)
 }
 
-// ParseTopicRetention reads topic-max-age (a duration),
-// topic-max-messages (a count) and topic-ignore-groups (true/false)
-// through get ("" = default: no retention).
-func ParseTopicRetention(get func(string) string) (loget.TopicRetention, error) {
-	var r loget.TopicRetention
-	if v := get("topic-max-age"); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil || d < 0 {
-			return r, fmt.Errorf("topic-max-age %q: want a duration like 168h", v)
-		}
-		r.MaxAge = d
-	}
-	if v := get("topic-max-messages"); v != "" {
-		n, err := strconv.ParseUint(v, 10, 64)
-		if err != nil {
-			return r, fmt.Errorf("topic-max-messages %q: want a number", v)
-		}
-		r.MaxMessages = n
-	}
-	if v := get("topic-ignore-groups"); v != "" {
-		b, err := strconv.ParseBool(v)
-		if err != nil {
-			return r, fmt.Errorf("topic-ignore-groups %q: want true or false", v)
-		}
-		r.IgnoreGroups = b
-	}
-	return r, nil
-}
-
 // ParseGCOptions reads GC options named grace, keep-for, keep-commits,
-// keep-reflog, keep-manifests and the ParseTopicRetention options through
-// get ("" = default).
+// keep-reflog and keep-manifests through get ("" = default).
 func ParseGCOptions(get func(string) string, grace time.Duration) (loget.GCOptions, error) {
 	o := loget.GCOptions{Grace: grace}
 	dur := func(name string, d *time.Duration) error {
@@ -1123,9 +572,7 @@ func ParseGCOptions(get func(string) string, grace time.Duration) (loget.GCOptio
 		}
 	}
 	o.KeepReflog, o.KeepManifests = int(min(reflog, 1<<30)), int(min(mans, 1<<30))
-	var err error
-	o.Topics, err = ParseTopicRetention(get)
-	return o, err
+	return o, nil
 }
 
 func (s *Server) verify(w http.ResponseWriter, r *http.Request) {

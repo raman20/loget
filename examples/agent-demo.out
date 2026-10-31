@@ -1,63 +1,56 @@
 
-== 1. Memory: the agent remembers things about alice (KV + doc + vector), tagged subject=alice
+== 1. Memory: the agent remembers things about alice and bob, each value tagged with its subject
 {"lsn":1}
-{"ok":true}
 {"lsn":2}
 {"lsn":3}
+-- recall: memories about u17
+{"key":"mem/u17/m1","value":"alice is allergic to peanuts"}
+
+== 2. Tasks: the result and the task's status commit atomically in ONE transaction
 {"lsn":4}
 {"lsn":5}
--- recall: memories about alice
-"m1"
--- recall: nearest memory to [1,0,0]
-{"id":"m1","score":0.9938837}
-{"id":"m2","score":0.11043153}
-
-== 2. Tasks: a topic + consumer group; the result and the ack commit atomically in ONE transaction
-{"lsn":6}
-{"lsn":7}
-{"lsn":8,"ops":2}
--- next unprocessed task for group 'agent' (t1 is already acked; this fetch also acks t2):
-{"lsn":7,"offset":1,"value":"{\"id\":\"t2\",\"do\":\"book bob a flight\"}"}
--- checkpoint at LSN 10
+{"lsn":6,"ops":2}
+-- tasks:
+{"key":"task/t1","value":"{\"do\":\"order lunch for alice\",\"state\":\"done\"}"}
+{"key":"task/t2","value":"{\"do\":\"book bob a flight\",\"state\":\"open\"}"}
+-- checkpoint at LSN 7
 
 == 3. Undo: the agent goes rogue on main...
-{"lsn":11}
-{"lsn":12}
+{"lsn":8}
+{"lsn":9}
 -- main now says: ESPRESSO x4
 error (404): loget: not found
--- time travel: at LSN 10 alice's pref was: oat milk, no sugar
--- rewind main to LSN 10 (old head is kept in the reflog, nothing is deleted)
-{"heads":{"main":10},"ok":true}
+-- time travel: at LSN 7 alice's pref was: oat milk, no sugar
+-- rewind main to LSN 7 (old head is kept in the reflog, nothing is deleted)
+{"heads":{"main":7},"ok":true}
 -- main says: oat milk, no sugar / result/t1 = ordered salad (no peanuts)
 
 == 4. Try before you buy: a risky plan on a branch, then promote it
-{"heads":{"main":10,"plan-b":10},"ok":true}
-{"lsn":11}
+{"heads":{"main":7,"plan-b":7},"ok":true}
+{"lsn":8}
 -- main sees result/t2? 
 error (404): loget: not found
 -- plan-b sees: booked bob seat 12A
-{"heads":{"main":11,"plan-b":11},"ok":true}
+{"heads":{"main":8,"plan-b":8},"ok":true}
 -- after promote, main sees: booked bob seat 12A
 
 == 5. Forget: alice invokes her right to erasure — crypto-shred subject 'alice'
-{"valid_signature":true,"shred_lsn":12,"dek_deleted":true,"chain_head":"85c914682110ecac...","signature":"4926b11e16738062..."}
+{"valid_signature":true,"shred_lsn":9,"dek_deleted":true,"chain_head":"349b2e3ee01bcfc6...","signature":"aeea1c976629bddb..."}
 -- KV:
 error (404): loget: not found
 -- time travel:
 error (404): loget: not found
 -- old branch:
 error (404): loget: not found
--- docs about alice:
-[]
--- vector recall [1,0,0]:
-{"id":"m2","score":0.11043153}
--- task t1 in the topic (offsets stay stable, content is gone):
-{"lsn":6,"offset":0,"redacted":true,"value":""}
--- bob is untouched: {"user":"bob","text":"bob prefers window seats"}
+-- memories:
+{"key":"mem/u42/m2","value":"bob prefers window seats"}
+-- task t1:
+error (404): loget: not found
+-- bob is untouched: bob prefers window seats
 -- new writes for alice are refused:
 error (410): loget: subject has been crypto-shredded
 
 == 6. Verify the whole history (CRCs, hash chains, fencing, shred proofs)
-{"ok":true,"logs":3,"segments":17,"entries":14,"encrypted_values":8,"unreadable_shredded_values":6,"problems":null}
+{"ok":true,"logs":3,"segments":14,"entries":11,"encrypted_values":7,"unreadable_shredded_values":6,"problems":null}
 -- grep every byte in the bucket for anything about alice:
 no trace of 'alice', 'peanuts', 'oat milk' or 'ESPRESSO' in /tmp/agent-demo-data

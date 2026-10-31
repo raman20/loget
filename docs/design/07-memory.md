@@ -30,7 +30,7 @@ and of each workload (`memory` in the result JSON):
 
 | part | before | after | what it is |
 |---|---|---|---|
-| KV lens: versions + map | 485 | 313 | one `Version` per write, kept until `Compact` (MVCC history: time travel needs it). Before: 72 B each, in a `[]Version` per key (a separate allocation even for one version) |
+| KV index: versions + map | 485 | 313 | one `Version` per write, kept until `Compact` (MVCC history: time travel needs it). Before: 72 B each, in a `[]Version` per key (a separate allocation even for one version) |
 | journal object index | 94 + 40 | 83 + 36 | one map entry per segment (≈ per commit batch) plus its `log/<id>/<seq>.seg` key string |
 | log segment index | 90 | 39 | one `segIdx` per segment; before 64 B, 32 of them a chain hash |
 | map key strings | 36 | 45 | `kv\0user…` per key (sampled profile; same keys) |
@@ -75,11 +75,11 @@ structural, not a tuning problem.
 
 ## Changes
 
-1. **Packed versions (40 bytes, was 72).** The lens keeps `ver{lsn, off,
+1. **Packed versions (40 bytes, was 72).** The index keeps `ver{lsn, off,
    len, op, sum, chunk, del, *extra}`; the rare subject and inline value
    move behind one pointer. A key's first version is stored in the map
    slot itself, so single-version keys allocate nothing beyond the map.
-   `lens.Version` (the API) and the snapshot encoding are unchanged.
+   `index.Version` (the API) and the snapshot encoding are unchanged.
 2. **Segment index 24 bytes, was 64.** The chain hash after each segment
    is the next segment's first `Prev`, so only the tip's is kept;
    `chainAt` on a segment's last LSN reads the next segment (branch

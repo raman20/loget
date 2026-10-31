@@ -6,7 +6,7 @@ bug reports). Everything must respect the [design principles](docs/design-princi
 
 ## Now — v0.1.x: make the prototype honest and usable
 
-- [x] One log; KV, topics, consumer groups, documents, vectors as lenses
+- [x] One log; KV, topics, consumer groups, documents, vectors as indexes
 - [x] Serializable single-writer transactions; exactly-once consume + write + ack
 - [x] Object storage with create-only fencing (S3/MinIO, local dir)
 - [x] Branches, rewind, promote, time travel
@@ -41,10 +41,10 @@ bug reports). Everything must respect the [design principles](docs/design-princi
   `--topic-max-messages`). Still open: compacting without pausing
   commits, an online journal shrink or record-header reuse, and topic
   storage outside RAM.
-- **Persisted lens snapshots for all lenses.** Today only KV and topics
+- **Persisted index snapshots for all indexes.** Today only KV and topics
   checkpoint, and recovery still scans every segment. The goal is open time
   proportional to the tail, not to history.
-- **Disk-backed / mmap lenses.** Lens state is entirely in RAM today, which caps
+- **Disk-backed / mmap indexes.** Index state is entirely in RAM today, which caps
   database size at memory. The key index is the first target (gap S5.1 in
   docs/PRODUCTION_READINESS.md; deferred from the readiness pass, with a
   10M-key memory benchmark as its acceptance test).
@@ -64,12 +64,12 @@ bug reports). Everything must respect the [design principles](docs/design-princi
 ## Later — exploratory
 
 - **SQL layer** outside the core (see "What we refuse to build"). Likely
-  read-only, over lenses or exports.
-- **Lakehouse export:** an Iceberg/Parquet export lens keyed by LSN range, so
+  read-only, over indexes or exports.
+- **Lakehouse export:** an Iceberg/Parquet export index keyed by LSN range, so
   history is queryable from DuckDB/Spark.
 - **Replication / multi-writer.** Only if a design keeps the single-log
   simplicity. Sharding by database comes first.
-- A public lens plugin API.
+- A public index plugin API.
 
 ## Good first issues
 

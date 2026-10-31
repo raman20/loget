@@ -9,21 +9,20 @@ import (
 	"pgregory.net/rapid"
 )
 
-// For random programs over the public API: every branch's lens state equals
+// For random programs over the public API: every branch's index state equals
 // a from-scratch fold of its log, and reopening (replay from snapshot+log)
-// reproduces bit-identical lens state.
-func TestPropEngineLensEqualsFoldAcrossRestart(t *testing.T) {
+// reproduces bit-identical index state.
+func TestPropEngineIndexEqualsFoldAcrossRestart(t *testing.T) {
 	rapid.Check(t, func(t *rapid.T) {
 		st := store.NewMem()
 		seed := rapid.Int64().Draw(t, "seed")
 		clk := int64(0)
-		opts := []Option{quiet(), WithRand(rand.New(rand.NewSource(seed))), WithClock(func() int64 { clk++; return clk }),
+		opts := []Option{quiet(), WithIndex(tallyKind()), WithRand(rand.New(rand.NewSource(seed))), WithClock(func() int64 { clk++; return clk }),
 			WithSnapshotEvery(rapid.IntRange(1, 10).Draw(t, "snapEvery"))}
 		db, err := OpenStore(ctx, st, opts...)
 		if err != nil {
 			t.Fatal(err)
 		}
-		db.RegisterIndex(ctx, "d", "f")
 		branches := []string{"main"}
 		n := rapid.IntRange(1, 40).Draw(t, "n")
 		for i := 0; i < n; i++ {
@@ -39,19 +38,21 @@ func TestPropEngineLensEqualsFoldAcrossRestart(t *testing.T) {
 					return tx.Put(fmt.Sprint("k", rapid.IntRange(0, 3).Draw(t, "k")), []byte(fmt.Sprint(i)), o...)
 				})
 			case 3:
-				db.Branch(br).Update(ctx, func(tx *Tx) error { return tx.Topic("t").Publish([]byte(fmt.Sprint(i)), o...) })
+				db.Branch(br).Update(ctx, func(tx *Tx) error {
+					return tx.PutRecord("t:a", fmt.Sprint("a", rapid.IntRange(0, 3).Draw(t, "ak")), []byte(fmt.Sprint(i%3)), o...)
+				})
 			case 4:
 				db.Branch(br).Update(ctx, func(tx *Tx) error {
-					return tx.Vector("v").Put(fmt.Sprint("x", rapid.IntRange(0, 3).Draw(t, "vk")), []float32{float32(i % 3), 1}, o...)
+					return tx.PutRecord("t:v", fmt.Sprint("x", rapid.IntRange(0, 3).Draw(t, "vk")), []byte(fmt.Sprint(i%2)), o...)
 				})
 			case 5:
 				db.Branch(br).Update(ctx, func(tx *Tx) error {
-					return tx.Doc("d").Put(fmt.Sprint("d", rapid.IntRange(0, 3).Draw(t, "dk")), map[string]any{"f": i % 2}, o...)
+					return tx.PutRecord("t:d", fmt.Sprint("d", rapid.IntRange(0, 3).Draw(t, "dk")), []byte(fmt.Sprint(i%2)), o...)
 				})
 			case 6:
 				db.Branch(br).Update(ctx, func(tx *Tx) error {
-					tx.Vector("v").Delete(fmt.Sprint("x", i%4))
-					return tx.Doc("d").Delete(fmt.Sprint("d", i%4))
+					tx.DeleteRecord("t:v", fmt.Sprint("x", i%4))
+					return tx.DeleteRecord("t:d", fmt.Sprint("d", i%4))
 				})
 			case 7:
 				name := fmt.Sprint("b", i)
@@ -71,13 +72,13 @@ func TestPropEngineLensEqualsFoldAcrossRestart(t *testing.T) {
 		}
 		before := map[string]string{}
 		for _, br := range branches {
-			d1, _, err := db.LensDigests(br)
+			d1, _, err := db.IndexDigests(br)
 			if err != nil {
 				t.Fatal(err)
 			}
 			d2, _ := db.RebuildDigests(br)
 			if fmt.Sprint(d1) != fmt.Sprint(d2) {
-				t.Fatalf("branch %s: lens != fold(log)", br)
+				t.Fatalf("branch %s: index != fold(log)", br)
 			}
 			before[br] = fmt.Sprint(d1)
 		}
@@ -88,7 +89,7 @@ func TestPropEngineLensEqualsFoldAcrossRestart(t *testing.T) {
 		}
 		defer db.Close()
 		for _, br := range branches {
-			d, _, _ := db.LensDigests(br)
+			d, _, _ := db.IndexDigests(br)
 			if fmt.Sprint(d) != before[br] {
 				t.Fatalf("branch %s: state differs after restart", br)
 			}

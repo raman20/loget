@@ -115,7 +115,7 @@ func cmdReport(args []string) {
 				w("| %v | %v | %v | %v | %v | %v | %v | %s | %s | %s | %v |\n", m["system"], m["fsync"], m["clients"], m["hot_keys"], m["commits_per_sec"], m["abort_rate"], get(m, "gave_up_after_16_retries"),
 					lms(m, "latency_incl_retries", "p50_us"), lms(m, "latency_incl_retries", "p99_us"), lms(m, "latency_incl_retries", "p999_us"), m["invariant_ok"])
 			}
-			w("\nMulti-lens consume+write transaction (LogEt only):\n\n| fsync | partitions | batch | txns/s | msgs/s | p50 | p99 | p99.9 | exactly-once check | input drained early | errors |\n|---|---|---|---|---|---|---|---|---|---|---|\n")
+			w("\nMulti-index consume+write transaction (LogEt only):\n\n| fsync | partitions | batch | txns/s | msgs/s | p50 | p99 | p99.9 | exactly-once check | input drained early | errors |\n|---|---|---|---|---|---|---|---|---|---|---|\n")
 			for _, x := range runs {
 				m := x.(map[string]any)
 				if _, ok := m["partitions"]; !ok {

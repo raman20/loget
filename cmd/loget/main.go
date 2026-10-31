@@ -38,20 +38,17 @@ import (
 	"github.com/raman20/loget/store"
 )
 
-const usage = `loget — one log, many lenses (KV, topics, docs, vectors), with branches,
-time travel and crypto-shredding. Config: --db URL (or LOGET_URL), default ./loget-data.
+const usage = `loget — a log-structured KV store on object storage, with transactions,
+branches, time travel and crypto-shredding. Config: --db URL (or LOGET_URL), default ./loget-data.
 
   loget serve [--listen :7070]              run the HTTP API
         [--compact-every 1h] [--compact-grace 5m]   optional background compaction
-        [--topic-max-age 168h] [--topic-max-messages N] [--topic-ignore-groups]
-                                              topic retention for compaction and GC (see compact)
         [--gc-every 1h] [--keep-for 24h] [--keep-commits N] ...   or background GC (see gc)
         [--token T]                           admin token: "Authorization: Bearer T" (or LOGET_TOKEN)
-        [--token-file F]                      scoped tokens, one per line: SCOPE TOKEN [name=N] [kv:PFX*|topic:T|docs:C|vectors:C ...]
+        [--token-file F]                      scoped tokens, one per line: SCOPE TOKEN [name=N] [kv:PREFIX* ...]
                                               (SCOPE read|write|admin; a bare TOKEN line is admin);
                                               re-read when it changes (and on SIGHUP)
         [--tls-cert F --tls-key F]            serve HTTPS (or LOGET_TLS_CERT/_KEY); reloaded when renewed
-        [--max-streams 1024] [--max-waiters 4096]   caps on SSE streams and long-polls (503 over it)
         [--insecure-no-auth]                  allow a non-loopback --listen without a token
         [--max-body 100663296]                request body cap in bytes (413 over it)
         [--log-format text|json]              log format (json: one slog object per line)
@@ -64,12 +61,7 @@ time travel and crypto-shredding. Config: --db URL (or LOGET_URL), default ./log
   loget get KEY [--at LSN]                  read a key (time travel with --at)
   loget del KEY
   loget scan [PREFIX] [--at LSN]
-  loget pub TOPIC MESSAGE [--subject S]     publish
-  loget sub TOPIC [--group G] [--from N] [--max N] [--follow]
-  loget doc put COLL ID JSON | doc get COLL ID | doc find COLL FIELD VALUE | doc index COLL FIELD
-  loget vec put COLL ID 0.1,0.2,... | vec del COLL ID | vec search COLL 0.1,0.2,... [-k N] [--exact] [--ef N]
-  loget vec ann COLL [--m 16] [--ef-construction 100] [--ef-search 128]   (opt-in HNSW index)
-  loget tx '[{"op":"put","key":"k","value":"v"},{"op":"pub","topic":"t","value":"m"}]'
+  loget tx '[{"op":"put","key":"k","value":"v"},{"op":"del","key":"old"}]'   atomic batch
   loget branch [list] | branch create NAME [--from B] [--at LSN] | branch promote SRC DST | branch delete NAME
   loget rewind BRANCH LSN                   move a branch back (old head kept in reflog)
   loget log [--from LSN]                    show the raw log
@@ -78,10 +70,6 @@ time travel and crypto-shredding. Config: --db URL (or LOGET_URL), default ./log
   loget compact [--grace 0s]                drop overwritten/deleted/shredded data and the
                                               history below each branch head (no time travel
                                               below it afterwards); --grace delays deletion
-        [--topic-max-age 168h] [--topic-max-messages N] [--topic-ignore-groups]
-                                              also drop topic messages older than the age / beyond
-                                              the newest N, never past a consumer group's cursor
-                                              unless --topic-ignore-groups (gc takes these too)
   loget gc [--keep-for 24h] [--keep-commits N] [--keep-reflog 64] [--keep-manifests 16] [--grace 0s] [--shrink]
                                               compact keeping a history window, drop logs no branch
                                               or kept reflog entry reaches, prune the reflog, delete
@@ -117,7 +105,7 @@ type cli struct {
 func parse(argv []string) ([]string, map[string]string) {
 	var args []string
 	flags := map[string]string{}
-	bools := map[string]bool{"follow": true, "help": true, "h": true, "exact": true, "insecure-no-auth": true, "shrink": true, "repair-tail": true, "access-log": true, "pprof": true, "topic-ignore-groups": true}
+	bools := map[string]bool{"help": true, "h": true, "insecure-no-auth": true, "shrink": true, "repair-tail": true, "access-log": true, "pprof": true}
 	for i := 0; i < len(argv); i++ {
 		a := argv[i]
 		if strings.HasPrefix(a, "-") && len(a) > 1 && !isNumberish(a) {
@@ -137,7 +125,8 @@ func parse(argv []string) ([]string, map[string]string) {
 	return args, flags
 }
 
-func isNumberish(s string) bool { // allow negative vector components like -0.5,1
+// isNumberish: a negative number is an argument (loget put k -1), not a flag.
+func isNumberish(s string) bool {
 	return len(s) > 1 && (s[1] >= '0' && s[1] <= '9' || s[1] == '.')
 }
 
@@ -319,7 +308,7 @@ func serve(dbURL string, flags map[string]string) {
 		log.Fatalf("loget: open %s: %v", dbURL, err)
 	}
 	drain := make(chan struct{})
-	opts := server.Options{Drain: drain, ReadTimeout: durFlag(flags, "read-timeout"), WriteTimeout: durFlag(flags, "write-timeout"), Token: token, Auth: auth, MaxStreams: intFlag(flags, "max-streams"), MaxWaiters: intFlag(flags, "max-waiters"), MaxBody: intFlag(flags, "max-body"),
+	opts := server.Options{Drain: drain, ReadTimeout: durFlag(flags, "read-timeout"), WriteTimeout: durFlag(flags, "write-timeout"), Token: token, Auth: auth, MaxBody: intFlag(flags, "max-body"),
 		Version: buildVersion(), AccessLog: flags["access-log"] != "", SlowOp: slowOp, Pprof: flags["pprof"] != ""}
 	srv := &http.Server{Addr: listen, Handler: server.New(db, opts), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute,
 		TLSConfig: &tls.Config{MinVersion: tls.VersionTLS12}}
@@ -355,7 +344,7 @@ func serve(dbURL string, flags map[string]string) {
 			log.Printf("loget: SIGHUP: reloaded")
 		}
 	}()
-	// SIGTERM/SIGINT: drain (readyz 503, streams and long polls end),
+	// SIGTERM/SIGINT: drain (readyz 503),
 	// stop accepting, wait for in-flight requests up to
 	// --shutdown-timeout, then close the database. A second signal exits
 	// at once (the log is crash-safe; nothing acknowledged is lost).
@@ -464,17 +453,9 @@ func isLoopback(listen string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-// topicRetentionFlags are passed to compact and gc as they are.
-var topicRetentionFlags = []string{"topic-max-age", "topic-max-messages", "topic-ignore-groups"}
-
 // startCompactor compacts every interval in the background.
-// The topic-* flags set topic retention (server.ParseTopicRetention).
 func startCompactor(db *loget.DB, every string, flags map[string]string) {
 	grace := flags["compact-grace"]
-	tr, err := server.ParseTopicRetention(func(k string) string { return flags[k] })
-	if err != nil {
-		log.Fatalf("loget: %v", err)
-	}
 	d, err := time.ParseDuration(every)
 	if err != nil || d <= 0 {
 		log.Fatalf("loget: --compact-every %q: want a positive duration like 1h", every)
@@ -487,7 +468,7 @@ func startCompactor(db *loget.DB, every string, flags map[string]string) {
 	}
 	go func() {
 		for range time.Tick(d) {
-			st, err := db.Compact(context.Background(), loget.CompactOptions{Grace: g, Topics: tr})
+			st, err := db.Compact(context.Background(), loget.CompactOptions{Grace: g})
 			if errors.Is(err, loget.ErrClosed) {
 				return
 			}
@@ -495,8 +476,8 @@ func startCompactor(db *loget.DB, every string, flags map[string]string) {
 				log.Printf("loget: compaction: %v", err)
 				continue
 			}
-			log.Printf("loget: compacted %d logs (%d keys, %d messages, %d bytes written, %d objects deleted, %d garbage items pending)",
-				st.Logs, st.Keys, st.Messages, st.BaseBytes, st.Deleted, st.Pending)
+			log.Printf("loget: compacted %d logs (%d keys, %d bytes written, %d objects deleted, %d garbage items pending)",
+				st.Logs, st.Keys, st.BaseBytes, st.Deleted, st.Pending)
 		}
 	}()
 }
@@ -617,14 +598,6 @@ func (c *cli) call(method, path string, body []byte, raw bool) (int, []byte) {
 	return resp.StatusCode, b
 }
 
-func vec(s string) []byte {
-	var parts []string
-	for _, p := range strings.Split(s, ",") {
-		parts = append(parts, strings.TrimSpace(p))
-	}
-	return []byte("[" + strings.Join(parts, ",") + "]")
-}
-
 func (c *cli) run() int {
 	st := 200
 	switch c.args[0] {
@@ -640,41 +613,8 @@ func (c *cli) run() int {
 			p = c.args[1]
 		}
 		st, _ = c.call("GET", "/v1/kv"+c.q("prefix", p), nil, false)
-	case "pub":
-		st, _ = c.call("POST", "/v1/topics/"+esc(c.arg(1, "TOPIC"))+c.q(), []byte(c.arg(2, "MESSAGE")), false)
-	case "sub":
-		st = c.sub()
 	case "tx":
 		st, _ = c.call("POST", "/v1/tx"+c.q(), []byte(c.arg(1, "JSON")), false)
-	case "doc":
-		switch c.arg(1, "put|get|find|index") {
-		case "put":
-			st, _ = c.call("PUT", "/v1/docs/"+esc(c.arg(2, "COLL"))+"/"+esc(c.arg(3, "ID"))+c.q(), []byte(c.arg(4, "JSON")), false)
-		case "get":
-			st, _ = c.call("GET", "/v1/docs/"+esc(c.arg(2, "COLL"))+"/"+esc(c.arg(3, "ID"))+c.q(), nil, true)
-		case "find":
-			st, _ = c.call("GET", "/v1/docs/"+esc(c.arg(2, "COLL"))+c.q("field", c.arg(3, "FIELD"), "value", c.arg(4, "VALUE")), nil, false)
-		case "index":
-			b, _ := json.Marshal(map[string]string{"coll": c.arg(2, "COLL"), "field": c.arg(3, "FIELD")})
-			st, _ = c.call("POST", "/v1/indexes", b, false)
-		}
-	case "vec":
-		switch c.arg(1, "put|del|search|ann") {
-		case "ann":
-			n := func(f string) int { v, _ := strconv.Atoi(c.flags[f]); return v }
-			b, _ := json.Marshal(map[string]int{"m": n("m"), "ef_construction": n("ef-construction"), "ef_search": n("ef-search")})
-			st, _ = c.call("POST", "/v1/vectors/"+esc(c.arg(2, "COLL"))+"/ann", b, false)
-		case "put":
-			st, _ = c.call("PUT", "/v1/vectors/"+esc(c.arg(2, "COLL"))+"/"+esc(c.arg(3, "ID"))+c.q(), vec(c.arg(4, "VECTOR")), false)
-		case "del":
-			st, _ = c.call("DELETE", "/v1/vectors/"+esc(c.arg(2, "COLL"))+"/"+esc(c.arg(3, "ID"))+c.q(), nil, false)
-		case "search":
-			k := c.flags["k"]
-			if k == "" {
-				k = "5"
-			}
-			st, _ = c.call("POST", "/v1/vectors/"+esc(c.arg(2, "COLL"))+"/search"+c.q(), []byte(fmt.Sprintf(`{"vector":%s,"k":%s,"exact":%v,"ef":%d}`, vec(c.arg(3, "VECTOR")), k, c.flags["exact"] == "true", atoiOr(c.flags["ef"]))), false)
-		}
 	case "branch":
 		sub := "list"
 		if len(c.args) > 1 {
@@ -716,17 +656,11 @@ func (c *cli) run() int {
 		if g == "" {
 			g = "0s"
 		}
-		q := url.Values{"grace": {g}}
-		for _, k := range topicRetentionFlags {
-			if v := c.flags[k]; v != "" {
-				q.Set(k, v)
-			}
-		}
-		st, _ = c.call("POST", "/v1/compact?"+q.Encode(), nil, false)
+		st, _ = c.call("POST", "/v1/compact?"+url.Values{"grace": {g}}.Encode(), nil, false)
 	case "gc":
 		q := url.Values{}
 		q.Set("grace", "0s")
-		for _, k := range append([]string{"grace", "keep-for", "keep-commits", "keep-reflog", "keep-manifests"}, topicRetentionFlags...) {
+		for _, k := range []string{"grace", "keep-for", "keep-commits", "keep-reflog", "keep-manifests"} {
 			if v := c.flags[k]; v != "" {
 				q.Set(k, v)
 			}
@@ -753,44 +687,6 @@ func (c *cli) run() int {
 		return 1
 	}
 	return 0
-}
-
-func (c *cli) sub() int {
-	t := esc(c.arg(1, "TOPIC"))
-	g := c.flags["group"]
-	var wait []string
-	if c.flags["follow"] != "" {
-		wait = []string{"wait", "30s"} // long-poll: the server answers when messages arrive
-	}
-	for {
-		var st int
-		var b []byte
-		if g != "" {
-			max := c.flags["max"]
-			if max == "" {
-				max = "100"
-			}
-			st, b = c.call("POST", "/v1/topics/"+t+"/groups/"+esc(g)+"/next"+c.q(append([]string{"max", max}, wait...)...), nil, false)
-		} else {
-			st, b = c.call("GET", "/v1/topics/"+t+c.q(wait...), nil, false)
-		}
-		if st >= 300 {
-			return 1
-		}
-		if c.flags["follow"] == "" {
-			return 0
-		}
-		var ms []map[string]any
-		json.Unmarshal(b, &ms)
-		if g == "" && len(ms) > 0 {
-			c.flags["from"] = fmt.Sprint(uint64(ms[len(ms)-1]["offset"].(float64)) + 1)
-		}
-	}
-}
-
-func atoiOr(s string) int {
-	n, _ := strconv.Atoi(s)
-	return n
 }
 
 // intFlag parses an integer flag (0 if unset).

@@ -1,0 +1,52 @@
+var Castagnoli = crc32.MakeTable(crc32.Castagnoli)
+var ErrBadSnapshot = errors.New("index: bad snapshot")
+type Entry struct {
+	Log string
+	LSN uint64
+	TS  int64
+	Ops []format.Op
+type Env interface {
+type Index interface {
+type KV struct {
+func LoadKV(b []byte, inline int) (*KV, error)
+func LoadKVBase(b []byte, inline int) (*KV, error)
+func NewKV() *KV
+func NewKVInline(max int) *KV
+func (l *KV) Apply(e *Entry, env Env)
+func (l *KV) Digest() [32]byte
+func (l *KV) DropSubject(s string)
+func (l *KV) Get(space, key string, at uint64) (Version, bool)
+func (l *KV) Inline() int
+func (l *KV) LastWrite(space, key string) uint64
+func (l *KV) Latest(fn func(space, key string, v Version) error) error
+func (*KV) Name() string
+func (l *KV) Scan(space, prefix string, at uint64) []Pair
+func (l *KV) SetLatest(space, key string, v Version)
+func (l *KV) Snapshot() []byte
+type Kind struct {
+	Name string
+	Version uint32
+	Spaces []string
+	New func() Index
+	Restore func(b []byte) (Index, error)
+func (k *Kind) Owns(space string) bool
+func (k *Kind) SectionName() string
+type Pair struct {
+	Key string
+type Registry struct {
+func (r *Registry) Derived() []Kind
+func (r *Registry) Kinds() []Kind
+func (r *Registry) Owner(space string) (*Kind, bool)
+func (r *Registry) Register(k Kind) error
+type Snapshotter interface {
+type Version struct {
+	LSN     uint64
+	Off     uint32
+	Len     uint32
+	Op      uint32
+	Sum     uint32
+	Del     bool
+	Chunk   uint32
+	Subject string
+	Val     []byte
+func (v Version) Ref() bool

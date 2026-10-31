@@ -4,7 +4,7 @@
 No. It is a pre-1.0 prototype (latest release v0.1.0; `main` has unreleased
 improvements). Its correctness core is model-checked and
 simulation-tested, but it has no production users, only a first version of compaction, a single
-shared-token auth, and most lens state lives in RAM. See the README's
+shared-token auth, and most index state lives in RAM. See the README's
 [status section](../README.md#status-and-limitations).
 
 **Why not just Postgres?**
@@ -89,5 +89,5 @@ on PUT since August 2024, and Cloudflare R2
 Both should work, but we have not tested them yet; reports are welcome. Stores
 without create-only semantics cannot be opened for writing.
 
-**Why "lenses"?**
+**Why "indexes"?**
 Because they don't store anything of their own. They are ways of looking at the one log.

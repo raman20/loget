@@ -1,7 +1,7 @@
 # Component C: topics and consumer groups
 
 Review of topics and consumer groups, completed 2026-10-30 (IST). Code:
-`lens/topic.go` (the topic lens), the `TopicTx` and `Group` API in
+`index/topic.go` (the topic index), the `TopicTx` and `Group` API in
 `tx.go`, topic retention in `compact.go` (`TopicRetention`,
 `topicCuts`, `writeBase`), the HTTP handlers in `server/server.go`, and
 the CLI flags in `cmd/loget`. Commits: 7c9db6d (code), this document
@@ -55,7 +55,7 @@ production ready; "Verdict" says what it does claim.
    1000; for `next`, absent means 10 (unchanged) and 0 means 1000.
 9. **Concurrency.** `Apply`, `DropSubject` and `SetAll` run under the
    view's write lock; `Read`, `Len`, `Start`, `Snapshot` under its read
-   lock. The lens is pure (no goroutines, no sync; lens import rule).
+   lock. The index is pure (no goroutines, no sync; index import rule).
 
 ## Defects found and fixed
 
@@ -94,7 +94,7 @@ production ready; "Verdict" says what it does claim.
   OK: 5 kill -9 restarts, 6 full checks; topic t0 held more than 1000
   messages, so the pager was exercised).
 - **C-D4, `DropSubject` was O(all messages)** on every shred and on
-  every open that replays one. The lens keeps a per-subject index of
+  every open that replays one. The index keeps a per-subject index of
   unredacted messages; a shred touches only that subject's messages
   (3.0–3.2 ms → 74–138 µs for 1,024 messages out of 1M, below).
 
@@ -162,9 +162,9 @@ message ever published stayed in RAM and in every base.
 
 | | before (25a7f69) | after |
 |---|---:|---:|
-| topic / group test functions (root, lens, server) | 1 | 14 |
+| topic / group test functions (root, index, server) | 1 | 14 |
 | fuzzers on topic decoders | 0 | 1 (`FuzzLoadTopic`) |
-| `lens/topic.go` statement coverage (lens tests) | 76.1 % | 100 % |
+| `index/topic.go` statement coverage (index tests) | 76.1 % | 100 % |
 
 - `FuzzLoadTopic`: any accepted input must re-encode to identical bytes,
   satisfy the offset invariant (start + index), and survive
@@ -190,7 +190,7 @@ message ever published stayed in RAM and in every base.
   passes.
 - Race: the full suite runs `-race` over root and server, including
   concurrent consumers.
-- Crash points: the lens holds no durable state; retention is part of
+- Crash points: the index holds no durable state; retention is part of
   the base write, whose crash/fencing behaviour is the existing
   compaction model (LogEtCompact) and crash tests.
 - **Mutation:** 16 hand-made mutants (clamp to min cursor, MaxMessages
@@ -212,17 +212,17 @@ Raw output: bench/results/2026-10-30-topics (fuzz2.txt, mutation.txt).
 
 Before = 25a7f69, after = the final code, same benchmark source compiled
 into both, run interleaved 3× on a quiet 8-core box after the 6 h soak
-ended (2026-10-30 ~02:20 IST). Lens: 1M messages of 256 B in 16
+ended (2026-10-30 ~02:20 IST). Index: 1M messages of 256 B in 16
 topics, 1/16 of them with a subject (64 subjects). Root: mem store.
 
 | benchmark | before | after |
 |---|---|---|
-| lens Apply (ns/msg) | 380–397 | 366–405 |
-| lens heap after Apply (B/msg) | 338.6 | 341.3 (+0.8 %, subject index) |
-| lens snapshot load | 1,044–1,196 MB/s | 903–1,087 MB/s |
-| lens heap after snapshot load (B/msg) | 329.0 | 330.7 |
-| lens Read 100 | 2.21–2.38 µs | 2.18–2.42 µs |
-| lens DropSubject, live subject, 1,024 of 1M msgs (`-benchtime 64x`) | 2.99–3.23 ms | 74–138 µs |
+| index Apply (ns/msg) | 380–397 | 366–405 |
+| index heap after Apply (B/msg) | 338.6 | 341.3 (+0.8 %, subject index) |
+| index snapshot load | 1,044–1,196 MB/s | 903–1,087 MB/s |
+| index heap after snapshot load (B/msg) | 329.0 | 330.7 |
+| index Read 100 | 2.21–2.38 µs | 2.18–2.42 µs |
+| index DropSubject, live subject, 1,024 of 1M msgs (`-benchtime 64x`) | 2.99–3.23 ms | 74–138 µs |
 | Publish, 1 msg/txn | 5.9–6.5 µs | 6.1–6.8 µs |
 | Fetch 100 + Ack in one txn | 40–53 µs | 31–47 µs |
 | Open, 200k msgs, replay | 114–121 ms, 338.5 B/msg | 121–140 ms, 338.5 B/msg |
@@ -233,11 +233,11 @@ Read plainly:
 
 - **Snapshot load is ~10–15 % slower in the median** (stricter decode
   and building the subject index). Opening 200k messages by replay was
-  ~10 % slower in the median in this run; the lens Apply numbers show no
+  ~10 % slower in the median in this run; the index Apply numbers show no
   matching change, so this is likely noise, but it is recorded.
 - The first DropSubject benchmark shredded the same 64 subjects over
   and over, so after the first 64 calls the indexed version did nothing
-  (58–65 ns in `ba_lens_after.txt`). That number is meaningless and is
+  (58–65 ns in `ba_index_after.txt`). That number is meaningless and is
   not quoted; the benchmark now reloads every 64 shreds so each one
   hits live messages (`drop_*.txt`).
 - Retention is what bounds topic memory: without it RAM grows ~339 B per

@@ -1,7 +1,7 @@
 // Package loget is a single-writer storage engine where one append-only log on
 // object storage (or a local directory) is the only source of truth, and
 // key-value, topics/consumer groups, documents, secondary indexes and vectors
-// are "lenses": pure folds over that log.
+// are "indexes": pure folds over that log.
 package loget
 
 import (

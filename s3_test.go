@@ -24,8 +24,7 @@ func TestS3EndToEnd(t *testing.T) {
 	}
 	for i := 0; i < 20; i++ {
 		if err := a.Update(ctx, func(tx *Tx) error {
-			tx.Put(fmt.Sprint("k", i), []byte(fmt.Sprint(i)), Subject("u-1"))
-			return tx.Topic("t").Publish([]byte(fmt.Sprint(i)))
+			return tx.Put(fmt.Sprint("k", i), []byte(fmt.Sprint(i)), Subject("u-1"))
 		}); err != nil {
 			t.Fatal(err)
 		}

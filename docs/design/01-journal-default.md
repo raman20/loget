@@ -98,7 +98,7 @@ Invariants (model-checked in `spec/LogEtMigrate.tla`):
   code; a raw fdatasync probe shows ~1 s-periodic 30–75 ms disk stalls on
   this VM (`bench/results/2026-10-28-default-journal/ab-1k/`).
 - Peak RSS 1.95 GiB (files layout 0.99). Profiled: 217 vs 141 B of heap
-  per update, 64% in the KV lens's unbounded version history, and about
+  per update, 64% in the KV index's unbounded version history, and about
   2.8× more writes done by the journal run. Left for compaction/retention.
 - Remaining: 8 MiB chunk growth (zero-fill + fsync under the write lock)
   is a ~15–40 ms stall every ~6 s at 1 MB/s; move it off the commit path.

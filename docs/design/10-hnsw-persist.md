@@ -12,7 +12,7 @@ every branch from its base, so it paid the same rebuild.
 The graph stays a cache. It is not in the manifest, not in any digest, and
 never needed for correctness; losing it costs a rebuild.
 
-- **Format** (`lens/hnsw_persist.go`). One blob per live view: magic,
+- **Format** (`index/hnsw_persist.go`). One blob per live view: magic,
   graph count, then per (collection, dimension) the parameters, node count,
   top level and entry, and per node its id, a 64-bit FNV hash of its unit
   vector and its links per level (links to deleted nodes are dropped).
@@ -65,7 +65,7 @@ vector check → `GraphCurrent` violated in 6 steps.
 
 ## Tests
 
-- `lens`: restore onto the same vectors is byte-identical; onto a later
+- `index`: restore onto the same vectors is byte-identical; onto a later
   state (overwrites, deletes, shreds, a new dimension) it keeps the
   invariants (`CheckANN`) and recall ≥ 0.95 at ef 200; flipped or truncated
   blobs are refused; other parameters rebuild.
@@ -76,7 +76,7 @@ vector check → `GraphCurrent` violated in 6 steps.
   zombie's Close leaves nothing.
 - Simulation: transactions now also put and delete vectors (40 ids, ANN on,
   M 2–5), a third of crashes are clean closes (which save through the
-  faulty store), and every check compares the vector lens to the model and
+  faulty store), and every check compares the vector index to the model and
   runs `CheckANN`. 2000 seeds per suite run.
 
 ## Results

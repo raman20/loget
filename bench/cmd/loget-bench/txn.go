@@ -30,22 +30,6 @@ type occRun struct {
 	InvariantMsg string  `json:"invariant"`
 }
 
-type lensRun struct {
-	Fsync       bool    `json:"fsync"`
-	Partitions  int     `json:"partitions"`
-	Batch       int     `json:"batch"`
-	Txns        int64   `json:"txns"`
-	TxnsPerSec  float64 `json:"txns_per_sec"`
-	MsgsPerSec  float64 `json:"msgs_per_sec"`
-	Latency     Lat     `json:"txn_latency"`
-	ExactlyOnce bool    `json:"exactly_once_check"`
-	// InputDrained: a worker emptied its input partition before the
-	// duration ended and stopped; rates are over the time actually worked.
-	InputDrained bool   `json:"input_drained"`
-	Check        string `json:"check"`
-	Errors       int64  `json:"errors"`
-}
-
 func enc(v int64) []byte { b := make([]byte, 8); binary.LittleEndian.PutUint64(b, uint64(v)); return b }
 func dec(b []byte) int64 {
 	if len(b) < 8 {
@@ -59,17 +43,13 @@ func cmdTxn(args []string) {
 	fsync := fs.Bool("fsync", true, "durable commits")
 	clientsF := fs.String("clients", "8,64", "concurrent clients for contended OCC")
 	hotF := fs.String("hot", "1,16,256,65536", "hot-set sizes; each txn moves 1 unit between 2 random hot keys (1 = increment one counter)")
-	partsF := fs.String("partitions", "1,8", "multi-lens: independent topic partitions, one worker each")
-	batchF := fs.String("batch", "1,10", "multi-lens: messages per transaction")
-	fs.IntVar(&lensPrefill, "prefill", 1_000_000, "multi-lens: input messages published before the run (256 B each), split across partitions")
 	dur := fs.Duration("duration", 5*time.Second, "per cell")
 	seed := fs.Uint64("seed", 42, "RNG seed")
 	dataDir := fs.String("dir", "/tmp/loget-bench", "data directory (wiped)")
 	out := fs.String("out", "results", "output directory")
 	fs.Parse(args)
-	res := &Result{Suite: "txn", Env: envInfo(*dataDir), Params: map[string]any{"fsync": *fsync, "duration": dur.String(), "seed": *seed, "prefill": lensPrefill,
-		"occ_txn":        "read 2 hot keys, write both (a-1, b+1); retried on conflict up to 16 times like loget.Update",
-		"multi_lens_txn": "Fetch N from in-topic group, Put result/<offset> per msg, Publish each to out-topic, Ack last: one transaction"}}
+	res := &Result{Suite: "txn", Env: envInfo(*dataDir), Params: map[string]any{"fsync": *fsync, "duration": dur.String(), "seed": *seed,
+		"occ_txn": "read 2 hot keys, write both (a-1, b+1); retried on conflict up to 16 times like loget.Update"}}
 	for _, sys := range []string{"loget", "badger"} {
 		for _, c := range parseInts(*clientsF) {
 			for _, h := range parseInts(*hotF) {
@@ -80,16 +60,6 @@ func cmdTxn(args []string) {
 					sys, *fsync, c, h, r.CommitsPerS, 100*r.AbortRate, r.GaveUp, r.Latency.P50Us, r.Latency.P99Us, r.InvariantOK)
 				wipe(dir)
 			}
-		}
-	}
-	for _, p := range parseInts(*partsF) {
-		for _, b := range parseInts(*batchF) {
-			dir := filepath.Join(*dataDir, fmt.Sprintf("lens-%v", *fsync))
-			r := lensOnce(dir, *fsync, p, b, *dur)
-			res.Runs = append(res.Runs, r)
-			logf("multi-lens fsync=%v parts=%d batch=%d: %.0f txn/s %.0f msg/s p50 %.0fus p99 %.0fus exactly-once=%v (%s)",
-				*fsync, p, b, r.TxnsPerSec, r.MsgsPerSec, r.Latency.P50Us, r.Latency.P99Us, r.ExactlyOnce, r.Check)
-			wipe(dir)
 		}
 	}
 	res.Params.(map[string]any)["peak_rss"] = peakRSS()
@@ -237,92 +207,4 @@ func occOnce(sys, dir string, fsync bool, clients, hot int, dur time.Duration, s
 	r.InvariantMsg = fmt.Sprintf("sum of hot keys = %d, expected %d (err=%v)", s, want, err)
 	closeFn()
 	return r
-}
-
-var lensPrefill = 1_000_000
-
-func lensOnce(dir string, fsync bool, parts, batch int, dur time.Duration) lensRun {
-	db, err := openLogEt(dir, fsync, "")
-	if err != nil {
-		fatal(err)
-	}
-	defer db.Close()
-	payload := make([]byte, 256)
-	// prefill input; a worker that empties its partition stops (errStop), so
-	// rates cover only the time spent doing real work (reported as drained)
-	prefill := lensPrefill
-	for p := 0; p < parts; p++ {
-		for i := 0; i < prefill/parts; i += 1000 {
-			if err := db.Update(bg, func(tx *loget.Tx) error {
-				for j := 0; j < 1000; j++ {
-					if err := tx.Topic(fmt.Sprintf("in-%d", p)).Publish(payload); err != nil {
-						return err
-					}
-				}
-				return nil
-			}); err != nil {
-				fatal(err)
-			}
-		}
-	}
-	var msgs atomic.Int64
-	stopAware = func(err error) bool { return errors.Is(err, errStop) }
-	defer func() { stopAware = func(error) bool { return false } }()
-	ph := runClosed(parts, dur, func(id int) opFunc {
-		in, outT := fmt.Sprintf("in-%d", id), fmt.Sprintf("out-%d", id)
-		return func() error {
-			var n int
-			err := db.Update(bg, func(tx *loget.Tx) error {
-				g := tx.Topic(in).Group("worker")
-				ms, err := g.Fetch(batch)
-				if err != nil {
-					return err
-				}
-				if len(ms) == 0 {
-					return errStop // input drained: this worker is done
-				}
-				for _, m := range ms {
-					if err := tx.Put(fmt.Sprintf("result/%s/%d", in, m.Offset), m.Value); err != nil {
-						return err
-					}
-					if err := tx.Topic(outT).Publish(m.Value); err != nil {
-						return err
-					}
-				}
-				n = len(ms)
-				return g.Ack(ms[len(ms)-1])
-			})
-			if err == nil {
-				msgs.Add(int64(n))
-			}
-			return err
-		}
-	})
-	// exactly-once: for each partition, cursor == out length == result count
-	ok, drained, check := true, false, ""
-	db.View(bg, func(tx *loget.Tx) error {
-		var outs, results, cursors uint64
-		for p := 0; p < parts; p++ {
-			in := fmt.Sprintf("in-%d", p)
-			cur, _ := tx.Topic(in).Group("worker").Cursor()
-			ol := tx.Topic(fmt.Sprintf("out-%d", p)).Len()
-			rs, _ := tx.Scan("result/" + in + "/")
-			if cur != ol || ol != uint64(len(rs)) {
-				ok = false
-			}
-			if cur >= uint64(prefill/parts) {
-				drained = true
-			}
-			outs += ol
-			results += uint64(len(rs))
-			cursors += cur
-		}
-		check = fmt.Sprintf("consumed %d, out messages %d, result keys %d, acked by workers %d", cursors, outs, results, msgs.Load())
-		if cursors != uint64(msgs.Load()) {
-			ok = false
-		}
-		return nil
-	})
-	return lensRun{Fsync: fsync, Partitions: parts, Batch: batch, Txns: ph.Ops - ph.Errors, TxnsPerSec: round(float64(ph.Ops-ph.Errors)/ph.Seconds, 1),
-		MsgsPerSec: round(float64(msgs.Load())/ph.Seconds, 1), Latency: ph.Latency, ExactlyOnce: ok, InputDrained: drained, Check: check, Errors: ph.Errors}
 }

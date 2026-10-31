@@ -14,8 +14,8 @@
 //
 //	acked ⊆ recovered ⊆ acked ∪ ambiguous      (durability, no phantoms)
 //	recovered is strictly increasing           (no reordering, no double-apply)
-//	lenses == fold(model ops of recovered)     (KV + topic state, shred-redacted)
-//	lens digests == full replay digests        (lens = pure fold over log)
+//	indexes == fold(model ops of recovered)     (KV + counter index, shred-redacted)
+//	index digests == full replay digests        (index = pure fold over log)
 //	a fenced (zombie) writer never commits     (no split brain)
 //	shredded subjects are never readable       (crypto-shred)
 //	Verify(): hash chains + manifest history OK
@@ -24,7 +24,6 @@ package sim
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand"
@@ -35,6 +34,7 @@ import (
 	"sync/atomic"
 
 	"github.com/raman20/loget"
+	"github.com/raman20/loget/examples/counter"
 	"github.com/raman20/loget/format"
 	"github.com/raman20/loget/store"
 )
@@ -50,50 +50,46 @@ type Result struct {
 	Acked            int
 	Ambiguous        int
 	Crashes          int
-	ANNRestores      int // opens that restored a saved HNSW graph
 	ReadFaultCorrupt int // opens that said ErrCorrupt under read faults (then opened clean without them)
 	CalmOpens        int // recoveries that needed the fault storm to pass (100 failed opens)
-	Closes           int // clean closes (save the HNSW graph) instead of a crash
+	Closes           int // clean closes (final snapshot) instead of a crash
 	Takeovers        int
 	Shreds           int
 	Rewinds          int
 	Compacts         int
 	GCs              int
-	TopicTrims       int // checks that saw topic retention move the start
 	Faults           int
 	TraceHash        [32]byte
 }
 
-// document field literals and their numeric class (Find matches by value)
-var simDocVals = []string{"1", "1.0", "10e-1", "2", "2e0", "3"}
-var simDocClass = map[string]string{"1": "1", "1.0": "1", "10e-1": "1", "2": "2", "2e0": "2", "3": "3"}
+// the counter the sim drives (examples/counter, a derived index) and the
+// values its items take
+const simCounter = "c"
+
+var simCounterVals = []string{"0", "1", "2"}
 
 type mop struct {
-	kind    byte // 'p' put, 'd' del, 't' publish, 'v' vector put, 'x' vector del, 'D' doc put, 'Y' doc del
+	kind    byte // 'p' put, 'd' del, 'c' counter set, 'r' counter remove
 	key     string
 	val     string
 	subject string
 }
 
 type sim struct {
-	ctx    context.Context
-	rng    *rand.Rand
-	seed   int64
-	mem    *store.Mem
-	st     *store.Faulty
-	db     *loget.DB
-	clock  atomic.Int64
-	rnd    *lockedRand
-	txs    map[int][]mop  // all issued txns
-	acked  map[int]uint64 // tx id -> lsn
-	amb    map[int]bool
-	shred  map[string]bool // subject -> definitely shredded
-	shredQ map[string]bool // shred outcome unknown
-	// topicStart: the topic's retention start at the last check (it
-	// never goes back); retained: a compaction with retention was tried.
-	topicStart uint64
-	retained   bool
-	rewindQ    uint64 // ambiguous rewind target (+1), 0 = none
+	ctx     context.Context
+	rng     *rand.Rand
+	seed    int64
+	mem     *store.Mem
+	st      *store.Faulty
+	db      *loget.DB
+	clock   atomic.Int64
+	rnd     *lockedRand
+	txs     map[int][]mop  // all issued txns
+	acked   map[int]uint64 // tx id -> lsn
+	amb     map[int]bool
+	shred   map[string]bool // subject -> definitely shredded
+	shredQ  map[string]bool // shred outcome unknown
+	rewindQ uint64          // ambiguous rewind target (+1), 0 = none
 	// prefix: tx ids (and LSNs) in each compaction base, by "log@LSN";
 	// the log only has entries above the base
 	prefix map[string]txPrefix
@@ -150,11 +146,7 @@ func (s *sim) open() (*loget.DB, error) {
 		db, err := loget.OpenStore(s.ctx, s.st,
 			loget.WithClock(func() int64 { return s.clock.Add(1) }),
 			loget.WithRand(s.rnd), loget.WithRepairTail(true), loget.WithSnapshotEvery(1+int(s.seed%7)), loget.WithReadAhead(1),
-			loget.WithLogf(func(f string, _ ...any) {
-				if strings.Contains(f, "ANN graphs restored") {
-					s.res.ANNRestores++
-				}
-			}),
+			loget.WithLogf(func(string, ...any) {}), loget.WithIndex(counter.Kind()),
 			// even seeds keep every value as a log position (none inline),
 			// and every third seed reads them without the value cache
 			loget.WithInlineMax(int(s.seed%2)*64-1), loget.WithValueCacheBytes(map[bool]int{true: -1}[s.seed%3 == 0]))
@@ -191,18 +183,6 @@ func Run(seed int64, cfg Config) (Result, error) {
 	if s.db, err = s.open(); err != nil {
 		return s.res, s.fail("initial open: %v", err)
 	}
-	s.st.On = false
-	if err := s.db.EnableANN(s.ctx, "c", loget.ANNOptions{M: 2 + int(seed%4), EfConstruction: 4}); err != nil {
-		return s.res, s.fail("enable ann: %v", err)
-	}
-	// odd seeds index the documents' field, even seeds scan: Find must
-	// match the model either way
-	if seed%2 == 1 {
-		if err := s.db.RegisterIndex(s.ctx, "docs", "f"); err != nil {
-			return s.res, s.fail("register index: %v", err)
-		}
-	}
-	s.st.On = true
 	for s.res.Steps = 0; s.res.Steps < cfg.Steps; s.res.Steps++ {
 		var err error
 		switch r := s.rng.Intn(100); {
@@ -257,21 +237,15 @@ func (s *sim) txn() error {
 	ops := []mop{}
 	for i := 0; i < n; i++ {
 		m := mop{key: "k" + strconv.Itoa(s.rng.Intn(6)), val: fmt.Sprintf("v%d.%d", id, i), subject: subjects[s.rng.Intn(4)]}
-		switch r := s.rng.Intn(17); {
+		switch r := s.rng.Intn(14); {
 		case r < 6:
 			m.kind = 'p'
 		case r < 8:
 			m.kind, m.val, m.subject = 'd', "", ""
-		case r < 10:
-			m.kind = 't'
-		case r < 13:
-			m.kind, m.key = 'v', "e"+strconv.Itoa(s.rng.Intn(40))
-		case r < 14:
-			m.kind, m.key, m.val, m.subject = 'x', "e"+strconv.Itoa(s.rng.Intn(40)), "", ""
-		case r < 16: // field f: equal numbers in different literals
-			m.kind, m.key, m.val = 'D', "d"+strconv.Itoa(s.rng.Intn(6)), simDocVals[s.rng.Intn(len(simDocVals))]
+		case r < 12:
+			m.kind, m.key, m.val = 'c', "i"+strconv.Itoa(s.rng.Intn(10)), simCounterVals[s.rng.Intn(len(simCounterVals))]
 		default:
-			m.kind, m.key, m.val, m.subject = 'Y', "d"+strconv.Itoa(s.rng.Intn(6)), "", ""
+			m.kind, m.key, m.val, m.subject = 'r', "i"+strconv.Itoa(s.rng.Intn(10)), "", ""
 		}
 		ops = append(ops, m)
 	}
@@ -289,16 +263,10 @@ func (s *sim) txn() error {
 				err = tx.Put(m.key, []byte(m.val), o...)
 			case 'd':
 				err = tx.Delete(m.key)
-			case 't':
-				err = tx.Topic("t").Publish([]byte(m.val), o...)
-			case 'v':
-				err = tx.Vector("c").Put(m.key, simVec(m.val), o...)
-			case 'x':
-				err = tx.Vector("c").Delete(m.key)
-			case 'D':
-				err = tx.Doc("docs").Put(m.key, json.RawMessage(`{"f":`+m.val+`}`), o...)
-			case 'Y':
-				err = tx.Doc("docs").Delete(m.key)
+			case 'c':
+				err = counter.Set(tx, simCounter, m.key, m.val, o...)
+			case 'r':
+				err = counter.Remove(tx, simCounter, m.key)
 			}
 			if err != nil {
 				return err
@@ -333,7 +301,7 @@ func (s *sim) txn() error {
 func (s *sim) crash(faulty bool) error {
 	s.res.Crashes++
 	if s.rng.Intn(3) == 0 {
-		s.db.Close() // clean: saves the HNSW graph (through the faulty store)
+		s.db.Close() // clean: final snapshot (through the faulty store)
 		s.res.Closes++
 	} else {
 		s.db.Crash()
@@ -510,12 +478,7 @@ func (s *sim) compact() error {
 		op = "gc"
 		_, err = s.db.GC(s.ctx, loget.GCOptions{KeepReflog: 1, KeepManifests: 1 + s.rng.Intn(3)})
 	} else {
-		var o loget.CompactOptions
-		if s.rng.Intn(2) == 0 { // topic retention (no groups in the sim)
-			o.Topics.MaxMessages = uint64(s.rng.Intn(8))
-			s.retained = s.retained || o.Topics.MaxMessages > 0
-		}
-		_, err = s.db.Compact(s.ctx, o)
+		_, err = s.db.Compact(s.ctx, loget.CompactOptions{})
 	}
 	s.log("%s @%d=%v", op, head, err)
 	if err == nil {
@@ -562,9 +525,7 @@ func (s *sim) check() error {
 	}
 	// expected state = fold of model ops over recovered ids
 	kv := map[string]string{}
-	vec := map[string]string{}
-	docs := map[string]string{} // id -> canonical class of f
-	var topic []string
+	items := map[string]string{} // counter item -> value
 	for _, id := range ids {
 		kv["__tx"] = strconv.Itoa(id)
 		for _, m := range s.txs[id] {
@@ -578,36 +539,25 @@ func (s *sim) check() error {
 				}
 			case 'd':
 				delete(kv, m.key)
-			case 't':
+			case 'c':
 				if gone {
-					topic = append(topic, "<redacted>")
+					delete(items, m.key)
 				} else {
-					topic = append(topic, m.val)
+					items[m.key] = m.val
 				}
-			case 'v':
-				if gone {
-					delete(vec, m.key)
-				} else {
-					vec[m.key] = m.val
-				}
-			case 'x':
-				delete(vec, m.key)
-			case 'D':
-				if gone {
-					delete(docs, m.key)
-				} else {
-					docs[m.key] = simDocClass[m.val]
-				}
-			case 'Y':
-				delete(docs, m.key)
+			case 'r':
+				delete(items, m.key)
 			}
 		}
 	}
+	counts := map[string]string{}
+	for _, v := range items {
+		n, _ := strconv.Atoi(counts[v])
+		counts[v] = strconv.Itoa(n + 1)
+	}
 	got := map[string]string{}
-	gotVec := map[string]string{}
-	gotDocs := map[string]string{}
-	var gotTopic []string
-	var start, n uint64
+	gotItems := map[string]string{}
+	gotCounts := map[string]string{}
 	err = s.db.View(s.ctx, func(tx *loget.Tx) error {
 		kvs, err := tx.Scan("")
 		if err != nil {
@@ -616,33 +566,16 @@ func (s *sim) check() error {
 		for _, p := range kvs {
 			got[p.Key] = string(p.Value)
 		}
-		hs, err := tx.Vector("c").SearchExact([]float32{1, 0, 0}, 1000)
+		rs, err := tx.ScanRecords(counter.Prefix+simCounter, "")
 		if err != nil {
 			return err
 		}
-		for _, h := range hs {
-			gotVec[h.ID] = ""
+		for _, r := range rs {
+			gotItems[r.Key] = string(r.Value)
 		}
-		for _, class := range []string{"1", "2", "3"} {
-			ids, err := tx.Doc("docs").Find("f", json.Number(class))
-			if err != nil {
-				return err
-			}
-			for _, id := range ids {
-				if prev, dup := gotDocs[id]; dup {
-					return fmt.Errorf("doc %s found by f=%s and f=%s", id, prev, class)
-				}
-				gotDocs[id] = class
-			}
-		}
-		start, n = tx.Topic("t").Start(), tx.Topic("t").Len()
-		ms, err := tx.Topic("t").Read(0, 0)
-		for _, m := range ms {
-			if m.Redacted {
-				gotTopic = append(gotTopic, "<redacted>")
-			} else {
-				gotTopic = append(gotTopic, string(m.Value))
-			}
+		c, err := counter.Counts(tx, simCounter)
+		for v, n := range c {
+			gotCounts[v] = strconv.Itoa(n)
 		}
 		return err
 	})
@@ -650,33 +583,15 @@ func (s *sim) check() error {
 		return s.fail("view: %v", err)
 	}
 	if !mapEq(kv, got) {
-		return s.fail("KV lens != model fold\n  want %v\n  got  %v", sorted(kv), sorted(got))
+		return s.fail("KV index != model fold\n  want %v\n  got  %v", sorted(kv), sorted(got))
 	}
-	for k := range vec {
-		vec[k] = ""
+	if !mapEq(items, gotItems) {
+		return s.fail("counter records != model fold\n  want %v\n  got  %v", sorted(items), sorted(gotItems))
 	}
-	if !mapEq(vec, gotVec) {
-		return s.fail("vector lens != model fold\n  want %v\n  got  %v", sorted(vec), sorted(gotVec))
+	if !mapEq(counts, gotCounts) {
+		return s.fail("counter index != model fold\n  want %v\n  got  %v", sorted(counts), sorted(gotCounts))
 	}
-	if !mapEq(docs, gotDocs) {
-		return s.fail("document Find != model fold (indexed %v)\n  want %v\n  got  %v", s.seed%2 == 1, sorted(docs), sorted(gotDocs))
-	}
-	if err := s.db.CheckANN("main"); err != nil {
-		return s.fail("%v", err)
-	}
-	// retention may have removed a prefix: never past the end, never
-	// back, never without a retention compaction; offsets unchanged.
-	if n != uint64(len(topic)) || start > n || start < s.topicStart || (start > 0 && !s.retained) {
-		return s.fail("topic start %d len %d: want len %d, start in [%d, len] (retention used: %v)", start, n, len(topic), s.topicStart, s.retained)
-	}
-	if start > s.topicStart {
-		s.res.TopicTrims++
-	}
-	s.topicStart = start
-	if strings.Join(topic[start:], ",") != strings.Join(gotTopic, ",") {
-		return s.fail("topic lens != model fold from %d\n  want %v\n  got  %v", start, topic[start:], gotTopic)
-	}
-	d1, _, err := s.db.LensDigests("main")
+	d1, _, err := s.db.IndexDigests("main")
 	if err != nil {
 		return s.fail("%v", err)
 	}
@@ -685,7 +600,7 @@ func (s *sim) check() error {
 		return s.fail("%v", err)
 	}
 	if fmt.Sprint(d1) != fmt.Sprint(d2) {
-		return s.fail("lens digests != fold(log) digests")
+		return s.fail("index digests != fold(log) digests")
 	}
 	r, err := s.db.Verify(s.ctx)
 	if err != nil || !r.OK {
@@ -715,10 +630,4 @@ func sorted(m map[string]string) []string {
 	}
 	sort.Strings(out)
 	return out
-}
-
-// simVec derives a 3-d vector from a value string.
-func simVec(v string) []float32 {
-	h := sha256.Sum256([]byte(v))
-	return []float32{float32(int8(h[0])) + 0.5, float32(int8(h[1])), float32(int8(h[2]))}
 }

@@ -21,7 +21,7 @@ journal store is the local default; every key, version and segment is indexed
 in RAM (design 07: ~2 GiB vs Pebble's ~0.09 GiB steady state at 1M×1 KiB);
 large values live in segments and are read on demand (already WiscKey-style
 key/value separation); KV and topic checkpoints are optional and the other
-lenses replay; HNSW is saved only on clean close (design 10); compaction pauses
+indexes replay; HNSW is saved only on clean close (design 10); compaction pauses
 commits (S2.2); the simulator's `store.Faulty` models failed, lost, delayed,
 duplicated and torn writes.
 
@@ -36,7 +36,7 @@ Ranking = (fit to a weakness LogEt already names) × (strength of evidence) ÷
 |---|---|---|---|---|
 | 1 | TigerBeetle-style explicit storage fault model in the simulator | log, store, sim | proven in production (TigerBeetle, FDB) | 1–2 wk |
 | 2 | Size- and latency-aware group commit tuned to the object store's request curve | log, S3 | paper (Milliscale 2026) + vendor data | 1 wk |
-| 3 | Lens checkpoints for every lens, so open time scales with the tail (includes periodic HNSW save) | log, all lenses | standard technique (ERMIA, SlateDB) | 2–4 wk |
+| 3 | Index checkpoints for every index, so open time scales with the tail (includes periodic HNSW save) | log, all indexes | standard technique (ERMIA, SlateDB) | 2–4 wk |
 | 4 | Disk/object-backed key index: an LSM of immutable key→version-position runs with in-RAM fences and filters | KV, memory | proven (WiscKey, SlateDB, Pebble); newer variants are papers | 6–10 wk (2–3 wk interim) |
 | 5 | Read replicas and warm standby by tailing the log (object store as source of truth, no Raft) | log, HA | proven (SlateDB DbReader, Neon, Litestream) | 2–3 wk |
 | 6 | Fast-commit tier: WAL on S3 Express One Zone (optionally a 2-of-3 bucket quorum), sealed into S3 Standard segments | log, S3 | vendor-proven (WarpStream); paper (Milliscale); quorum part unproven for LogEt | 4–6 wk + TLA+ |
@@ -127,7 +127,7 @@ store type (journal: flush now; S3: 512 KB or 10 ms). Expose batch-size and
 PUT-latency histograms through `/metrics`. Benchmark against docs/s3.md.
 **About 1 week.**
 
-### 3. Checkpoints for every lens; open time ∝ tail; periodic HNSW save
+### 3. Checkpoints for every index; open time ∝ tail; periodic HNSW save
 
 **What it is.** A standard memory-optimized engine checkpoint (ERMIA, as
 used by Milliscale §4.4): an MVCC snapshot at timestamp t is written without
@@ -136,7 +136,7 @@ explicit checkpoints that readers and clones pin.
 - Milliscale §4.4 (ERMIA checkpointing): https://arxiv.org/html/2603.02108v1
 - SlateDB checkpoints and clones: https://slatedb.io/docs/design/checkpoints/ , https://slatedb.io/rfcs/0004-checkpoints/
 
-**Mapping.** ROADMAP "Persisted lens snapshots for all lenses", S2.6 (open
+**Mapping.** ROADMAP "Persisted index snapshots for all indexes", S2.6 (open
 reads every segment), S5.2 (a crash re-inserts every vector since the last
 clean close). Today only KV and topics checkpoint, and only when turned on.
 
@@ -144,12 +144,12 @@ clean close). Today only KV and topics checkpoint, and only when turned on.
 also removes the HNSW crash cliff by saving the graph blob every N inserts or
 T minutes, with the same create-only `ann/` objects keyed by LSN.
 
-**Cost/risk.** Medium. Checkpoints must stay *optional caches*: the lens
+**Cost/risk.** Medium. Checkpoints must stay *optional caches*: the index
 digest has to equal the fold. The test is the existing purity test with
 "checkpoint at a random LSN, reopen, compare digests", run in the simulator.
 Shred must invalidate them; design 10 already does this for ANN blobs.
 
-**Sketch.** A common `lens.Checkpointer` interface (encode at LSN, decode,
+**Sketch.** A common `index.Checkpointer` interface (encode at LSN, decode,
 digest). The writer schedules it off the commit path from a `ViewAt(lsn)`.
 The manifest is not involved: the newest valid checkpoint ≤ head is found by
 LIST, as for `ann/`. **2–4 weeks.**
@@ -157,7 +157,7 @@ LIST, as for `ann/`. **2–4 weeks.**
 ### 4. Object-backed key index: LSM of key-index runs (the S5.1 fix)
 
 **What it is.** LogEt already separates values from keys, as WiscKey does:
-values stay in log segments and the lens holds positions. What WiscKey and
+values stay in log segments and the index holds positions. What WiscKey and
 every LSM do next is keep the **key → position** map itself in sorted,
 immutable runs on storage. RAM then holds only a small memtable of recent
 keys, per-run fence pointers (one key per block) and per-run filters. SlateDB
@@ -170,8 +170,8 @@ work shows how to shrink the RAM side further:
 - Bf-Tree (PVLDB 17, 2024): variable-size mini-pages cache single records, not whole pages: https://vldb.org/pvldb/vol17/p3442-hao.pdf
 - SuRF / Fast Succinct Trie (SIGMOD'18), about 10 bits per trie node, supports range filters: https://db.cs.cmu.edu/papers/2018/mod601-zhangA-hm.pdf
 
-**Mapping.** The KV lens (`lens/kv.go`), the journal object index and the
-segment index (design 07 table). The runs can *be* the KV lens checkpoint
+**Mapping.** The KV index (`index/kv.go`), the journal object index and the
+segment index (design 07 table). The runs can *be* the KV index checkpoint
 (#3). A run written at LSN L is the fold of the log up to L, restricted to
 key positions, so purity is kept.
 
@@ -301,8 +301,8 @@ and turbopuffer ANN v3 (vendor: "<1% of vectors need reranking").
 - Elastic BBQ: https://www.elastic.co/search-labs/blog/better-binary-quantization-lucene-elasticsearch
 - turbopuffer ANN v3 (May 2026): https://turbopuffer.com/blog/ann-v3
 
-**Mapping.** The vector lens (`lens/vector.go`: float32 slab, exact parallel
-scan) and HNSW (`lens/hnsw.go`: distance calls during search).
+**Mapping.** The vector index (`index/vector.go`: float32 slab, exact parallel
+scan) and HNSW (`index/hnsw.go`: distance calls during search).
 
 **Benefit.** A 1-bit code slab is 32× smaller than float32, so exact search
 becomes "scan codes, rerank the top few %", bounded by memory bandwidth. The
@@ -364,9 +364,9 @@ for very selective predicates. Filtered-DiskANN (WWW'23) is the label-aware
 alternative.
 - ACORN: https://arxiv.org/abs/2403.04871 ; Filtered-DiskANN: https://harsha-simhadri.org/pubs/Filtered-DiskANN23.pdf
 
-**Mapping.** The docs lens (secondary indexes) combined with the vector lens.
-Cross-lens queries are where "one log, many lenses" can beat glued systems,
-because both lenses are read at one LSN and consistency is free.
+**Mapping.** The docs index (secondary indexes) combined with the vector index.
+Cross-index queries are where "one log, many indexes" can beat glued systems,
+because both indexes are read at one LSN and consistency is free.
 
 **Benefit.** Correct top-k under filters. Post-filtering an ANN top-k
 silently returns fewer or worse results.
@@ -454,12 +454,12 @@ known weakness, so it comes last. **3–5 weeks.**
 | **S3 Express append as the log format** | 10,000 parts per object, each append billed as a PUT, and the reported consistency pitfalls before If-Match (https://blog.astradot.com/s3-express-append-has-issues/). One object per batch is simpler and already proven in LogEt. |
 | **LazyLog / Lightning-style "ack before sequencing"** | LogEt's single writer assigns LSNs locally, so sequencing is free. The win in WarpStream comes from removing a *remote* sequencer hop. It would also weaken external consistency (WarpStream's own caveat). |
 | **DiskANN-style graph directly on S3** | A cold graph walk needs serial round trips. Partition indexes bound them (turbopuffer doc). Use graphs only when cached in RAM or on NVMe. |
-| **Delegating vectors to AWS S3 Vectors** | It breaks "lens = pure fold(log)", branches, time travel and shredding, and ties LogEt to AWS. Useful as a latency baseline only. |
+| **Delegating vectors to AWS S3 Vectors** | It breaks "index = pure fold(log)", branches, time travel and shredding, and ties LogEt to AWS. Useful as a latency baseline only. |
 | **CRDT core / local-first sync** (Automerge 3, July 2025, >10× less memory: https://automerge.org/blog/automerge-3/ ; Graft: https://graft.rs/docs/about/) | It is a different consistency model: merge, not serializable OCC. LogEt's branches already allow "fork, work offline, promote". A future "sync a branch to the edge" feature could borrow Graft's pull-only-changed-pages idea, but it is not on the critical path. |
 | **Prolly-tree / content-addressed bases for branch diff and merge** (Dolt: https://www.dolthub.com/docs/architecture/storage-engine/prolly-tree/) | Nice for cell-level merge. LogEt has no merge feature, and its bases would need re-chunking. Park until merge is a requirement. |
 | **Antithesis** (deterministic hypervisor: https://antithesis.com/docs/introduction/how_antithesis_works/) | It is a commercial service. LogEt's own simulator plus #1 covers the same ground for an embedded Go engine. Consider it later for `serve` plus a real S3 client end to end. Turso uses both its own DST and Antithesis (https://github.com/tursodatabase/turso/blob/main/testing/simulator/README.md). |
 | **Adopting Kafka diskless (KIP-1150) designs wholesale** | KIP-1150 (accepted 2 Mar 2026) is only a motivational umbrella. The implementation KIPs 1163 and 1164 were still under discussion when I read them (https://cwiki.apache.org/confluence/display/KAFKA/KIP-1150%3A+Diskless+Topics). Nothing to copy yet beyond what WarpStream documents. |
-| **Becoming a broader multi-model / SQL engine** | History is poor. Fauna shut down its service on 30 May 2025 (https://fauna.com/blog/the-future-of-fauna). Multi-model systems tend to lose to specialists on each workload. LogEt's defensible niche is *cross-lens atomicity on one log* (exactly-once consume+write+ack, filtered vector search at one LSN), not breadth. Add lenses only when a cross-lens guarantee needs them. |
+| **Becoming a broader multi-model / SQL engine** | History is poor. Fauna shut down its service on 30 May 2025 (https://fauna.com/blog/the-future-of-fauna). Multi-model systems tend to lose to specialists on each workload. LogEt's defensible niche is *cross-index atomicity on one log* (exactly-once consume+write+ack, filtered vector search at one LSN), not breadth. Add indexes only when a cross-index guarantee needs them. |
 
 Also noted, no action: Bufstream's Jepsen report (Nov 2024) found lost
 committed transaction writes and spurious offsets in a Kafka-on-object-storage

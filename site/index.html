@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>LogEt — One log. One binary. One API.</title>
-<meta name="description" content="LogEt: KV, streams, documents, vectors and transactions as lenses over one append-only log on object storage or local disk. Branch, rewind, provably forget. One Go binary, one API. Pre-1.0 prototype.">
+<meta name="description" content="LogEt: KV, streams, documents, vectors and transactions as indexes over one append-only log on object storage or local disk. Branch, rewind, provably forget. One Go binary, one API. Pre-1.0 prototype.">
 <meta property="og:title" content="LogEt — One log. One binary. One API.">
-<meta property="og:description" content="KV, streams, documents, vectors and transactions as lenses over one log. Branch, rewind, provably forget. Pre-1.0 prototype.">
+<meta property="og:description" content="KV, streams, documents, vectors and transactions as indexes over one log. Branch, rewind, provably forget. Pre-1.0 prototype.">
 <meta property="og:url" content="https://raman20.github.io/loget/">
 <meta name="twitter:card" content="summary">
 <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
@@ -27,7 +27,7 @@
   <div class="wrap">
     <p class="eyebrow">Open source · Apache-2.0 · Go · pre-1.0 prototype</p>
     <h1>One log. One binary.<br><span class="grad">One API.</span></h1>
-    <p class="lede">KV, streams, documents, vectors and transactions are <strong>lenses over a single append-only log</strong> on object storage or a local disk. Branch it, rewind it, and provably forget a user, from one Go binary with no other services.</p>
+    <p class="lede">KV, streams, documents, vectors and transactions are <strong>indexes over a single append-only log</strong> on object storage or a local disk. Branch it, rewind it, and provably forget a user, from one Go binary with no other services.</p>
     <p class="banner"><b>Pre-1.0 prototype — not for production.</b> The core is model-checked and simulation-tested. Compaction, the HNSW index, auth/TLS, push consumers, backup/restore, metrics and graceful shutdown are new; larger-than-RAM state, KMS clients and testing on real cloud object stores are not done yet. Readiness per area: <a href="https://github.com/raman20/loget/blob/main/docs/PRODUCTION_READINESS.md">PRODUCTION_READINESS.md</a>. Latest release: v0.1.0; this page describes unreleased <code>main</code>.</p>
     <div class="cta">
       <a class="btn primary" href="https://github.com/raman20/loget">★ View on GitHub</a>
@@ -68,11 +68,11 @@ hello
   <h2>Six systems → one log</h2>
   <p class="sub">A typical app or agent backend glues these together. Each one has its own failure modes, backups and "delete this user" story.</p>
   <div class="six"><div>Postgres<br><small>state</small></div><div>Redis<br><small>cache, locks</small></div><div>Kafka / SQS<br><small>events</small></div><div>Vector DB<br><small>memory</small></div><div>Outbox table<br><small>consistency</small></div><div>Scripts<br><small>backups, GDPR</small></div></div>
-  <div class="one">one append-only log on S3  →  lenses: KV · topics · docs · vectors · transactions</div>
+  <div class="one">one append-only log on S3  →  indexes: KV · topics · docs · vectors · transactions</div>
   <div class="cards3" style="margin-top:26px">
     <div class="card"><h3>One transaction for everything</h3><p>Consume a message, write the result and ack it atomically. Exactly-once processing with no outbox and no 2PC.</p></div>
     <div class="card"><h3>Branch, rewind, time travel</h3><p>A branch is "parent log + LSN", so no data is copied. Undo a bad agent run, try a plan on a branch, or read any key as of any LSN.</p></div>
-    <div class="card"><h3>Provable deletion</h3><p>Shredding destroys a subject's key, so its data is unreadable on every lens, branch and point in history. You get a signed certificate, and the hash chain still verifies.</p></div>
+    <div class="card"><h3>Provable deletion</h3><p>Shredding destroys a subject's key, so its data is unreadable on every index, branch and point in history. You get a signed certificate, and the hash chain still verifies.</p></div>
     <div class="card"><h3>Simple to run</h3><p>A single static Go binary with no CGO. One URL: <code>./data</code> or <code>s3://bucket/prefix</code>. No ZooKeeper, no Raft, no brokers.</p></div>
     <div class="card"><h3>Fencing without clocks</h3><p>Create-only writes (<code>If-None-Match: *</code>) plus epochs. A zombie writer can never commit after a new one opens.</p></div>
     <div class="card"><h3>Correctness you can rerun</h3><p>TLA+ models checked by TLC, a deterministic fault-injecting simulator, property tests and kill -9 crash tests. All of them run in CI.</p></div>
@@ -137,7 +137,7 @@ db.Update(ctx, <span class="k">func</span>(tx *loget.Tx) error {
 <section class="band" id="how">
   <div class="wrap">
     <h2>How it works</h2>
-    <p class="sub">Everything is the log. Lenses are pure folds over it, and object storage is the only coordination primitive.</p>
+    <p class="sub">Everything is the log. Indexes are pure folds over it, and object storage is the only coordination primitive.</p>
     <div class="flow">
       <div class="node src"><b>Go API · HTTP · CLI</b><span>one code path</span><small>embedded or <code>loget serve</code></small></div>
       <div class="arrow">→</div>
@@ -148,11 +148,11 @@ db.Update(ctx, <span class="k">func</span>(tx *loget.Tx) error {
       <div class="node out"><b>Storage</b><span>create-only writes</span><small>S3 · MinIO · R2 · local journal file</small></div>
     </div>
     <div class="flow2">
-      <div class="node act"><b>Lenses</b><span>KV (MVCC) · topics + groups · docs + indexes · vectors</span><small>state == fold(redact(log, shredded))</small></div>
+      <div class="node act"><b>Indexes</b><span>KV (MVCC) · topics + groups · docs + indexes · vectors</span><small>state == fold(redact(log, shredded))</small></div>
       <div class="node"><b>Manifests</b><span>epoch · branches · reflog</span><small>create-only, dense ids = fencing</small></div>
       <div class="node"><b>Segments</b><span>CRC32C frames · SHA-256 hash chain</span><small>torn tail repaired, never silent loss</small></div>
     </div>
-    <p class="note">Read more: <a href="https://github.com/raman20/loget/blob/main/docs/architecture.md">architecture</a> · <a href="https://github.com/raman20/loget/blob/main/docs/formats.md">on-storage formats</a> · <a href="https://github.com/raman20/loget/blob/main/docs/lens-authoring.md">lens authoring</a></p>
+    <p class="note">Read more: <a href="https://github.com/raman20/loget/blob/main/docs/architecture.md">architecture</a> · <a href="https://github.com/raman20/loget/blob/main/docs/formats.md">on-storage formats</a> · <a href="https://github.com/raman20/loget/blob/main/docs/index-authoring.md">index authoring</a></p>
   </div>
 </section>
 
@@ -171,8 +171,8 @@ db.Update(ctx, <span class="k">func</span>(tx *loget.Tx) error {
   </table></div>
   <div class="cards3" style="margin-top:18px">
     <div class="card"><h3>Deterministic simulation</h3><p>50,000 seeds, plus 10,000 on the final code. That run covered 137,293 acked transactions, 75,537 crashes, 29,979 writer takeovers and 114,926 injected storage faults, each checked against a reference model.</p></div>
-    <div class="card"><h3>Property tests + crash tests</h3><p><code>lens == fold(log)</code> and <code>DropSubject == fold(redacted)</code> with rapid. 200 kill -9 rounds with 4 concurrent writers, and no acked write was lost.</p></div>
-    <div class="card"><h3>Bugs found, then fixed</h3><p>TLC found a stale-opener race that could brick the log. Fuzzing found non-canonical varints. The other tools found a vector lens state that wasn't canonical, and a late-landing DEK.</p></div>
+    <div class="card"><h3>Property tests + crash tests</h3><p><code>index == fold(log)</code> and <code>DropSubject == fold(redacted)</code> with rapid. 200 kill -9 rounds with 4 concurrent writers, and no acked write was lost.</p></div>
+    <div class="card"><h3>Bugs found, then fixed</h3><p>TLC found a stale-opener race that could brick the log. Fuzzing found non-canonical varints. The other tools found a vector index state that wasn't canonical, and a late-landing DEK.</p></div>
   </div>
   <p class="note">The specs are bounded and matched to the code by hand. That is evidence, not proof.</p>
 </section>
@@ -205,8 +205,8 @@ db.Update(ctx, <span class="k">func</span>(tx *loget.Tx) error {
   <p class="sub">No dates. Everything has to respect the design principles. <a href="https://github.com/raman20/loget/blob/main/ROADMAP.md">ROADMAP.md</a></p>
   <div class="road">
     <div><b>Topic retention + TTL</b><br>on top of GC (history windows now on main)</div>
-    <div><b>Persisted lens snapshots</b><br>open in O(tail), not O(history)</div>
-    <div><b>Disk-backed lenses</b><br>datasets larger than RAM</div>
+    <div><b>Persisted index snapshots</b><br>open in O(tail), not O(history)</div>
+    <div><b>Disk-backed indexes</b><br>datasets larger than RAM</div>
     <div><b>Persisted ANN index</b><br>HNSW is on main; save it with snapshots</div>
     <div><b>KMS clients + rekey</b><br>token auth, TLS, KeyProvider on main</div>
     <div><b>Read replicas, no Raft</b><br>tail the log from S3</div>

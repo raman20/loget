@@ -19,13 +19,13 @@ var castagnoli = crc32.MakeTable(crc32.Castagnoli)
 // CRC returns the CRC32C of b.
 func CRC(b []byte) uint32 { return crc32.Checksum(b, castagnoli) }
 
-// Op kinds. The log has exactly four verbs; every model is a lens over them.
+// Op kinds. The log has exactly four verbs; every model is an index over them.
 type Kind uint8
 
 const (
 	OpPut    Kind = 1 // set (space,key) = value
 	OpDel    Kind = 2 // delete (space,key)
-	OpAppend Kind = 3 // append value to stream `space` (topics)
+	OpAppend Kind = 3 // append to stream `space`: written only by the topics index (branch index/topics); main never writes it
 	OpShred  Kind = 4 // audit marker: subject (Key) was crypto-shredded
 )
 
@@ -53,7 +53,7 @@ type Op struct {
 	// ValOff is not encoded: it is the byte offset of Value inside the
 	// segment object that holds the frame (set by AppendFrame and
 	// DecodeSegment; relative to the payload after EncodePayload or
-	// DecodePayload alone; 0 = unknown). It lets lenses keep a position
+	// DecodePayload alone; 0 = unknown). It lets indexes keep a position
 	// instead of a copy of the value.
 	ValOff uint32
 }
@@ -61,7 +61,7 @@ type Op struct {
 // Frame is one committed transaction.
 type Frame struct {
 	LSN  uint64
-	TS   int64 // commit timestamp (from the DB clock), part of the log => deterministic for lenses
+	TS   int64 // commit timestamp (from the DB clock), part of the log => deterministic for indexes
 	Prev [32]byte
 	Ops  []Op
 }

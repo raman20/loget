@@ -61,7 +61,7 @@ Goal: correct top-k under a predicate (post-filtering an ANN top-k
 returns fewer or worse hits).
 
 - API: `VecTx.SearchFilter(q, k, Filter{Coll, Field, Value})` reading
-  the doc index (`lens/docindex.go`) at the same view, so both lenses are
+  the doc index (`index/docindex.go`) at the same view, so both indexes are
   at one LSN. In a read-write transaction the filter's collection and the
   vector collection both go in the read set, and the transaction's own
   doc and vector writes are overlaid (as `Find` and `Search` do now).

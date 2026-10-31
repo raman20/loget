@@ -15,24 +15,19 @@ trap 'kill $SERVER 2>/dev/null || true' EXIT
 export LOGET_ADDR=http://127.0.0.1:$PORT
 for i in $(seq 50); do curl -sf $LOGET_ADDR/v1/verify >/dev/null && break; sleep 0.1; done
 
-step "1. Memory: the agent remembers things about alice (KV + doc + vector), tagged subject=alice"
+step "1. Memory: the agent remembers things about alice and bob, each value tagged with its subject"
 # Keys are not encrypted, so they use an opaque id (u17); personal data goes in values tagged with a subject.
 $LOGET put user/u17/pref "oat milk, no sugar" --subject alice | jq -c .
-$LOGET doc index memories user | jq -c .
-$LOGET doc put memories m1 '{"user":"alice","text":"alice is allergic to peanuts"}' --subject alice | jq -c .
-$LOGET doc put memories m2 '{"user":"bob","text":"bob prefers window seats"}' --subject bob | jq -c .
-$LOGET vec put memvec m1 0.9,0.1,0.0 --subject alice | jq -c .
-$LOGET vec put memvec m2 0.1,0.9,0.0 --subject bob | jq -c .
-echo "-- recall: memories about alice";  $LOGET doc find memories user alice | jq -c '.[]'
-echo "-- recall: nearest memory to [1,0,0]"; $LOGET vec search memvec 1,0,0 -k 2 | jq -c '.[]'
+$LOGET put mem/u17/m1 "alice is allergic to peanuts" --subject alice | jq -c .
+$LOGET put mem/u42/m2 "bob prefers window seats" --subject bob | jq -c .
+echo "-- recall: memories about u17"; $LOGET scan mem/u17/ | jq -c '.[]'
 
-step "2. Tasks: a topic + consumer group; the result and the ack commit atomically in ONE transaction"
-$LOGET pub tasks '{"id":"t1","do":"order lunch for alice"}' --subject alice | jq -c .
-$LOGET pub tasks '{"id":"t2","do":"book bob a flight"}' | jq -c .
+step "2. Tasks: the result and the task's status commit atomically in ONE transaction"
+$LOGET put task/t1 '{"do":"order lunch for alice","state":"open"}' --subject alice | jq -c .
+$LOGET put task/t2 '{"do":"book bob a flight","state":"open"}' | jq -c .
 $LOGET tx '[{"op":"put","key":"result/t1","value":"ordered salad (no peanuts)","subject":"alice"},
-           {"op":"ack","topic":"tasks","group":"agent","offset":0}]' | jq -c .
-echo "-- next unprocessed task for group 'agent' (t1 is already acked; this fetch also acks t2):"
-$LOGET sub tasks --group agent --max 1 | jq -c '.[]'
+           {"op":"put","key":"task/t1","value":"{\"do\":\"order lunch for alice\",\"state\":\"done\"}","subject":"alice"}]' | jq -c .
+echo "-- tasks:"; $LOGET scan task/ | jq -c '.[]'
 GOOD=$($LOGET put checkpoint "before-mistake" | lsn)
 echo "-- checkpoint at LSN $GOOD"
 
@@ -58,10 +53,9 @@ $LOGET shred alice | jq -c '{valid_signature, shred_lsn: .certificate.shred_lsn,
 echo "-- KV:";            $LOGET get user/u17/pref || true
 echo "-- time travel:";   $LOGET get user/u17/pref --at $GOOD || true
 echo "-- old branch:";    $LOGET get result/t1 --branch plan-b || true
-echo "-- docs about alice:"; $LOGET doc find memories user alice | jq -c '.'
-echo "-- vector recall [1,0,0]:"; $LOGET vec search memvec 1,0,0 -k 2 | jq -c '.[]'
-echo "-- task t1 in the topic (offsets stay stable, content is gone):"; $LOGET sub tasks --max 1 | jq -c '.[]'
-echo "-- bob is untouched: $($LOGET doc get memories m2)"
+echo "-- memories:";      $LOGET scan mem/ | jq -c '.[]'
+echo "-- task t1:";        $LOGET get task/t1 || true
+echo "-- bob is untouched: $($LOGET get mem/u42/m2)"
 echo "-- new writes for alice are refused:"; $LOGET put user/u17/x y --subject alice || true
 
 step "6. Verify the whole history (CRCs, hash chains, fencing, shred proofs)"

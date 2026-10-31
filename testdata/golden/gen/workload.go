@@ -9,11 +9,16 @@ import (
 	"strings"
 
 	"github.com/raman20/loget"
+	"github.com/raman20/loget/index"
 )
 
 // --- workload begin ---
-// (testdata/golden/gen/workload.go holds an identical copy; it builds the
-// v0.1.0 golden database with the v0.1.0 code. Only API present in v0.1.0.)
+// (testdata/golden/gen/workload.go holds an identical copy; a release's
+// generator builds that release's golden database with it.)
+
+// notesKind is a record store: records in spaces "n:*", read back through
+// the core record API. It has no state of its own.
+func notesKind() index.Kind { return index.Kind{Name: "notes", Version: 1, Spaces: []string{"n:"}} }
 
 func goldenOpts() []loget.Option {
 	var now int64 = 1_800_000_000_000_000_000
@@ -22,6 +27,7 @@ func goldenOpts() []loget.Option {
 		loget.WithRand(rand.New(rand.NewSource(1))),
 		loget.WithSnapshotEvery(10),
 		loget.WithLogf(func(string, ...any) {}),
+		loget.WithIndex(notesKind()),
 	}
 }
 
@@ -40,28 +46,21 @@ func goldenWorkload(ctx context.Context, db *loget.DB) error {
 					return err
 				}
 			}
-			if err := tx.Topic("events").Publish([]byte(fmt.Sprint("e", i))); err != nil {
-				return err
+			if i%9 == 8 {
+				if err := tx.DeleteRecord("n:users", fmt.Sprint("u", i%5)); err != nil {
+					return err
+				}
 			}
-			doc := map[string]any{"team": fmt.Sprint("t", i%2), "n": i}
-			if err := tx.Doc("users").Put(fmt.Sprint("u", i%5), doc); err != nil {
-				return err
-			}
-			return tx.Vector("emb").Put(fmt.Sprint("x", i%10), []float32{float32(i), float32(i % 3), 1, -float32(i % 5)})
+			return tx.PutRecord("n:users", fmt.Sprint("u", i%5+i%2), []byte(fmt.Sprint("team", i%2, "-", i)))
 		})
 		if err != nil {
 			return err
-		}
-		if i == 10 {
-			if err := db.RegisterIndex(ctx, "users", "team"); err != nil {
-				return err
-			}
 		}
 	}
 	err := db.Update(ctx, func(tx *loget.Tx) error {
 		tx.Put("alice/email", []byte("alice@example.com"), loget.Subject("alice"))
 		tx.Put("bob/email", []byte("bob@example.com"), loget.Subject("bob"))
-		return tx.Topic("events").Publish([]byte("alice-event"), loget.Subject("alice"))
+		return tx.PutRecord("n:audit", "alice-1", []byte("alice did x"), loget.Subject("alice"))
 	})
 	if err != nil {
 		return err
@@ -69,22 +68,12 @@ func goldenWorkload(ctx context.Context, db *loget.DB) error {
 	if _, err := db.Shred(ctx, "alice"); err != nil {
 		return err
 	}
-	err = db.Update(ctx, func(tx *loget.Tx) error {
-		g := tx.Topic("events").Group("g1")
-		ms, err := g.Fetch(5)
-		if err != nil || len(ms) == 0 {
-			return fmt.Errorf("fetch: %d %v", len(ms), err)
-		}
-		return g.Ack(ms[len(ms)-1])
-	})
-	if err != nil {
-		return err
-	}
 	if err := db.CreateBranch(ctx, "exp", "main", 20); err != nil {
 		return err
 	}
 	return db.Branch("exp").Update(ctx, func(tx *loget.Tx) error {
 		tx.Put("exp-only", []byte("x"))
+		tx.PutRecord("n:users", "u9", []byte("exp"))
 		return tx.Delete("k01")
 	})
 }
@@ -110,26 +99,18 @@ func goldenDump(ctx context.Context, db *loget.DB) (string, error) {
 				v, err := tx.Get(k)
 				fmt.Fprintf(&b, "get %s = %q shredded=%v\n", k, v, errors.Is(err, loget.ErrShredded))
 			}
-			ms, err := tx.Topic("events").Read(0, 0)
-			if err != nil {
-				return err
+			for _, sp := range []string{"n:users", "n:audit"} {
+				rs, err := tx.ScanRecords(sp, "")
+				if err != nil {
+					return err
+				}
+				for _, r := range rs {
+					fmt.Fprintf(&b, "record %s %s = %q\n", sp, r.Key, r.Value)
+				}
 			}
-			for _, m := range ms {
-				fmt.Fprintf(&b, "msg %d lsn %d ts %d %q redacted=%v\n", m.Offset, m.LSN, m.TS, m.Value, m.Redacted)
-			}
-			c, err := tx.Topic("events").Group("g1").Cursor()
-			fmt.Fprintf(&b, "cursor g1 %d %v\n", c, err)
-			for i := 0; i < 5; i++ {
-				d, err := tx.Doc("users").Get(fmt.Sprint("u", i))
-				fmt.Fprintf(&b, "doc u%d %s %v\n", i, d, err)
-			}
-			ids, err := tx.Doc("users").Find("team", "t1")
-			fmt.Fprintf(&b, "find team=t1 %v %v\n", ids, err)
-			hits, err := tx.Vector("emb").Search([]float32{3, 1, 1, -2}, 3)
-			for _, h := range hits {
-				fmt.Fprintf(&b, "hit %s %.4f\n", h.ID, h.Score)
-			}
-			return err
+			_, err = tx.GetRecord("n:audit", "alice-1")
+			fmt.Fprintf(&b, "get n:audit alice-1 notfound=%v\n", errors.Is(err, loget.ErrNotFound))
+			return nil
 		})
 		if err != nil {
 			return "", err

@@ -38,58 +38,13 @@ func TestHTTPAPI(t *testing.T) {
 	if got := do("GET", "/v1/kv/pref", "", 200); got != "tea" {
 		t.Fatal(got)
 	}
-	do("POST", "/v1/topics/tasks", "t1", 200)
-	do("POST", "/v1/tx", `[{"op":"put","key":"done/t1","value":"ok"},{"op":"ack","topic":"tasks","group":"w","offset":0}]`, 200)
-	if got := do("POST", "/v1/topics/tasks/groups/w/next", "", 200); strings.TrimSpace(got) != "[]" {
-		t.Fatalf("cursor not advanced atomically: %s", got)
+	do("POST", "/v1/tx", `[{"op":"put","key":"done/t1","value":"ok"},{"op":"put","key":"j","value":{"a":1}}]`, 200)
+	if got := do("GET", "/v1/kv/j", "", 200); got != `{"a":1}` {
+		t.Fatalf("tx JSON value: %s", got)
 	}
-	do("PUT", "/v1/vectors/mem/m1?subject=alice", "[1,0]", 200)
-	do("PUT", "/v1/vectors/mem/m2", "[0,1]", 200)
-	do("POST", "/v1/vectors/mem/ann", `{"m":8}`, 200)
-	do("POST", "/v1/vectors/mem/ann", "", 200)
-	do("POST", "/v1/vectors/mem/ann", "{", 400)
-	for _, body := range []string{`{"vector":[1,0.1],"k":1}`, `{"vector":[1,0.1],"k":1,"exact":true}`, `{"vector":[1,0.1],"k":1,"ef":200}`} {
-		if got := do("POST", "/v1/vectors/mem/search", body, 200); !strings.Contains(got, `"m1"`) {
-			t.Fatalf("%s: %s", body, got)
-		}
-	}
-	do("PUT", "/v1/vectors/mem/bad", "[0,0]", 400)         // zero vector
-	do("PUT", "/v1/vectors/mem/bad", "[]", 400)            // empty
-	do("PUT", "/v1/vectors/mem/bad", `{"a":1}`, 400)       // not an array
-	do("PUT", "/v1/vectors/mem/bad", "[1e39]", 400)        // overflows float32
-	do("POST", "/v1/vectors/mem/ann", `{"m":100000}`, 400) // past MaxM
-	do("POST", "/v1/vectors/mem/search", `{"vector":[1,0],"k":1,"ef":-1}`, 400)
-	do("POST", "/v1/vectors/mem/search", `{"vector":[1,0],"k":1,"ef":100000}`, 400)
-	do("POST", "/v1/vectors/mem/search", `{"vector":[1,0],"k":1000000000000}`, 200) // capped, no huge allocation
-	do("PUT", "/v1/vectors/mem/m3", "[1,1]", 200)
-	do("DELETE", "/v1/vectors/mem/m3", "", 200)
-	if got := do("POST", "/v1/vectors/mem/search", `{"vector":[1,1],"k":5}`, 200); strings.Contains(got, `"m3"`) {
-		t.Fatalf("deleted vector found: %s", got)
-	}
-	do("PUT", "/v1/docs/notes/n1?subject=alice", `{"user":"alice","text":"likes tea"}`, 200)
-	do("POST", "/v1/indexes", `{"coll":"notes","field":"user"}`, 200)
-	if got := do("GET", "/v1/docs/notes?field=user&value=alice", "", 200); !strings.Contains(got, "n1") {
-		t.Fatal(got)
-	}
-	if got := do("GET", "/v1/docs/notes/n1", "", 200); !strings.Contains(got, "likes tea") {
-		t.Fatal(got)
-	}
-	do("GET", "/v1/docs/notes/nope", "", 404)
-	do("PUT", "/v1/docs/notes/bad", `[1,2]`, 400) // not an object
-	do("PUT", "/v1/docs/notes/bad", `{"a":`, 400) // not JSON
-	do("POST", "/v1/indexes", `{`, 400)
-	do("POST", "/v1/indexes", `{"coll":"notes","field":"user"}`, 200) // again: no-op
-	if got := strings.TrimSpace(do("GET", "/v1/docs/notes?field=user&value=bob", "", 200)); got != "[]" {
-		t.Fatalf("no match: %s", got)
-	}
-	// numbers by exact value (no float64 rounding of the query)
-	do("PUT", "/v1/docs/nums/a", `{"n":12345678901234567891}`, 200)
-	do("PUT", "/v1/docs/nums/b", `{"n":1.0}`, 200)
-	for q, want := range map[string]string{"12345678901234567891": `["a"]`, "12345678901234567890": `[]`, "1": `["b"]`} {
-		if got := strings.TrimSpace(do("GET", "/v1/docs/nums?field=n&value="+q, "", 200)); got != want {
-			t.Fatalf("value=%s: %s, want %s", q, got, want)
-		}
-	}
+	do("POST", "/v1/tx", `[{"op":"pub","key":"x"}]`, 400) // unknown op
+	do("POST", "/v1/tx", `[{"op":"put","key":"x","value":"v"},{"op":"ack","key":"x"}]`, 400)
+	do("GET", "/v1/kv/x", "", 404) // the refused tx wrote nothing
 	do("POST", "/v1/branches", `{"name":"exp","from":"main","at":0}`, 200)
 	do("PUT", "/v1/kv/pref?branch=exp&subject=alice", "coffee", 200)
 	if got := do("GET", "/v1/kv/pref", "", 200); got != "tea" {

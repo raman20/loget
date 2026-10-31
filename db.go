@@ -12,14 +12,14 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/raman20/loget/lens"
+	"github.com/raman20/loget/index"
 	"github.com/raman20/loget/store"
 )
 
 // Options configure a DB. Every field has a working default.
 type Options struct {
 	// Clock returns the commit timestamp (unix nanos). Recorded in the log,
-	// so lenses never read a clock themselves. Fake it in simulations.
+	// so indexes never read a clock themselves. Fake it in simulations.
 	Clock func() int64
 	// Rand is the entropy source for keys and nonces (crypto/rand default).
 	Rand io.Reader
@@ -30,13 +30,13 @@ type Options struct {
 	KEK []byte
 	// Keys, if set, supplies the KEK at open (overrides KEK).
 	Keys KeyProvider
-	// SnapshotEvery writes a KV/topic snapshot and a segment-index
-	// checkpoint every N commits per log (<= 0 = never, the default). Open
-	// then recovers the log from the checkpoint (reading only the segments
-	// after it) and folds KV and topics from the snapshot. Vector and
-	// document-index lenses are not snapshotted yet, so open still reads
-	// every segment once to rebuild them. Snapshots are written
-	// synchronously in the commit path and copy the whole KV/topic state.
+	// SnapshotEvery writes a snapshot and a segment-index checkpoint every
+	// N commits per log (<= 0 = never, the default). Open then recovers
+	// the log from the checkpoint (reading only the segments after it)
+	// and restores the record store and every derived index that can
+	// snapshot itself (index.Kind.Restore). A derived index that cannot is
+	// rebuilt by reading every segment once. Snapshots are written
+	// synchronously in the commit path and copy the whole state.
 	SnapshotEvery int
 	// ReadAhead is how many segment reads a replay (open, time travel,
 	// index builds) keeps in flight. 0 = default (8); 1 = one at a time.
@@ -67,6 +67,8 @@ type Options struct {
 	// default open refuses with ErrCorrupt and changes nothing. Set it (CLI:
 	// --repair-tail) only to salvage a database you cannot restore.
 	RepairTail bool
+	// Indexes are the index kinds registered with WithIndex.
+	Indexes []index.Kind
 }
 
 type Option func(*Options)
@@ -101,10 +103,8 @@ type DB struct {
 	// every segment and cross-checks the checkpoints instead)
 	fullScan bool
 
-	annTainted bool                         // a shred ran: do not save graphs built before it
-	annCarry   map[string]lens.ANNSnapshot  // graphs handed over a compaction reload
-	annStats   map[string]lens.ANNLoadStats // last restore per log (tests)
-	keys       *keyring
+	reg  *index.Registry // index kinds (WithIndex); fixed after Open
+	keys *keyring
 	// devKEK: the KEK lives in the bucket (no key supplied).
 	devKEK bool
 	// chg is closed when a branch head may have moved (notify.go).
@@ -221,7 +221,11 @@ func OpenStore(ctx context.Context, st store.Store, opts ...Option) (*DB, error)
 	if o.ValueCacheBytes == 0 {
 		o.ValueCacheBytes = defaultValueCacheBytes()
 	}
-	db := &DB{st: &holdStore{Store: st}, opts: o, vcache: newValueCache(o.ValueCacheBytes), logs: map[string]*logState{}, views: map[string]*view{}, writers: map[string]*writer{}, annStats: map[string]lens.ANNLoadStats{}}
+	reg, err := newRegistry(o.Indexes)
+	if err != nil {
+		return nil, err
+	}
+	db := &DB{st: &holdStore{Store: st}, opts: o, reg: reg, vcache: newValueCache(o.ValueCacheBytes), logs: map[string]*logState{}, views: map[string]*view{}, writers: map[string]*writer{}}
 	if err := db.start(ctx, st); err != nil {
 		// Writers of branches opened before the failure are running, and
 		// the value cache holds memory: stop both without further writes.
@@ -422,12 +426,10 @@ func (db *DB) openWritable(ctx context.Context, id string) (*writer, error) {
 		return nil, err
 	}
 	snap := db.loadSnapshot(ctx, l)
-	v, err := db.buildView(ctx, l, l.head(), db.man.Indexes, snap)
+	v, err := db.buildView(ctx, l, l.head(), snap)
 	if err != nil {
 		return nil, err
 	}
-	// HNSW graphs only on live views: time-travel views scan exactly
-	db.enableANN(ctx, id, v, l.head())
 	db.views[id] = v
 	w := newWriter(db, l, v)
 	db.writers[id] = w
@@ -477,18 +479,10 @@ func (db *DB) Close() error {
 	db.closed = true
 	db.bw.Store(nil)
 	ws := db.writers
-	save := !db.annTainted && db.failed == nil && len(db.man.ANN) > 0
 	db.mu.Unlock()
 	db.bump()
 	for _, id := range sortedMapKeys(ws) {
-		w := ws[id]
-		w.stop()
-		w.mu.RLock()
-		ok := save && w.failed == nil && !w.crashed.Load()
-		w.mu.RUnlock()
-		if ok {
-			db.saveANN(context.Background(), w)
-		}
+		ws[id].stop()
 	}
 	db.vcache.close()
 	if db.owned != nil {
@@ -540,7 +534,7 @@ func (db *DB) Branches() map[string]uint64 {
 
 // Entries returns the committed log entries visible on a branch (oldest
 // first). Values of subject data are ciphertext.
-func (db *DB) Entries(branch string) ([]*lens.Entry, error) {
+func (db *DB) Entries(branch string) ([]*index.Entry, error) {
 	w, err := db.branchWriter(branch)
 	if err != nil {
 		return nil, err

@@ -16,7 +16,7 @@ state at the log's head `K`:
 - Subject (crypto-shredding) values are re-sealed with the based log as
   associated data; values of subjects shredded later are dropped by the
   next compaction (until then they are unreadable ciphertext, as today).
-- Vector and doc-index lenses are rebuilt at open from the base's `vec:*`
+- Vector and doc-index indexes are rebuilt at open from the base's `vec:*`
   and `doc:*` keys, in original commit order.
 
 A based log no longer needs its parent: its base is a full image, so
@@ -31,7 +31,7 @@ the hash-chain head at K, so the chain stays verifiable from there).
 
 ## Storage layout
 - `base/<log>/<K>-e<epoch>.base`: header (magic `LGETBAS1`, K, TS at K,
-  chain head at K), the KV image (lens KV snapshot encoding, refs point
+  chain head at K), the KV image (index KV snapshot encoding, refs point
   into value chunks), the topic image, a trailer with section offsets and
   a CRC-32C over everything but the value chunks.
 - `base/<log>/<K>-e<epoch>/<n>.val`: value chunks (≤ 64 MiB each); a KV
@@ -76,7 +76,7 @@ Why it is safe:
   garbage are swept at the next compaction. Tested by stopping after every
   step and by kill -9 of a compacting child.
 - Live set > what fits in memory: values are streamed chunk by chunk; the
-  KV image itself is in memory (it is already, as the lens).
+  KV image itself is in memory (it is already, as the index).
 - Base image corrupt: open fails with `ErrCorrupt` (no silent fallback,
   the old segments may be gone).
 

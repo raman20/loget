@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/raman20/loget/format"
-	"github.com/raman20/loget/lens"
+	"github.com/raman20/loget/index"
 	"github.com/raman20/loget/store"
 )
 
@@ -265,7 +265,7 @@ func TestEachReadAhead(t *testing.T) {
 	for _, ra := range []int{1, 3, 8, 100} {
 		l.readAhead = ra
 		var got []uint64
-		if err := l.each(ctx, 37, func(e *lens.Entry) error { got = append(got, e.LSN); return nil }); err != nil {
+		if err := l.each(ctx, 37, func(e *index.Entry) error { got = append(got, e.LSN); return nil }); err != nil {
 			t.Fatal(err)
 		}
 		if len(got) != 37 || got[0] != 1 || got[36] != 37 {
@@ -278,7 +278,7 @@ func TestEachReadAhead(t *testing.T) {
 		}
 		stop := errors.New("stop")
 		n := 0
-		if err := l.each(ctx, 40, func(*lens.Entry) error {
+		if err := l.each(ctx, 40, func(*index.Entry) error {
 			if n++; n == 5 {
 				return stop
 			}
@@ -288,7 +288,7 @@ func TestEachReadAhead(t *testing.T) {
 		}
 		x := &logState{meta: l.meta, segs: l.segs, readAhead: ra, st: failGet{Store: st, key: segKey("L1", l.segs[20].seq)}}
 		n = 0
-		if err := x.each(ctx, 40, func(*lens.Entry) error { n++; return nil }); !errors.Is(err, errFailGet) || n != 20 {
+		if err := x.each(ctx, 40, func(*index.Entry) error { n++; return nil }); !errors.Is(err, errFailGet) || n != 20 {
 			t.Fatalf("readAhead %d: read failure: %v after %d entries", ra, err, n)
 		}
 	}

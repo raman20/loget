@@ -72,9 +72,9 @@ func TestMaxKeyBytes(t *testing.T) {
 		t.Fatalf("oversized key: %v", err)
 	}
 	err = db.Update(ctx, func(tx *loget.Tx) error {
-		return tx.Topic(strings.Repeat("t", loget.MaxKeyBytes+1)).Publish([]byte("m"))
+		return tx.PutRecord("kv", strings.Repeat("r", loget.MaxKeyBytes+1), []byte("v"))
 	})
 	if !errors.Is(err, loget.ErrTooLarge) {
-		t.Fatalf("oversized topic name: %v", err)
+		t.Fatalf("oversized record key: %v", err)
 	}
 }

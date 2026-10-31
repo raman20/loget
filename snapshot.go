@@ -8,18 +8,25 @@ import (
 	"fmt"
 
 	"github.com/raman20/loget/format"
-	"github.com/raman20/loget/lens"
+	"github.com/raman20/loget/index"
 	"github.com/raman20/loget/store"
 )
 
-// Snapshots checkpoint a log's KV and topic state so open need not replay
+// Snapshots checkpoint a log's record store and the state of every
+// derived index that can snapshot itself, so open need not replay
 // the whole log. They are a cache: a missing, damaged or mismatched
 // snapshot is ignored (with a log line) and the log is replayed instead.
 //
 // Layout (v2; formats.md):
 //
 //	magic "LGSNAP2\n" | lsn u64 | chain [32]byte | idLen u8 | log id
-//	| kvLen u64 | kv | topic | crc32c u32 (over everything before it)
+//	| kvLen u64 | kv | nSections u32
+//	| { nameLen u8 | name | len u64 | bytes }*nSections   (sorted by name)
+//	| crc32c u32 (over everything before it)
+//
+// A section holds one derived index's Snapshot; its name is the index
+// kind's SectionName ("name@version"). Sections of kinds that are not
+// registered, or of another version, are ignored.
 //
 // The log id and the hash-chain head at lsn bind a snapshot to the exact
 // history it summarises: bytes that belong to another log (or another
@@ -29,10 +36,10 @@ import (
 var snapMagic = [8]byte{'U', 'R', 'S', 'N', 'A', 'P', '2', '\n'}
 
 type snapshot struct {
-	lsn   uint64
-	kv    *lens.KV
-	topic *lens.Topic
-	drop  []string
+	lsn      uint64
+	kv       *index.KV
+	sections map[string][]byte // derived index state by section name
+	drop     []string
 }
 
 // snapHeader is what binds a snapshot to its history.
@@ -44,8 +51,12 @@ type snapHeader struct {
 
 func snapKey(log string, lsn uint64) string { return fmt.Sprintf("snap/%s/%020d.snap", log, lsn) }
 
-func encodeSnapshot(h snapHeader, kv, topic []byte) []byte {
-	b := make([]byte, 0, len(snapMagic)+8+32+1+len(h.log)+8+len(kv)+len(topic)+4)
+func encodeSnapshot(h snapHeader, kv []byte, sections map[string][]byte) []byte {
+	n := len(snapMagic) + 8 + 32 + 1 + len(h.log) + 8 + len(kv) + 4 + 4
+	for name, b := range sections {
+		n += 1 + len(name) + 8 + len(b)
+	}
+	b := make([]byte, 0, n)
 	b = append(b, snapMagic[:]...)
 	b = binary.LittleEndian.AppendUint64(b, h.lsn)
 	b = append(b, h.chain[:]...)
@@ -53,7 +64,13 @@ func encodeSnapshot(h snapHeader, kv, topic []byte) []byte {
 	b = append(b, h.log...)
 	b = binary.LittleEndian.AppendUint64(b, uint64(len(kv)))
 	b = append(b, kv...)
-	b = append(b, topic...)
+	b = binary.LittleEndian.AppendUint32(b, uint32(len(sections)))
+	for _, name := range sortedMapKeys(sections) {
+		b = append(b, byte(len(name)))
+		b = append(b, name...)
+		b = binary.LittleEndian.AppendUint64(b, uint64(len(sections[name])))
+		b = append(b, sections[name]...)
+	}
 	return binary.LittleEndian.AppendUint32(b, format.CRC(b))
 }
 
@@ -61,9 +78,9 @@ var errSnapshot = errors.New("not a valid v2 snapshot")
 
 // decodeSnapshot checks a snapshot's framing and checksum and splits it.
 // It never panics on any input (FuzzDecodeSnapshot).
-func decodeSnapshot(b []byte) (h snapHeader, kv, topic []byte, err error) {
+func decodeSnapshot(b []byte) (h snapHeader, kv []byte, sections map[string][]byte, err error) {
 	const fixed = len(snapMagic) + 8 + 32 + 1
-	if len(b) < fixed+8+4 || !bytes.Equal(b[:8], snapMagic[:]) {
+	if len(b) < fixed+8+4+4 || !bytes.Equal(b[:8], snapMagic[:]) {
 		return h, nil, nil, errSnapshot
 	}
 	body, sum := b[:len(b)-4], binary.LittleEndian.Uint32(b[len(b)-4:])
@@ -83,12 +100,45 @@ func decodeSnapshot(b []byte) (h snapHeader, kv, topic []byte, err error) {
 	if n > uint64(len(rest)) {
 		return h, nil, nil, fmt.Errorf("%w: kv length %d > %d", errSnapshot, n, len(rest))
 	}
-	return h, rest[:n], rest[n:], nil
+	kv, rest = rest[:n], rest[n:]
+	if len(rest) < 4 {
+		return h, nil, nil, fmt.Errorf("%w: truncated section count", errSnapshot)
+	}
+	count := binary.LittleEndian.Uint32(rest)
+	rest = rest[4:]
+	sections = map[string][]byte{}
+	prev := ""
+	for i := uint32(0); i < count; i++ {
+		if len(rest) < 1 || len(rest) < 1+int(rest[0])+8 {
+			return h, nil, nil, fmt.Errorf("%w: truncated section %d", errSnapshot, i)
+		}
+		name := string(rest[1 : 1+int(rest[0])])
+		rest = rest[1+int(rest[0]):]
+		m := binary.LittleEndian.Uint64(rest)
+		rest = rest[8:]
+		if m > uint64(len(rest)) {
+			return h, nil, nil, fmt.Errorf("%w: section %q length %d > %d", errSnapshot, name, m, len(rest))
+		}
+		if i > 0 && name <= prev {
+			return h, nil, nil, fmt.Errorf("%w: section %q out of order", errSnapshot, name)
+		}
+		sections[name], rest, prev = rest[:m], rest[m:], name
+	}
+	if len(rest) != 0 {
+		return h, nil, nil, fmt.Errorf("%w: %d trailing bytes", errSnapshot, len(rest))
+	}
+	return h, kv, sections, nil
 }
 
 func (db *DB) writeSnapshot(ctx context.Context, l *logState, v *view) error {
 	v.mu.RLock()
-	lsn, kv, topic := v.head, v.kv.Snapshot(), v.topic.Snapshot()
+	lsn, kv := v.head, v.kv.Snapshot()
+	sections := map[string][]byte{}
+	for i, k := range db.reg.Derived() {
+		if sn, ok := v.derived[i].(index.Snapshotter); ok && k.Restore != nil {
+			sections[k.SectionName()] = sn.Snapshot()
+		}
+	}
 	v.mu.RUnlock()
 	chain, err := l.chainAt(ctx, lsn)
 	if err != nil {
@@ -101,7 +151,7 @@ func (db *DB) writeSnapshot(ctx context.Context, l *logState, v *view) error {
 		db.logf("loget: segment-index checkpoint failed (non-fatal): %v", err)
 	}
 	key := snapKey(l.meta.ID, lsn)
-	b := encodeSnapshot(snapHeader{log: l.meta.ID, lsn: lsn, chain: chain}, kv, topic)
+	b := encodeSnapshot(snapHeader{log: l.meta.ID, lsn: lsn, chain: chain}, kv, sections)
 	if err := putExactlyOnce(ctx, db.st, key, b); err != nil && !errors.Is(err, store.ErrExists) {
 		return err
 	}
@@ -134,22 +184,18 @@ func (db *DB) readSnapshot(ctx context.Context, l *logState, key string) (*snaps
 	if err != nil {
 		return nil, err
 	}
-	h, kvb, tpb, err := decodeSnapshot(b)
+	h, kvb, sections, err := decodeSnapshot(b)
 	if err != nil {
 		return nil, err
 	}
 	if err := l.checkSnapshot(ctx, key, h); err != nil {
 		return nil, err
 	}
-	kv, err := lens.LoadKV(kvb, db.opts.InlineMax)
+	kv, err := index.LoadKV(kvb, db.opts.InlineMax)
 	if err != nil {
 		return nil, err
 	}
-	tp, err := lens.LoadTopic(tpb)
-	if err != nil {
-		return nil, err
-	}
-	return &snapshot{lsn: h.lsn, kv: kv, topic: tp, drop: db.keys.shreddedList()}, nil
+	return &snapshot{lsn: h.lsn, kv: kv, sections: sections, drop: db.keys.shreddedList()}, nil
 }
 
 // checkSnapshot verifies that a snapshot header belongs at key in l's

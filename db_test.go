@@ -18,7 +18,7 @@ func quiet() Option { return WithLogf(func(string, ...any) {}) }
 
 func mustOpen(t testing.TB, st store.Store, opts ...Option) *DB {
 	t.Helper()
-	db, err := OpenStore(ctx, st, append([]Option{quiet()}, opts...)...)
+	db, err := OpenStore(ctx, st, append([]Option{quiet(), WithIndex(tallyKind())}, opts...)...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,38 +100,6 @@ func TestRegressionStaleReadsAfterRestart(t *testing.T) {
 	}
 }
 
-// Regression for previous-prototype bugs #2 and #3: deleted vectors returned by
-// search, and vectors lost on restart.
-func TestRegressionVectorsDeleteAndRestart(t *testing.T) {
-	st := store.NewMem()
-	db := mustOpen(t, st)
-	db.Update(ctx, func(tx *Tx) error {
-		tx.Vector("m").Put("a", []float32{1, 0})
-		tx.Vector("m").Put("b", []float32{0.9, 0.1})
-		return tx.Vector("m").Put("c", []float32{0, 1})
-	})
-	db.Update(ctx, func(tx *Tx) error { return tx.Vector("m").Delete("a") })
-	check := func(db *DB) {
-		db.View(ctx, func(tx *Tx) error {
-			hits, _ := tx.Vector("m").Search([]float32{1, 0}, 10)
-			if len(hits) != 2 || hits[0].ID != "b" {
-				t.Fatalf("hits %+v", hits)
-			}
-			for _, h := range hits {
-				if h.ID == "a" {
-					t.Fatal("deleted vector returned")
-				}
-			}
-			return nil
-		})
-	}
-	check(db)
-	db.Close()
-	db = mustOpen(t, st)
-	defer db.Close()
-	check(db) // persisted by replay: nothing lost on restart
-}
-
 // Regression for previous-prototype bug #4: one partial/torn index file bricked open.
 // Here: a damaged tail segment refuses open unless WithRepairTail, which
 // repairs it; a corrupt snapshot is ignored.
@@ -208,59 +176,6 @@ func TestCorruptMiddleSegmentRefusesOpen(t *testing.T) {
 	}
 }
 
-func TestTopicsAndExactlyOnceConsumer(t *testing.T) {
-	st := store.NewMem()
-	db := mustOpen(t, st)
-	defer db.Close()
-	for i := 0; i < 100; i++ {
-		db.Update(ctx, func(tx *Tx) error { return tx.Topic("jobs").Publish([]byte(fmt.Sprint(i))) })
-	}
-	// 8 concurrent consumers in one group: consume + KV write + ack in ONE tx
-	var wg sync.WaitGroup
-	for c := 0; c < 8; c++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for {
-				done := false
-				err := db.Update(ctx, func(tx *Tx) error {
-					g := tx.Topic("jobs").Group("workers")
-					ms, err := g.Fetch(1)
-					if err != nil {
-						return err
-					}
-					if len(ms) == 0 {
-						done = true
-						return nil
-					}
-					key := "done/" + string(ms[0].Value)
-					if _, err := tx.Get(key); err == nil {
-						return fmt.Errorf("double processing of %s", key)
-					}
-					tx.Put(key, []byte("1"))
-					return g.Ack(ms[0])
-				})
-				if err != nil && !errors.Is(err, ErrConflict) {
-					t.Error(err)
-					return
-				}
-				if done {
-					return
-				}
-			}
-		}()
-	}
-	wg.Wait()
-	db.View(ctx, func(tx *Tx) error {
-		kvs, _ := tx.Scan("done/")
-		c, _ := tx.Topic("jobs").Group("workers").Cursor()
-		if len(kvs) != 100 || c != 100 {
-			t.Fatalf("processed %d cursor %d", len(kvs), c)
-		}
-		return nil
-	})
-}
-
 func TestSerializableNoLostUpdate(t *testing.T) {
 	db := mustOpen(t, store.NewMem())
 	defer db.Close()
@@ -295,37 +210,6 @@ func TestSerializableNoLostUpdate(t *testing.T) {
 	if string(v) != fmt.Sprint(ok) || ok < 300 {
 		t.Fatalf("counter=%s acked=%d", v, ok)
 	}
-}
-
-func TestDocsAndIndexAddedLater(t *testing.T) {
-	st := store.NewMem()
-	db := mustOpen(t, st)
-	for i := 0; i < 30; i++ {
-		db.Update(ctx, func(tx *Tx) error {
-			return tx.Doc("mem").Put(fmt.Sprint("m", i), map[string]any{"topic": fmt.Sprint("t", i%3), "n": i})
-		})
-	}
-	var noIdx []string
-	db.View(ctx, func(tx *Tx) error { noIdx, _ = tx.Doc("mem").Find("topic", "t1"); return nil })
-	if err := db.RegisterIndex(ctx, "mem", "topic"); err != nil { // backfills by replay
-		t.Fatal(err)
-	}
-	var withIdx []string
-	db.View(ctx, func(tx *Tx) error { withIdx, _ = tx.Doc("mem").Find("topic", "t1"); return nil })
-	if len(noIdx) != 10 || fmt.Sprint(noIdx) != fmt.Sprint(withIdx) {
-		t.Fatalf("scan %v vs index %v", noIdx, withIdx)
-	}
-	db.Update(ctx, func(tx *Tx) error { return tx.Doc("mem").Put("m1", map[string]any{"topic": "zzz"}) })
-	db.Close()
-	db = mustOpen(t, st)
-	defer db.Close()
-	db.View(ctx, func(tx *Tx) error {
-		ids, _ := tx.Doc("mem").Find("topic", "t1")
-		if len(ids) != 9 {
-			t.Fatalf("after update+restart: %v", ids)
-		}
-		return nil
-	})
 }
 
 func TestBranchRewindPromoteTimeTravel(t *testing.T) {
@@ -406,12 +290,10 @@ func TestShred(t *testing.T) {
 	db.Update(ctx, func(tx *Tx) error {
 		tx.Put("pref/u7", []byte("likes tea"), Subject("u-7"))
 		tx.Put("pref/u8", []byte("likes coffee"), Subject("u-8"))
-		tx.Doc("mem").Put("m1", map[string]any{"user": "u-7", "text": "secret"}, Subject("u-7"))
-		tx.Vector("mem").Put("m1", []float32{1, 0}, Subject("u-7"))
-		tx.Vector("mem").Put("m2", []float32{0.9, 0.1}, Subject("u-8"))
-		return tx.Topic("ev").Publish([]byte("u7 did x"), Subject("u-7"))
+		tx.PutRecord("t:mem", "m1", []byte("tea"), Subject("u-7"))
+		tx.PutRecord("t:mem", "m2", []byte("tea"), Subject("u-8"))
+		return tx.PutRecord("t:mem", "m3", []byte("tea"))
 	})
-	db.RegisterIndex(ctx, "mem", "user")
 	before, _ := db.Branch("main").Head()
 	db.CreateBranch(ctx, "old", "main", 0)
 	cert, err := db.Shred(ctx, "u-7")
@@ -426,19 +308,11 @@ func TestShred(t *testing.T) {
 			if v, _ := tx.Get("pref/u8"); string(v) != "likes coffee" {
 				t.Fatalf("other subject damaged")
 			}
-			if _, err := tx.Doc("mem").Get("m1"); err == nil {
-				t.Fatal("shredded doc readable")
+			if _, err := tx.GetRecord("t:mem", "m1"); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("%s@%d: shredded record readable: %v", br, at, err)
 			}
-			if ids, _ := tx.Doc("mem").Find("user", "u-7"); len(ids) != 0 {
-				t.Fatalf("index still has shredded doc: %v", ids)
-			}
-			hits, _ := tx.Vector("mem").Search([]float32{1, 0}, 5)
-			if len(hits) != 1 || hits[0].ID != "m2" {
-				t.Fatalf("vector hits %v", hits)
-			}
-			ms, _ := tx.Topic("ev").Read(0, 10)
-			if len(ms) != 1 || ms[0].Value != nil || !ms[0].Redacted {
-				t.Fatalf("topic %+v", ms)
+			if n, _ := tallyCount(tx, "t:mem", "tea"); n != 2 {
+				t.Fatalf("%s@%d: derived index still counts the shredded record: %d", br, at, n)
 			}
 			return nil
 		})
@@ -453,11 +327,11 @@ func TestShred(t *testing.T) {
 	if !r.OK || r.Unreadable == 0 {
 		t.Fatalf("verify after shred: %+v", r)
 	}
-	// lens == fold(redact(log)) after shred
-	d1, _, _ := db.LensDigests("main")
+	// index == fold(redact(log)) after shred
+	d1, _, _ := db.IndexDigests("main")
 	d2, _ := db.RebuildDigests("main")
 	if fmt.Sprint(d1) != fmt.Sprint(d2) {
-		t.Fatal("lens != fold(redacted log) after shred")
+		t.Fatal("index != fold(redacted log) after shred")
 	}
 	db.Close()
 	db = mustOpen(t, st)
@@ -519,7 +393,7 @@ func TestSnapshotEqualsFold(t *testing.T) {
 	for i := 0; i < 23; i++ {
 		db.Update(ctx, func(tx *Tx) error {
 			tx.Put(fmt.Sprint("k", i%4), []byte(fmt.Sprint(i)))
-			return tx.Topic("t").Publish([]byte{byte(i)})
+			return tx.PutRecord("t:x", fmt.Sprint(i%7), []byte{byte(i % 3)})
 		})
 	}
 	db.Close()
@@ -528,7 +402,7 @@ func TestSnapshotEqualsFold(t *testing.T) {
 	if db.Manifest().Logs["L1"].SnapLSN == 0 {
 		t.Fatal("no snapshot written")
 	}
-	d1, _, _ := db.LensDigests("main")
+	d1, _, _ := db.IndexDigests("main")
 	d2, _ := db.RebuildDigests("main")
 	if fmt.Sprint(d1) != fmt.Sprint(d2) {
 		t.Fatal("snapshot+tail != full fold")

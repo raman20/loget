@@ -26,7 +26,7 @@ clients, encrypt traffic, or hide metadata.
 ## Shred
 
 `Shred(s)` writes a marker, deletes the DEK, appends an audit entry and
-returns an ed25519-signed certificate. Afterwards no lens, branch or LSN
+returns an ed25519-signed certificate. Afterwards no index, branch or LSN
 returns `s`'s data, new writes for `s` fail with `410`, and `verify` still
 passes because the hash chain covers ciphertext. Limits:
 - Copies of the DEK outside LogEt's control (backups, object versions)

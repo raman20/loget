@@ -10,7 +10,6 @@ import (
 	"strings"
 
 	"github.com/raman20/loget/format"
-	"github.com/raman20/loget/lens"
 	"github.com/raman20/loget/store"
 )
 
@@ -26,8 +25,6 @@ type Manifest struct {
 	Logs    map[string]*LogMeta `json:"logs"`
 	Refs    map[string]string   `json:"refs"` // branch name -> log id
 	Reflog  []RefChange         `json:"reflog,omitempty"`
-	Indexes []IndexDecl         `json:"indexes,omitempty"`
-	ANN     []ANNDecl           `json:"ann,omitempty"`     // vector collections with an HNSW graph
 	Garbage []Garbage           `json:"garbage,omitempty"` // objects to delete once due (compaction)
 }
 
@@ -76,17 +73,6 @@ type RefChange struct {
 	TS   int64  `json:"ts,omitempty"` // unix nanoseconds (0 in manifests written before GC existed)
 }
 
-// ANNDecl opts a vector collection into an HNSW graph (EnableANN).
-type ANNDecl struct {
-	Coll string `json:"coll"`
-	ANNOptions
-}
-
-type IndexDecl struct {
-	Coll  string `json:"coll"`
-	Field string `json:"field"`
-}
-
 // manifestFormat is what a new database starts with; compaction writes
 // manifestFormatBase (bases and garbage), which older binaries refuse
 // instead of misreading a log whose first segments are gone.
@@ -98,8 +84,8 @@ const (
 // Formats describes the on-storage format versions this build reads and
 // writes (`loget version`; docs/compatibility.md).
 func Formats() string {
-	return fmt.Sprintf("manifest %d-%d, segment %d, base %s, journal %d, snapshot 2 (KV2), checkpoint 1, ann %s",
-		manifestFormat, manifestFormatBase, format.SegVersion, baseMagic[7:], store.JournalVersion, lens.ANNVersion)
+	return fmt.Sprintf("manifest %d-%d, segment %d, base %s, journal %d, snapshot 2 (KV2), checkpoint 1",
+		manifestFormat, manifestFormatBase, format.SegVersion, baseMagic[7:], store.JournalVersion)
 }
 
 func manifestKey(id uint64) string { return fmt.Sprintf("manifest/%020d.mf", id) }

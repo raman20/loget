@@ -1,6 +1,6 @@
 # Getting started
 
-This walks through every lens from the CLI, then the same engine from Go.
+This walks through every index from the CLI, then the same engine from Go.
 All commands and outputs below are from a real run of unreleased `main` on
 Linux (LSNs depend on what you ran before; hashes differ every run).
 
@@ -161,7 +161,7 @@ and `--tls-cert` / `--tls-key`; see [operations](operations.md).
 go get github.com/raman20/loget@main
 ```
 
-[`examples/tour/main.go`](../examples/tour/main.go) uses every lens, time
+[`examples/tour/main.go`](../examples/tour/main.go) uses every index, time
 travel, branches, rewind, shred and verify on `mem://`. From a clone:
 `go run ./examples/tour`.
 

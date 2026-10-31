@@ -1,14 +1,14 @@
-# Component B: the KV lens
+# Component B: the KV index
 
-Review of the KV lens, completed 2026-10-30 (IST). Code: `lens/kv.go`,
-`lens/kvrun.go`, the decoder helpers in `lens/lens.go`, and the KV
+Review of the KV index, completed 2026-10-30 (IST). Code: `index/kv.go`,
+`index/kvrun.go`, the decoder helpers in `index/index.go`, and the KV
 callers in the root package (`tx.go`, compaction, shredding). This
-review does not claim the KV lens is production ready; "Verdict" says
+review does not claim the KV index is production ready; "Verdict" says
 what it does claim.
 
 ## Contract
 
-1. **Fold.** The lens is a pure fold of the log. `Get(space, key, at)`
+1. **Fold.** The index is a pure fold of the log. `Get(space, key, at)`
    returns the newest version with LSN ≤ `at`; a delete version reads as
    absent (`Version{}, false`). `Scan(space, prefix, at)` returns the same
    for every key with that prefix, in key order. `LastWrite` is the
@@ -26,8 +26,8 @@ what it does claim.
    subject `s`, in every run, before it returns.
 5. **Concurrency.** `Apply`, `DropSubject`, `SetLatest` run under the
    view's write lock; `Get`, `Scan`, `Latest`, `Snapshot` under its read
-   lock and never mutate the lens. The lens is pure (no goroutines, no
-   sync), per the lens import rule.
+   lock and never mutate the index. The index is pure (no goroutines, no
+   sync), per the index import rule.
 6. **Values are not shared out.** `Version.Val` may alias an immutable
    run buffer; every caller copies it before it leaves the package
    (`tx.open` `bytes.Clone`, compaction `Clone`, doc/vector decode).
@@ -85,11 +85,11 @@ what it does claim.
   once. A run is capped at 2^39 bytes (the slot's block-start field);
   loading a larger snapshot splits it into disjoint runs.
 - **Model**: the old map implementation is kept as a test model
-  (`kvmodel_test.go`); rapid checks that the run lens refines it.
+  (`kvmodel_test.go`); rapid checks that the run index refines it.
 
 ## TLA+ alignment
 
-There is no KV-specific spec. `LogEtTxn.tla` uses the KV lens only as
+There is no KV-specific spec. `LogEtTxn.tla` uses the KV index only as
 "the fold of a log prefix" for snapshot reads and "does any entry after
 snap write k" for conflicts; both are contract item 1 and unchanged.
 The new representation is checked against the map model by property
@@ -101,7 +101,7 @@ tested.
 
 | | before (00ecf41) | after |
 |---|---:|---:|
-| Test/Fuzz functions in `lens` | 13 | 23 |
+| Test/Fuzz functions in `index` | 13 | 23 |
 | Fuzzers on KV decoders | 0 | 1 (`FuzzLoadKV`, snapshot and base) |
 
 - `FuzzLoadKV`: strict and base loads; anything accepted must re-encode
@@ -117,17 +117,17 @@ tested.
   `TestKVRunsForcedMerge`, `TestKVManyVersions`, `TestKVLatestError`,
   `TestKVRunOddVersions`, `TestLoadKVRejectsMalformed`.
 - Race: the full suite runs `-race` over the root package, whose
-  concurrent read/write tests exercise the lens under the view lock.
-- Crash points: the lens holds no durable state; the log's crash tests
+  concurrent read/write tests exercise the index under the view lock.
+- Crash points: the index holds no durable state; the log's crash tests
   (component A) recover it by snapshot load or replay, both covered.
-- Mutation: 20 hand-made mutants of kv.go/kvrun.go/lens.go decoder
+- Mutation: 20 hand-made mutants of kv.go/kvrun.go/index.go decoder
   lines. First pass 17 killed; the 3 survivors (hot counter, a position
   without checksum, the subject liveness check) led to `checkHot` and
   `TestKVRunOddVersions` and are now killed: 20/20.
   bench/results/2026-10-30-kv/mutation.txt.
-- Coverage (`-coverpkg=./,./lens`, root + lens tests): kv.go 94.3 % →
-  99.0 % from lens tests alone (100 % with the root tests, which cover
-  `Ref` and `LoadKVBase`), kvrun.go (new) 100 %, the decoder in lens.go
+- Coverage (`-coverpkg=./,./index`, root + index tests): kv.go 94.3 % →
+  99.0 % from index tests alone (100 % with the root tests, which cover
+  `Ref` and `LoadKVBase`), kvrun.go (new) 100 %, the decoder in index.go
   84.6 % → 100 %. The review's coverage pass added four malformed-input
   cases (truncated u64, value or version count past the end, chunk over
   32 bits) and removed one unreachable branch in `SetLatest` (an
@@ -135,7 +135,7 @@ tested.
 
 ## Benchmarks
 
-`lens/kv_bench_test.go`, same code before (old map lens) and after:
+`index/kv_bench_test.go`, same code before (old map index) and after:
 keys `user%010d` shuffled, 8 puts per entry, 1 KiB values stored by
 reference (as the root package does above the inline limit). 1M keys
 (`-count 3`) and 10M keys (`LOGET_KV_KEYS=10000000`). Shared 8-core
@@ -156,7 +156,7 @@ Tradeoffs, stated plainly:
 - **Get is 1.1–1.3× slower** (one hash probe per run instead of one map
   probe). End-to-end `Get` is dominated by the HTTP/tx path; the root
   benches are recorded separately below.
-- **Lens ingest is 1.7–1.9× slower** (merge work, write amplification of
+- **Index ingest is 1.7–1.9× slower** (merge work, write amplification of
   each version is rewritten once per
   merge level, a few times at 10M keys). Commit latency is dominated
   by the log PUT/fsync, hundreds of µs.
@@ -186,7 +186,7 @@ puts and open with a 2 ms GET, so there is no measurable root-level
 regression there. Medians that did move: mem puts +3 %, open with no GET
 delay +5 % (snapshot) and +14 % (no snapshot, one 15.6 ms outlier). These
 are inside this box's run-to-run spread but are recorded, not waved away. A CPU profile of the after binary puts 95 % of `Get` in
-`store.Mem.Get` copying the segment (`memmove`) plus GC; no KV lens frame
+`store.Mem.Get` copying the segment (`memmove`) plus GC; no KV index frame
 reaches the 0.5 % cutoff.
 
 ## Residual risks
@@ -216,10 +216,10 @@ reaches the 0.5 % cutoff.
 
 ## Verdict
 
-The KV lens meets the contract above under the tests listed: the
+The KV index meets the contract above under the tests listed: the
 fuzzer, the refinement property and 20/20 mutants found nothing open.
 B-D1 to B-D4 are fixed with regression tests or benchmarks. The
 component is **done for this review**, trading a 1.1–1.3× slower point
-`Get` and 1.7–1.9× slower lens ingest for 5.7× less heap after load,
+`Get` and 1.7–1.9× slower index ingest for 5.7× less heap after load,
 4–5.5× faster snapshot load and prefix scans that no longer scale with
 the key count. This is not a claim of production readiness.

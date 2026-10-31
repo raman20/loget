@@ -3,9 +3,7 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -74,8 +72,8 @@ func call(method, url, body string) (int, string) {
 }
 
 // TestServeLifecycle: a port clash fences nobody; a second server names
-// whom it fenced and the first says who fenced it; SIGTERM drains streams
-// and long polls, then closes cleanly.
+// whom it fenced and the first says who fenced it; SIGTERM drains and
+// closes cleanly, keeping every acknowledged write.
 func TestServeLifecycle(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds the binary")
@@ -111,52 +109,13 @@ func TestServeLifecycle(t *testing.T) {
 	}
 	a.cmd.Process.Kill()
 
-	// 3. graceful shutdown of B with a stream and a long poll open
+	// 3. graceful shutdown of B
 	bbase := "http://" + b.addr
 	if c, body := call("PUT", bbase+"/v1/kv/k", "v4"); c != 200 {
 		t.Fatalf("put on B: %d %s", c, body)
 	}
-	call("POST", bbase+"/v1/topics/t", "m0")
-	req, _ := http.NewRequest("GET", bbase+"/v1/topics/t/stream", nil)
-	req.Header.Set("Authorization", "Bearer tok")
-	sr, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer sr.Body.Close()
-	stream := make(chan string, 1)
-	go func() {
-		var all strings.Builder
-		sc := bufio.NewScanner(sr.Body)
-		for sc.Scan() {
-			all.WriteString(sc.Text() + "\n")
-		}
-		stream <- all.String()
-	}()
-	poll := make(chan string, 1)
-	go func() {
-		c, body := call("GET", bbase+"/v1/topics/t?from=1&wait=60s", "")
-		poll <- fmt.Sprint(c, " ", body)
-	}()
-	time.Sleep(300 * time.Millisecond)
 	t0 := time.Now()
 	b.cmd.Process.Signal(syscall.SIGTERM)
-	select {
-	case s := <-stream:
-		if !strings.Contains(s, "event: shutdown") || !strings.Contains(s, "m0") {
-			t.Errorf("stream on drain:\n%s", s)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("stream still open 10 s after SIGTERM")
-	}
-	select {
-	case s := <-poll:
-		if !strings.HasPrefix(s, "200 ") {
-			t.Errorf("long poll on drain: %s", s)
-		}
-	case <-time.After(10 * time.Second):
-		t.Fatal("long poll still open 10 s after SIGTERM")
-	}
 	select {
 	case err := <-b.done:
 		if err != nil || !strings.Contains(b.log(), "closed cleanly") {

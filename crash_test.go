@@ -24,7 +24,7 @@ func crashChild(loc string) {
 	if err != nil {
 		panic(err)
 	}
-	db, err := OpenStore(ctx, st, WithLogf(func(string, ...any) {}), WithSnapshotEvery(50))
+	db, err := OpenStore(ctx, st, WithLogf(func(string, ...any) {}), WithSnapshotEvery(50), WithIndex(tallyKind()))
 	if err != nil {
 		fmt.Println("OPENERR", err)
 		os.Exit(3)
@@ -56,7 +56,7 @@ func crashChild(loc string) {
 				err := db.Update(ctx, func(tx *Tx) error {
 					tx.Put(fmt.Sprintf("g%d/%08d", g, i), []byte("x"))
 					tx.Put(fmt.Sprint("cnt", g), []byte(strconv.Itoa(i)))
-					return tx.Topic("t").Publish([]byte(fmt.Sprintf("%d:%d", g, i)))
+					return tx.PutRecord("t:c", fmt.Sprintf("%d:%d", g, i), []byte(fmt.Sprint("g", g)))
 				})
 				if err != nil {
 					fmt.Println("ERR", err)
@@ -146,18 +146,15 @@ func crashKill9(t *testing.T, dir string, env ...string) {
 		if err != nil {
 			t.Fatalf("iter %d: store: %v", it, err)
 		}
-		db, err := OpenStore(ctx, st, quiet())
+		db, err := OpenStore(ctx, st, quiet(), WithIndex(tallyKind()))
 		if err != nil {
 			t.Fatalf("iter %d: reopen: %v", it, err)
 		}
 		db.View(ctx, func(tx *Tx) error {
 			seen := map[string]bool{}
-			ms, _ := tx.Topic("t").Read(0, 0)
-			for _, m := range ms {
-				if seen[string(m.Value)] {
-					t.Fatalf("iter %d: message %s applied twice", it, m.Value)
-				}
-				seen[string(m.Value)] = true
+			rs, _ := tx.ScanRecords("t:c", "")
+			for _, r := range rs {
+				seen[r.Key] = true
 			}
 			for g := 0; g < crashG; g++ {
 				v, _ := tx.Get(fmt.Sprint("cnt", g))
@@ -171,11 +168,14 @@ func crashKill9(t *testing.T, dir string, env ...string) {
 				}
 				for i := 1; i <= n; i++ {
 					if !seen[fmt.Sprintf("%d:%d", g, i)] {
-						t.Fatalf("iter %d: g%d msg %d missing (not prefix-consistent)", it, g, i)
+						t.Fatalf("iter %d: g%d record %d missing (not prefix-consistent)", it, g, i)
 					}
 				}
 				if seen[fmt.Sprintf("%d:%d", g, n+1)] {
-					t.Fatalf("iter %d: message beyond counter", it)
+					t.Fatalf("iter %d: record beyond counter", it)
+				}
+				if c, err := tallyCount(tx, "t:c", fmt.Sprint("g", g)); err != nil || c != n {
+					t.Fatalf("iter %d g%d: tally index counts %d (%v), counter %d", it, g, c, err, n)
 				}
 				acked[g] = n // unacked-but-durable commits count from now on
 			}
@@ -190,10 +190,10 @@ func crashKill9(t *testing.T, dir string, env ...string) {
 				based++
 			}
 		}
-		d1, _, _ := db.LensDigests("main")
+		d1, _, _ := db.IndexDigests("main")
 		d2, _ := db.RebuildDigests("main")
 		if fmt.Sprint(d1) != fmt.Sprint(d2) {
-			t.Fatalf("iter %d: lens != fold(log)", it)
+			t.Fatalf("iter %d: index != fold(log)", it)
 		}
 		db.Close()
 	}

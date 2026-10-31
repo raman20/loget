@@ -1,11 +1,8 @@
 const (
 	MaxTxBytes = format.MaxFrameSize
 	MaxTxOps   = format.MaxOps
-const ANNExactBelow = 4096
 const BackupInfoKey = "backup/info.json"
-const MaxEf = 4096
 const MaxKeyBytes = 8 << 10
-const MaxM = 128
 var (
 	ErrNotFound       = errors.New("loget: not found")
 	ErrConflict       = errors.New("loget: transaction conflict (serializability); retry")
@@ -33,12 +30,6 @@ func HolderName() string
 func ParseKey(s string) ([]byte, error)
 func SubjectHash(subject string) string
 func VerifyCertificate(c *Certificate) bool
-type ANNDecl struct {
-	Coll string `json:"coll"`
-type ANNOptions struct {
-	M              int `json:"m,omitempty"`
-	EfConstruction int `json:"ef_construction,omitempty"`
-	EfSearch       int `json:"ef_search,omitempty"`
 type BackupInfo struct {
 	Version  int    `json:"version"`
 	Formats  string `json:"formats"`
@@ -74,7 +65,7 @@ type Certificate struct {
 	ChainHead   string   `json:"chain_head"`
 	ManifestID  uint64   `json:"manifest_id"`
 	DEKDeleted  bool     `json:"dek_deleted"`
-	Lenses      []string `json:"lenses_purged"`
+	Indexes     []string `json:"indexes_purged"`
 	TS          int64    `json:"ts"`
 	PublicKey   string   `json:"public_key"`
 	Signature   string   `json:"signature,omitempty"`
@@ -83,12 +74,9 @@ type CommitPolicy struct {
 	TargetBytes int
 type CompactOptions struct {
 	Grace time.Duration
-	Topics TopicRetention
 type CompactStats struct {
 	Logs      int   `json:"logs"`
 	Keys      int   `json:"keys"`
-	Messages  int   `json:"messages"`
-	Trimmed   int   `json:"trimmed"`
 	BaseBytes int64 `json:"base_bytes"`
 	Deleted   int   `json:"deleted"`
 	Pending   int   `json:"pending"`
@@ -101,29 +89,26 @@ func OpenStore(ctx context.Context, st store.Store, opts ...Option) (*DB, error)
 func (db *DB) Backup(ctx context.Context, dst store.Store) (*BackupReport, error)
 func (db *DB) Branch(name string) *Branch
 func (db *DB) Branches() map[string]uint64
-func (db *DB) CheckANN(branch string) error
 func (db *DB) Close() error
 func (db *DB) Compact(ctx context.Context, o CompactOptions) (CompactStats, error)
 func (db *DB) Crash()
 func (db *DB) CreateBranch(ctx context.Context, name, from string, at uint64) error
 func (db *DB) DeleteBranch(ctx context.Context, name string) error
 func (db *DB) DevKEK() bool
-func (db *DB) EnableANN(ctx context.Context, coll string, o ANNOptions) error
-func (db *DB) Entries(branch string) ([]*lens.Entry, error)
+func (db *DB) Entries(branch string) ([]*index.Entry, error)
 func (db *DB) Epoch() uint64
 func (db *DB) GC(ctx context.Context, o GCOptions) (CompactStats, error)
 func (db *DB) Get(ctx context.Context, key string) (v []byte, err error)
 func (db *DB) Head(branch string) (uint64, error)
 func (db *DB) Healthy() error
+func (db *DB) IndexDigests(branch string) (map[string][32]byte, uint64, error)
 func (db *DB) IsShredded(subject string) bool
-func (db *DB) LensDigests(branch string) (map[string][32]byte, uint64, error)
 func (db *DB) Manifest() *Manifest
 func (db *DB) Ping(ctx context.Context) error
 func (db *DB) Promote(ctx context.Context, src, dst string) error
 func (db *DB) PublicKey() string
 func (db *DB) Put(ctx context.Context, key string, val []byte, opts ...WriteOpt) error
 func (db *DB) RebuildDigests(branch string) (map[string][32]byte, error)
-func (db *DB) RegisterIndex(ctx context.Context, coll, field string) error
 func (db *DB) Rewind(ctx context.Context, name string, at uint64) error
 func (db *DB) Shred(ctx context.Context, subject string) (*Certificate, error)
 func (db *DB) Stats() Stats
@@ -132,18 +117,12 @@ func (db *DB) Verify(ctx context.Context) (*VerifyReport, error)
 func (db *DB) View(ctx context.Context, fn func(*Tx) error) error
 func (db *DB) ViewLog(ctx context.Context, logID string, at uint64, fn func(*Tx) error) error
 func (db *DB) WaitHead(ctx context.Context, branch string, seen uint64) (uint64, error)
-type DocTx struct {
-func (d DocTx) Delete(id string) error
-func (d DocTx) Find(field string, value any) ([]string, error)
-func (d DocTx) Get(id string) (json.RawMessage, error)
-func (d DocTx) Put(id string, doc any, opts ...WriteOpt) error
 type GCOptions struct {
 	Grace time.Duration
 	KeepFor time.Duration
 	KeepCommits uint64
 	KeepReflog int
 	KeepManifests int
-	Topics TopicRetention
 type Garbage struct {
 	Kind   string `json:"kind"`
 	Log    string `json:"log,omitempty"`
@@ -151,22 +130,12 @@ type Garbage struct {
 	Key    string `json:"key,omitempty"`
 	Chunks int    `json:"chunks,omitempty"`
 	After  int64  `json:"after"`
-type Group struct {
-func (g Group) Ack(msg Message) error
-func (g Group) Cursor() (uint64, error)
-func (g Group) Fetch(max int) ([]Message, error)
-func (g Group) Seek(offset uint64) error
 type Histogram struct {
 	Counts []uint64 `json:"counts"`
 	Count  uint64   `json:"count"`
 	Sum    float64  `json:"sum_seconds"`
 func (h Histogram) Quantile(q float64) float64
-type IndexDecl struct {
-	Coll  string `json:"coll"`
-	Field string `json:"field"`
-type KV struct {
-	Key   string
-	Value []byte
+type KV = Record
 type KeyFunc func(ctx context.Context) ([]byte, error)
 func (f KeyFunc) KEK(ctx context.Context) ([]byte, error)
 type KeyProvider interface {
@@ -191,21 +160,13 @@ type Manifest struct {
 	Logs    map[string]*LogMeta `json:"logs"`
 	Refs    map[string]string   `json:"refs"`
 	Reflog  []RefChange         `json:"reflog,omitempty"`
-	Indexes []IndexDecl         `json:"indexes,omitempty"`
-	ANN     []ANNDecl           `json:"ann,omitempty"`
 	Garbage []Garbage           `json:"garbage,omitempty"`
-type Message struct {
-	Topic    string `json:"topic"`
-	Offset   uint64 `json:"offset"`
-	LSN      uint64 `json:"lsn"`
-	TS       int64  `json:"ts"`
-	Value    []byte `json:"value"`
-	Redacted bool   `json:"redacted,omitempty"`
 type Op = format.Op
 type Option func(*Options)
 func WithClock(f func() int64) Option
 func WithCommitPolicy(p CommitPolicy) Option
 func WithHolder(s string) Option
+func WithIndex(k index.Kind) Option
 func WithInlineMax(n int) Option
 func WithKEK(k []byte) Option
 func WithKeyProvider(p KeyProvider) Option
@@ -229,6 +190,10 @@ type Options struct {
 	InlineMax int
 	ValueCacheBytes int
 	RepairTail bool
+	Indexes []index.Kind
+type Record struct {
+	Key   string
+	Value []byte
 type RefChange struct {
 	Name string `json:"name"`
 	From string `json:"from,omitempty"`
@@ -261,31 +226,19 @@ type Stats struct {
 	ValueCacheBytes  int64     `json:"value_cache_bytes"`
 	Heads map[string]uint64 `json:"heads"`
 	Halted string `json:"halted,omitempty"`
-type TopicRetention struct {
-	MaxAge       time.Duration
-	MaxMessages  uint64
-	IgnoreGroups bool
-type TopicTx struct {
-func (t TopicTx) Group(name string) Group
-func (t TopicTx) Len() uint64
-func (t TopicTx) Publish(val []byte, opts ...WriteOpt) error
-func (t TopicTx) Read(from uint64, max int) ([]Message, error)
-func (t TopicTx) Start() uint64
 type Tx struct {
 func (tx *Tx) At() uint64
 func (tx *Tx) Delete(key string) error
-func (tx *Tx) Doc(coll string) DocTx
+func (tx *Tx) DeleteRecord(space, key string) error
 func (tx *Tx) Get(key string) ([]byte, error)
+func (tx *Tx) GetRecord(space, key string) ([]byte, error)
+func (tx *Tx) Index(name string, fn func(index.Index) error) error
 func (tx *Tx) Put(key string, val []byte, opts ...WriteOpt) error
+func (tx *Tx) PutRecord(space, key string, val []byte, opts ...WriteOpt) error
+func (tx *Tx) ReadKey(space, key string)
+func (tx *Tx) ReadPrefix(space, prefix string)
 func (tx *Tx) Scan(prefix string) ([]KV, error)
-func (tx *Tx) Topic(name string) TopicTx
-func (tx *Tx) Vector(coll string) VecTx
-type VecTx struct {
-func (v VecTx) Delete(id string) error
-func (v VecTx) Put(id string, vec []float32, opts ...WriteOpt) error
-func (v VecTx) Search(q []float32, k int) ([]lens.Hit, error)
-func (v VecTx) SearchANN(q []float32, k, ef int) ([]lens.Hit, error)
-func (v VecTx) SearchExact(q []float32, k int) ([]lens.Hit, error)
+func (tx *Tx) ScanRecords(space, prefix string) ([]Record, error)
 type VerifyReport struct {
 	OK              bool              `json:"ok"`
 	Manifests       int               `json:"manifests"`

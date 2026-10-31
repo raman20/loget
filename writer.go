@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/raman20/loget/format"
-	"github.com/raman20/loget/lens"
+	"github.com/raman20/loget/index"
 	"github.com/raman20/loget/store"
 )
 
@@ -340,7 +340,7 @@ func (w *writer) process(batch []*commitReq) {
 	head := w.head
 	ts := w.lastTS
 	var accepted []*commitReq
-	var entries []*lens.Entry
+	var entries []*index.Entry
 	var pending []recentCommit
 	// Validate transactions that already lost conflicts first: within a
 	// batch the oldest retry wins a contended key, so a hot key cannot
@@ -397,7 +397,7 @@ func (w *writer) process(batch []*commitReq) {
 		chain = format.ChainNext(chain, payload)
 		head = lsn
 		accepted = append(accepted, r)
-		entries = append(entries, &lens.Entry{Log: w.l.meta.ID, LSN: lsn, TS: ts, Ops: ops})
+		entries = append(entries, &index.Entry{Log: w.l.meta.ID, LSN: lsn, TS: ts, Ops: ops})
 		rc := recentCommit{lsn: lsn}
 		for _, op := range ops {
 			if op.Kind == format.OpPut || op.Kind == format.OpDel {

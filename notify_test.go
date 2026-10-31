@@ -14,7 +14,7 @@ func TestWaitHead(t *testing.T) {
 		t.Fatal(err)
 	}
 	pub := func(v string) {
-		if err := db.Update(ctx, func(tx *Tx) error { return tx.Topic("t").Publish([]byte(v)) }); err != nil {
+		if err := db.Update(ctx, func(tx *Tx) error { return tx.Put("p", []byte(v)) }); err != nil {
 			t.Fatal(err)
 		}
 	}

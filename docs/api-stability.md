@@ -21,9 +21,9 @@ Every break is listed under "Changed (breaking)" in
 | HTTP API under `/v1/` | stable track | removing a route, field or status code; new fields and routes are not breaking |
 | CLI command names and flags | stable track | removing or renaming a command or flag; human-readable output is **not** stable |
 | `/metrics` names | stable track | renaming or removing a metric |
-| Go packages `server`, `format`, `lens` | experimental | may change in any minor release |
+| Go packages `server`, `format`, `index` | experimental | may change in any minor release |
 | `sim`, `internal/...`, `examples`, `bench` | internal | no guarantee |
-| vector search (HNSW), lenses, branches | experimental features | may change in any minor release |
+| vector search (HNSW), indexes, branches | experimental features | may change in any minor release |
 | S3 backend | experimental ([s3.md](s3.md)) | tested on MinIO only |
 
 "Stable track" means changes are reviewed as API changes today, and these
@@ -32,7 +32,7 @@ surfaces become stable at 1.0.
 ## How API changes are caught
 
 `scripts/api-surface.sh` writes the exported Go API of `loget`, `store`,
-`server`, `format` and `lens` to `api/*.txt`. CI regenerates it and fails
+`server`, `format` and `index` to `api/*.txt`. CI regenerates it and fails
 when it differs from the committed copy, so no exported change lands
 without a visible diff (and a CHANGELOG line if it breaks). The
 on-storage format is guarded by golden databases (`testdata/golden`).

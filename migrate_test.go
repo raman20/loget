@@ -18,15 +18,14 @@ import (
 // branch data, and returns a digest of its state.
 func v010DB(t *testing.T, dir string) string {
 	t.Helper()
-	db, err := Open(ctx, "fs://"+dir, quiet())
+	db, err := Open(ctx, "fs://"+dir, quiet(), WithIndex(tallyKind()))
 	if err != nil {
 		t.Fatal(err)
 	}
 	for i := 0; i < 300; i++ {
 		err := db.Update(ctx, func(tx *Tx) error {
 			tx.Put(fmt.Sprintf("k%03d", i%120), []byte(fmt.Sprintf("v%d-%0200d", i, i)))
-			tx.Topic("t").Publish([]byte(fmt.Sprint(i)))
-			return nil
+			return tx.PutRecord("t:x", fmt.Sprint(i), []byte("m"))
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -45,15 +44,15 @@ func digestDB(t *testing.T, db *DB) string {
 			v, _ := tx.Get(fmt.Sprintf("k%03d", i))
 			out += string(v) + ";"
 		}
-		ms, _ := tx.Topic("t").Read(0, 0)
-		out += fmt.Sprint(len(ms))
+		rs, _ := tx.ScanRecords("t:x", "")
+		out += fmt.Sprint(len(rs))
 		return nil
 	})
 	return out
 }
 
 // A v0.1.0 directory opens unchanged under the default URL, and after
-// `loget migrate` opens as a journal with identical lens state.
+// `loget migrate` opens as a journal with identical index state.
 func TestMigrateDatabase(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("journal is Unix-only")

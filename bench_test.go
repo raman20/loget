@@ -3,7 +3,6 @@ package loget
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -101,33 +100,6 @@ func BenchmarkGet(b *testing.B) {
 		if _, err := db.Get(ctx, fmt.Sprintf("k%05d", i%10000)); err != nil {
 			b.Fatal(err)
 		}
-	}
-}
-
-// Brute-force cosine search over 10k x 128-dim vectors.
-func BenchmarkVectorSearch10k(b *testing.B) {
-	db := mustOpen(b, store.NewMem(), WithSnapshotEvery(1<<30))
-	defer db.Close()
-	r := rand.New(rand.NewSource(1))
-	vec := func() []float32 {
-		v := make([]float32, 128)
-		for i := range v {
-			v[i] = r.Float32() - 0.5
-		}
-		return v
-	}
-	for c := 0; c < 10; c++ {
-		db.Update(ctx, func(tx *Tx) error {
-			for i := 0; i < 1000; i++ {
-				tx.Vector("v").Put(fmt.Sprintf("%d-%d", c, i), vec())
-			}
-			return nil
-		})
-	}
-	q := vec()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		db.View(ctx, func(tx *Tx) error { _, err := tx.Vector("v").Search(q, 10); return err })
 	}
 }
 

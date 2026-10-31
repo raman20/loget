@@ -6,7 +6,6 @@ const DefaultSlowOp = time.Second
 func Handler(db *loget.DB) http.Handler
 func New(db *loget.DB, o Options) http.Handler
 func ParseGCOptions(get func(string) string, grace time.Duration) (loget.GCOptions, error)
-func ParseTopicRetention(get func(string) string) (loget.TopicRetention, error)
 type Auth struct {
 func LoadTokenFile(path string) (*Auth, error)
 func NewAuth(t *Tokens) *Auth
@@ -57,8 +56,4 @@ type TxOp struct {
 	Op      string          `json:"op"`
 	Key     string          `json:"key,omitempty"`
 	Value   json.RawMessage `json:"value,omitempty"`
-	Topic   string          `json:"topic,omitempty"`
-	Group   string          `json:"group,omitempty"`
-	Offset  uint64          `json:"offset,omitempty"`
-	Coll    string          `json:"coll,omitempty"`
 	Subject string          `json:"subject,omitempty"`

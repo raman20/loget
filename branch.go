@@ -3,8 +3,6 @@ package loget
 import (
 	"context"
 	"fmt"
-
-	"github.com/raman20/loget/lens"
 )
 
 func (db *DB) headOf(id string) uint64 {
@@ -204,7 +202,6 @@ func (db *DB) ViewLog(ctx context.Context, logID string, at uint64, fn func(*Tx)
 	db.mu.Lock()
 	_, known := db.man.Logs[logID]
 	l, err := db.loadLog(ctx, logID, false)
-	idx := append([]IndexDecl{}, db.man.Indexes...)
 	if !known {
 		err = fmt.Errorf("%w: log %s is not in the manifest (unknown, or garbage-collected)", ErrNotFound, logID)
 	}
@@ -215,96 +212,16 @@ func (db *DB) ViewLog(ctx context.Context, logID string, at uint64, fn func(*Tx)
 	if at == 0 || at > l.head() {
 		at = l.head()
 	}
-	v, err := db.buildView(ctx, l, at, idx, nil)
+	v, err := db.buildView(ctx, l, at, nil)
 	if err != nil {
 		return err
 	}
 	return fn(&Tx{db: db, v: v, at: at})
 }
 
-// RegisterIndex declares a secondary index on a document field. It is
-// built by replaying the log (no migration) and maintained from then on.
-func (db *DB) RegisterIndex(ctx context.Context, coll, field string) error {
-	db.lockIdle()
-	defer db.mu.Unlock()
-	for _, d := range db.man.Indexes {
-		if d.Coll == coll && d.Field == field {
-			return nil
-		}
-	}
-	if err := db.commitManifest(ctx, func(m *Manifest) error {
-		m.Indexes = append(m.Indexes, IndexDecl{coll, field})
-		return nil
-	}); err != nil {
-		return err
-	}
-	for _, id := range sortedMapKeys(db.views) {
-		v := db.views[id]
-		v.mu.Lock() // blocks the writer's apply: the replay is consistent
-		ix := lens.NewDocIndex(coll, field)
-		err := db.fold(ctx, v.log, v.head, func(e *lens.Entry) error { ix.Apply(e, v.env); return nil })
-		if err == nil {
-			v.idx[idxKey(coll, field)] = ix
-		}
-		v.mu.Unlock()
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-// ANNOptions configures a collection's HNSW graph; zero fields take the
-// defaults (M 16, EfConstruction 100, EfSearch 128).
-type ANNOptions struct {
-	M              int `json:"m,omitempty"`
-	EfConstruction int `json:"ef_construction,omitempty"`
-	EfSearch       int `json:"ef_search,omitempty"`
-}
-
-// MaxM bounds ANNOptions.M (links per node; 2M at layer 0).
-const MaxM = 128
-
-func (o ANNOptions) params() lens.ANNParams {
-	return lens.ANNParams{M: o.M, EfConstruction: o.EfConstruction, EfSearch: o.EfSearch}
-}
-
-// EnableANN gives a vector collection an approximate (HNSW) index, on
-// every branch. The declaration is stored in the manifest; graphs are
-// built now in every open view and on every later open (by replay, so
-// opening gets slower). Search then uses the graph for collections of at
-// least ANNExactBelow vectors; SearchExact still scans. Calling it again
-// with other options rebuilds the graphs.
-func (db *DB) EnableANN(ctx context.Context, coll string, o ANNOptions) error {
-	if o.M < 0 || o.M > MaxM || o.EfConstruction < 0 || o.EfConstruction > MaxEf || o.EfSearch < 0 || o.EfSearch > MaxEf {
-		return fmt.Errorf("%w: ANN options %+v (m 0..%d, ef 0..%d; 0 = default)", ErrBadValue, o, MaxM, MaxEf)
-	}
-	db.lockIdle()
-	defer db.mu.Unlock()
-	if err := db.commitManifest(ctx, func(m *Manifest) error {
-		for i, d := range m.ANN {
-			if d.Coll == coll {
-				m.ANN[i].ANNOptions = o
-				return nil
-			}
-		}
-		m.ANN = append(m.ANN, ANNDecl{coll, o})
-		return nil
-	}); err != nil {
-		return err
-	}
-	for _, id := range sortedMapKeys(db.views) {
-		v := db.views[id]
-		v.mu.Lock()
-		v.vec.EnableANN(coll, o.params())
-		v.mu.Unlock()
-	}
-	return nil
-}
-
-// LensDigests returns the digest of every lens of a branch (for checking
-// lens == fold(log)).
-func (db *DB) LensDigests(branch string) (map[string][32]byte, uint64, error) {
+// IndexDigests returns the digest of every index of a branch (for checking
+// index == fold(log)).
+func (db *DB) IndexDigests(branch string) (map[string][32]byte, uint64, error) {
 	w, err := db.branchWriter(branch)
 	if err != nil {
 		return nil, 0, err
@@ -312,31 +229,28 @@ func (db *DB) LensDigests(branch string) (map[string][32]byte, uint64, error) {
 	w.v.mu.RLock()
 	defer w.v.mu.RUnlock()
 	out := map[string][32]byte{}
-	for _, l := range w.v.lenses() {
+	for _, l := range w.v.indexes() {
 		out[l.Name()] = l.Digest()
 	}
 	return out, w.v.head, nil
 }
 
 // RebuildDigests folds the branch's log from scratch (no snapshot) and
-// returns the lens digests: must equal LensDigests.
+// returns the index digests: must equal IndexDigests.
 func (db *DB) RebuildDigests(branch string) (map[string][32]byte, error) {
 	w, err := db.branchWriter(branch)
 	if err != nil {
 		return nil, err
 	}
-	db.mu.Lock()
-	idx := append([]IndexDecl{}, db.man.Indexes...)
-	db.mu.Unlock()
 	w.v.mu.RLock()
 	h := w.v.head
 	w.v.mu.RUnlock()
-	v, err := db.buildView(context.Background(), w.l, h, idx, nil)
+	v, err := db.buildView(context.Background(), w.l, h, nil)
 	if err != nil {
 		return nil, err
 	}
 	out := map[string][32]byte{}
-	for _, l := range v.lenses() {
+	for _, l := range v.indexes() {
 		out[l.Name()] = l.Digest()
 	}
 	return out, nil

@@ -2,8 +2,8 @@
 
 Review started 2026-10-30 (IST). Code: `VecTx` in `tx.go` (Put, Delete,
 Search, SearchExact, SearchANN), `EnableANN` in `branch.go`, `ann.go`
-(graph save/load), the vector lens `lens/vector.go`, the graph
-`lens/hnsw.go`, its blob format `lens/hnsw_persist.go`, the HTTP handlers
+(graph save/load), the vector index `index/vector.go`, the graph
+`index/hnsw.go`, its blob format `index/hnsw_persist.go`, the HTTP handlers
 (`/v1/vectors`, `/v1/ann`) in `server/server.go`. **Status: review done;
 verdict at the end.** Nothing here claims vectors are production ready.
 Next steps from the research picks are in docs/design/19-vectors-next.md
@@ -33,10 +33,10 @@ Next steps from the research picks are in docs/design/19-vectors-next.md
 
 | id | defect | evidence | fix | test |
 |---|---|---|---|---|
-| E-D1 | `k` and `ef` were unbounded: `newVisited` looped / allocated by them, reachable from HTTP (`k=1e12`, `ef` huge) | code read + probe | `k` capped at candidates (overflow-safe with own writes), `ef` ≤ `MaxEf`, lens caps both by slab size | `TestVectorHugeK` (k = 2^40 and MaxInt in-tx), `TestANNHugeKEf`, `TestHTTPAPI` |
+| E-D1 | `k` and `ef` were unbounded: `newVisited` looped / allocated by them, reachable from HTTP (`k=1e12`, `ef` huge) | code read + probe | `k` capped at candidates (overflow-safe with own writes), `ef` ≤ `MaxEf`, index caps both by slab size | `TestVectorHugeK` (k = 2^40 and MaxInt in-tx), `TestANNHugeKEf`, `TestHTTPAPI` |
 | E-D2 | `ANNOptions` unbounded (`M` 100000 → huge link lists per node) | code read | `M` ≤ `MaxM` (128), ef fields ≤ `MaxEf`, no negatives | `TestVectorBadInput`, `TestHTTPAPI` |
-| E-D3 | Bad vectors (empty, NaN, Inf) and bad queries were plain errors (HTTP 500); a zero vector was accepted and then silently dropped by the lens | probe | `ErrBadValue` (400) for all | `TestVectorBadInput`, `TestHTTPAPI` |
-| E-D4 | `Search` in a read-write tx ignored the tx's own puts/deletes and was not in the read set (write skew under `Update`) | probe; same shape as D-D1/D-D2 | overlay local writes (scored with the lens's `Dot`), collection prefix read | `TestVectorSearchProperty` (rapid: plain vs ANN DB, in-tx and committed, vs a model), `TestVectorSearchConflicts` |
+| E-D3 | Bad vectors (empty, NaN, Inf) and bad queries were plain errors (HTTP 500); a zero vector was accepted and then silently dropped by the index | probe | `ErrBadValue` (400) for all | `TestVectorBadInput`, `TestHTTPAPI` |
+| E-D4 | `Search` in a read-write tx ignored the tx's own puts/deletes and was not in the read set (write skew under `Update`) | probe; same shape as D-D1/D-D2 | overlay local writes (scored with the index's `Dot`), collection prefix read | `TestVectorSearchProperty` (rapid: plain vs ANN DB, in-tx and committed, vs a model), `TestVectorSearchConflicts` |
 | E-D5 | Swap-delete left a deleted vector's components and subject in the slab's spare capacity (data meant to be gone after a shred stayed in RAM) | code read | clear the vacated slot | `TestVectorDeleteLeavesNoResidue` |
 | E-D6 | `DecodeANN` panicked on crafted blobs (huge counts → makeslice), and restore kept self / repeated / over-cap links | `FuzzDecodeANN` (new) | bound every count by the blob size and `MaxInt32`; restore drops links a correct save never writes | `TestDecodeANNHostile`, fuzz regression seed, `FuzzDecodeANN` |
 | E-D7 | `knn` documented "up to k" hits but returns up to max(ef, k) | code read | doc fixed (callers already merged to k) | — |
@@ -61,12 +61,12 @@ slab, so order is irrelevant; a sort added on suspicion was removed).
 
 ## Measurements (2026-10-30, 8-core box, in-memory store, quiet box)
 
-Before = 4cb70d6, after = this change; 5 runs (root) / 3 runs (lens).
+Before = 4cb70d6, after = this change; 5 runs (root) / 3 runs (index).
 
 | bench | before | after |
 |---|---|---|
 | `BenchmarkVectorSearch10k` (exact, View) | 369–385 µs | 362–395 µs |
-| `BenchmarkVectorSearch100k` (lens exact scan) | 3.80–4.04 ms | 3.71–3.78 ms |
+| `BenchmarkVectorSearch100k` (index exact scan) | 3.80–4.04 ms | 3.71–3.78 ms |
 | `BenchmarkVectorSearchANN/view` (20k × 128, HNSW) | 453–474 µs | 432–450 µs |
 | `…/update` (read-write tx, no writes) | 446–511 µs | 437–473 µs |
 | `…/update+put` (own write overlaid) | 446–466 µs | 437–467 µs |
@@ -90,7 +90,7 @@ M0 32 ≈ 2–3k distance calls per query. HNSW pays off only at larger n
 - Unit / property: `vec_tx_test.go` (new): rapid property, plain and
   ANN databases against a model top-k, in read-only and read-write
   transactions, with deletes and shreds and `CheckANN`; conflicts;
-  bad input; huge k. Lens: `TestHNSWReachability`, `TestHNSWDuplicates`
+  bad input; huge k. Index: `TestHNSWReachability`, `TestHNSWDuplicates`
   (copies survive representative deletes and restore identically),
   `TestCheckANNCatches` (7 kinds of broken bookkeeping detected),
   existing recall/churn/persist tests. Server: `TestHTTPAPI` 400 cases,
@@ -106,7 +106,7 @@ M0 32 ≈ 2–3k distance calls per query. HNSW pays off only at larger n
 - Mutation (hand mutants applied in place, file restored after each):
   overlay prefix read, overlay filter, overlay puts, kk bound, k cap,
   ef bound, query finite check, zero-vector check, `MaxM` bound, slab
-  clear, subject clear, restore link sanitize, lens k cap, duplicate
+  clear, subject clear, restore link sanitize, index k cap, duplicate
   join, representative promotion slot, moved-representative fix, copy
   hits per node, copy attach on restore, `CheckANN` count check:
   **19 killed** (the k cap after adding the in-tx `MaxInt` case; the
@@ -114,10 +114,10 @@ M0 32 ≈ 2–3k distance calls per query. HNSW pays off only at larger n
   last copy instead of the first (any copy is a valid representative;
   the first is chosen for determinism). One dead line removed (`remove`
   never sees a node with copies).
-- Coverage: `lens/vector.go` 94.7 %, `lens/hnsw.go` 99.2 %,
-  `lens/hnsw_persist.go` 92.5 % (lens suite); `VecTx` methods 100 %,
+- Coverage: `index/vector.go` 94.7 %, `index/hnsw.go` 99.2 %,
+  `index/hnsw_persist.go` 92.5 % (index suite); `VecTx` methods 100 %,
   `search` 97.7 %, `ann.go` 71–100 % per function, server vector
-  handlers 71–100 %. Uncovered, justified: `lensView` errors in `search`
+  handlers 71–100 %. Uncovered, justified: `indexView` errors in `search`
   (closed DB, covered for other tx methods); `ann.go` store-error
   branches of save/load/drop (store faults are exercised by the
   simulator's ANN restores, not per branch); `vecDel`'s error return.
@@ -144,7 +144,7 @@ covers it. No spec change.
 - `Search` conflicts on any write to the collection (coarse; correct).
 - No filtered search (19, #9), no quantization (19, #7), no SIMD `dot`.
 - Near-duplicate clusters larger than 2·M can still be unreachable.
-- Vectors and graphs live in RAM; the vector lens is rebuilt by replay
+- Vectors and graphs live in RAM; the vector index is rebuilt by replay
   on open.
 
 ## Verdict

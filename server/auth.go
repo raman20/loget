@@ -24,10 +24,6 @@ type Options struct {
 	// Auth holds scoped tokens (ParseTokens, LoadTokenFile); it may be
 	// reloaded while serving. Token and Auth combine.
 	Auth *Auth
-	// MaxStreams caps concurrent SSE streams and MaxWaiters concurrent
-	// long-polls (?wait= > 0); over the cap the request gets 503 with
-	// Retry-After. 0 = the defaults (1024, 4096), < 0 = no cap.
-	MaxStreams, MaxWaiters int
 	// MaxBody caps a request body in bytes (default DefaultMaxBody); a
 	// larger one is refused with 413.
 	MaxBody int
@@ -40,20 +36,18 @@ type Options struct {
 	// seconds, token name) at Info.
 	AccessLog bool
 	// SlowOp logs, at Warn, requests slower than this (default
-	// DefaultSlowOp; < 0 = never). Streams and long-polls are exempt.
+	// DefaultSlowOp; < 0 = never).
 	SlowOp time.Duration
 	// Pprof serves net/http/pprof under /debug/pprof/ to admin tokens.
 	// Ignored without auth (Token or Auth).
 	Pprof bool
 	// Drain, when closed, starts a graceful shutdown: /readyz answers 503
-	// "draining", SSE streams end with an "event: shutdown" (clients
-	// resume with Last-Event-ID), long polls return what they have.
-	// Close it before http.Server.Shutdown, which waits for handlers.
+	// "draining" so load balancers stop routing here. Close it before
+	// http.Server.Shutdown, which waits for handlers.
 	Drain <-chan struct{}
 	// ReadTimeout bounds reading one request body (default
 	// DefaultReadTimeout; < 0 = none). WriteTimeout bounds writing one
-	// response (default DefaultWriteTimeout; < 0 = none); streams renew it
-	// per event, long polls get it on top of ?wait=, admin routes
+	// response (default DefaultWriteTimeout; < 0 = none); admin routes
 	// (compact, gc, backup, ...) are exempt. Set per request, so slow
 	// clients cannot hold a handler forever.
 	ReadTimeout, WriteTimeout time.Duration
@@ -91,7 +85,7 @@ func (s Scope) String() string {
 }
 
 // Grant is one token's rights. Resources, if any, limit it to those
-// collections (kind "kv" key prefixes, "topic", "docs", "vectors"); a
+// collections (kind "kv": key prefixes); a
 // limited token cannot use routes that span the database (branches, log,
 // verify, admin routes).
 type Grant struct {
@@ -127,7 +121,8 @@ type Tokens struct{ m map[[32]byte]*Grant }
 //	SCOPE TOKEN [name=LABEL] [KIND:NAME[*] ...]
 //	TOKEN                      (a bare token: admin, the old --token-file)
 //
-// SCOPE is read, write or admin; KIND is kv, topic, docs or vectors.
+// SCOPE is read, write or admin; KIND is kv (the only index served over
+// HTTP; other kinds are rejected).
 func ParseTokens(b []byte) (*Tokens, error) {
 	t := &Tokens{m: map[[32]byte]*Grant{}}
 	for i, line := range strings.Split(string(b), "\n") {
@@ -155,12 +150,12 @@ func ParseTokens(b []byte) (*Tokens, error) {
 				}
 				kind, name, ok := strings.Cut(x, ":")
 				switch kind {
-				case "kv", "topic", "docs", "vectors":
+				case "kv":
 				default:
 					ok = false
 				}
 				if !ok {
-					return nil, fmt.Errorf("line %d: resource %q (want kv:, topic:, docs: or vectors:NAME[*])", i+1, x)
+					return nil, fmt.Errorf("line %d: resource %q (want kv:PREFIX[*])", i+1, x)
 				}
 				r := Resource{Kind: kind, Name: name}
 				r.Name, r.Prefix = strings.CutSuffix(name, "*")

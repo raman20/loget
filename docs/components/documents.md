@@ -1,8 +1,8 @@
 # Component D: documents and secondary indexes
 
 Review started 2026-10-30 (IST). Code: `DocTx` in `tx.go` (Put, Delete,
-Get, Find), `RegisterIndex` in `branch.go`, the index lens
-`lens/docindex.go`, the HTTP handlers (`/v1/docs`, `/v1/indexes`) in
+Get, Find), `RegisterIndex` in `branch.go`, the index index
+`index/docindex.go`, the HTTP handlers (`/v1/docs`, `/v1/indexes`) in
 `server/server.go`. **Status: review done; verdict at the end.** Nothing here claims
 documents are production ready.
 
@@ -61,9 +61,9 @@ read-write path is the overlay of the transaction's own writes
 
 - Unit / property: `docs_find_test.go` (rapid: indexed vs unindexed DB
   over random puts, deletes, subjects and shreds, in read-only and
-  read-write transactions), `lens/canon_test.go`, `TestHTTPAPI`;
-  `TestPropEngineLensEqualsFoldAcrossRestart` (rapid) checks the index
-  lens digest against a from-scratch fold across reopens.
+  read-write transactions), `index/canon_test.go`, `TestHTTPAPI`;
+  `TestPropEngineIndexEqualsFoldAcrossRestart` (rapid) checks the index
+  index digest against a from-scratch fold across reopens.
 - Deterministic simulation (`sim/`: store faults, crashes, takeovers,
   compaction, GC, shreds): now writes and deletes documents whose field
   `f` uses equal numbers in different literals (`1`, `1.0`, `10e-1`),
@@ -85,20 +85,20 @@ read-write path is the overlay of the transaction's own writes
   `Shred` calls `DropSubject` on every view directly and a replayed put of
   a shredded subject fails to decrypt (treated as a delete). The branch
   stays as defence in depth.
-- Coverage (whole root/lens/server suites): `DocIndex` 100 %,
+- Coverage (whole root/index/server suites): `DocIndex` 100 %,
   `canonNumber` 100 % (unit cases for exponents past int64),
   `CanonicalJSON` 72.7 %, `DocTx.Find` 89 %, `RegisterIndex` 82 %.
   Uncovered, justified: `CanonicalJSON`'s re-decode and re-marshal error
   returns (unreachable: the input was just produced by `json.Marshal`, and
   `canonNumbers` only swaps `json.Number` literals for valid ones);
-  `Find`'s `lensView` and scan errors (a closed or failed DB, covered for
+  `Find`'s `indexView` and scan errors (a closed or failed DB, covered for
   the other tx methods); `RegisterIndex`'s manifest-commit and fold errors
   (store faults: covered by the manifest fault tests, not per caller).
 
 ## TLA+ alignment
 
-The index is a lens: a deterministic fold of committed log entries, like
-the KV and topic lenses, so `specs/LogEtLog.tla`'s claim (a lens state is
+The index is an index: a deterministic fold of committed log entries, like
+the KV and topic indexes, so `specs/LogEtLog.tla`'s claim (an index state is
 a function of the committed prefix) covers it. What the spec does not
 model is `Find`'s conflict rule (contract 4): serializability of a
 predicate read rests on the collection prefix read, the same mechanism as

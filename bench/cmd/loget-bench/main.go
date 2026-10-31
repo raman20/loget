@@ -1,6 +1,7 @@
 // Command loget-bench is LogEt's reproducible benchmark suite. Every
 // subcommand writes one JSON file to -out; `loget-bench report` turns a
-// results directory into markdown. See docs/benchmarks.md.
+// results directory into markdown. See docs/benchmarks.md. (The topic, NATS and
+// vector suites live on the index/topics and index/vectors branches.)
 package main
 
 import (
@@ -12,10 +13,7 @@ const usage = `loget-bench <suite> [flags]
 
 suites:
   ycsb     KV workloads A,B,C,D,F (zipfian) on loget|badger|pebble|bbolt|sqlite
-  msg      topic producer->consumer latency at fixed rates, max throughput, groups
-  nats     the same messaging workload on embedded NATS JetStream (baseline)
-  txn      contended OCC transactions and multi-lens consume+write transactions
-  vector   recall@10 and QPS on synthetic clustered vectors (exact search)
+  txn      contended OCC transactions (loget vs badger)
   s3       commit latency, batching, requests/commit and cold open on S3/MinIO
   compact  storage, open time and heap before/after compaction (overwrite-heavy)
   commit   commit latency tails on the journal (8 MiB file growth steps)
@@ -34,14 +32,8 @@ func main() {
 	switch os.Args[1] {
 	case "ycsb":
 		cmdYCSB(args)
-	case "msg":
-		cmdMsg(args)
-	case "nats":
-		cmdMsg(append([]string{"-system", "nats"}, args...))
 	case "txn":
 		cmdTxn(args)
-	case "vector":
-		cmdVector(args)
 	case "s3":
 		cmdS3(args)
 	case "compact":

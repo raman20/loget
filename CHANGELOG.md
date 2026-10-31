@@ -47,7 +47,7 @@ in its "Changes since v0.1.0" section.
   restored graph drops self, repeated and over-cap links (found by the
   new `FuzzDecodeANN`).
 - A deleted vector's components and subject are cleared from the slab's
-  spare capacity. New `lens.Dot`.
+  spare capacity. New `index.Dot`.
 
 ### Fixed (component D review: documents)
 
@@ -56,7 +56,7 @@ in its "Changes since v0.1.0" section.
   unindexed scan.
 - `Find` compares numbers by exact value: a stored `1.0` matches `1`, and
   `GET /v1/docs/{c}?value=` no longer rounds large integers through
-  float64. New `lens.DocField`.
+  float64. New `index.DocField`.
 - Shredding a subject no longer walks every indexed document.
 - A document that is not a JSON object, or an unencodable `Find` value,
   is now `ErrBadValue` (HTTP 400; was a plain error, HTTP 500).
@@ -79,7 +79,7 @@ in its "Changes since v0.1.0" section.
   never past the smallest committed cursor of a consumer group unless
   told to (model: `spec/LogEtRetain.tla`). Offsets do not change;
   `TopicTx.Start` reports the first kept offset. Bases of trimmed topics
-  use a new `TOPIC2` lens encoding; untrimmed ones are byte-identical to
+  use a new `TOPIC2` index encoding; untrimmed ones are byte-identical to
   before. Off by default.
 
 ### Changed (component C review: topics)
@@ -88,7 +88,7 @@ in its "Changes since v0.1.0" section.
   1000-message HTTP cap instead of asking for `max=100000`.
 
 - Shredding a subject touches only that subject's topic messages (an
-  index in the topic lens) instead of scanning every message.
+  index in the topic index) instead of scanning every message.
 - HTTP `GET /v1/topics/{t}` without `max` (or with `max=0`) returns at
   most 1000 messages instead of the whole topic, and `.../next?max=0`
   fetches and acks at most 1000 instead of the whole topic; larger `max`
@@ -108,12 +108,12 @@ in its "Changes since v0.1.0" section.
 
 ### Changed (component B review: KV)
 
-- The KV lens keeps all but its newest versions in immutable compressed
+- The KV index keeps all but its newest versions in immutable compressed
   runs (front-coded keys, hash-indexed) instead of one map: live heap per
   key 172 → 30 B after a snapshot load at 10M keys (61–64 B right after
   ingest, with merge buffers), a 100-key prefix `Scan` no longer walks
   every key (866 ms → 0.05–0.07 ms at 10M), snapshot load 4–5.5× faster.
-  Point `Get` is 1.1–1.3× slower and lens ingest 1.7–1.9× slower (merges);
+  Point `Get` is 1.1–1.3× slower and index ingest 1.7–1.9× slower (merges);
   numbers and method in `docs/components/kv.md`. Snapshot bytes and
   digests are unchanged.
 
@@ -292,9 +292,9 @@ in its "Changes since v0.1.0" section.
 - **Opt-in HNSW vector index.** `(*DB).EnableANN(ctx, coll, ANNOptions)`,
   `loget vec ann COLL [--m --ef-construction --ef-search]`,
   `POST /v1/vectors/{c}/ann`. The declaration is stored in the manifest;
-  the graph lives in RAM, is built from the lens on open (live branches
+  the graph lives in RAM, is built from the index on open (live branches
   only; time travel stays exact) and is excluded from the digest, so
-  `lens == fold(log)` still holds. Search uses it from 4,096 vectors up and
+  `index == fold(log)` still holds. Search uses it from 4,096 vectors up and
   falls back to the exact scan if it returns fewer than k hits;
   `SearchExact` / `?exact=true` / `--exact` force the exact scan and
   `SearchANN` / `ef` set the beam. At 100k × 128-d (clustered) recall@10 is
@@ -351,7 +351,7 @@ in its "Changes since v0.1.0" section.
   prerelease whose jar is rebuilt nightly, so its checksum drifted between
   CI (cached) and fresh downloads. `spec/get_tla.sh` downloads and verifies
   the pinned jar for CI and local runs.
-- **Memory (item 7).** The KV lens stores each version in 40 bytes
+- **Memory (item 7).** The KV index stores each version in 40 bytes
   (was 72) and a key's first version in the map slot itself; the log
   segment index keeps one chain hash (the tip's) instead of one per
   segment (64 → 24 B per segment). The default value cache is now 1/16 of
@@ -362,7 +362,7 @@ in its "Changes since v0.1.0" section.
   Go heap and GC goal per phase, data-dir page cache, and gains
   `-memprofile` and `-compact-between`.
 - **Memory: values are read from the log instead of being held in RAM.**
-  The KV lens keeps values larger than `InlineMax` (default 64 B) as a
+  The KV index keeps values larger than `InlineMax` (default 64 B) as a
   position (offset, length, CRC-32C) in their immutable segment, and the
   log index keeps one small record per segment instead of every frame.
   Values are read with ranged reads (`pread` with an fd cache on local
@@ -435,7 +435,7 @@ in its "Changes since v0.1.0" section.
 ### Fixed
 - **Returned values no longer alias internal memory** (present since
   v0.1.0). `Get`, `Scan` and `Topic.Read` could return slices shared with
-  the value cache or the in-memory lens, and `Put`/`Publish` kept the
+  the value cache or the in-memory index, and `Put`/`Publish` kept the
   caller's slice; a caller writing into either could change what later
   reads returned. Values are now copied in both directions.
 - The FS store's fd cache is sized from `RLIMIT_NOFILE` (clamped) through
@@ -449,10 +449,10 @@ in its "Changes since v0.1.0" section.
 - One append-only, hash-chained log on object storage (S3-compatible with
   `If-None-Match`, or a local directory). One immutable segment per group
   commit; create-only manifests; epoch fencing with no clocks.
-- Lenses over the log: KV (MVCC history), topics with consumer groups,
+- Indexes over the log: KV (MVCC history), topics with consumer groups,
   JSON documents with secondary indexes (can be added later), and vectors
   (cosine, brute force).
-- Serializable single-writer transactions (OCC) across all lenses, including
+- Serializable single-writer transactions (OCC) across all indexes, including
   exactly-once "consume, write, ack" in one transaction.
 - Branches (zero-copy), rewind with reflog, promote, and time travel to any LSN.
 - Crypto-shredding per subject: per-subject AES-GCM keys, a shred marker, an
@@ -470,7 +470,7 @@ in its "Changes since v0.1.0" section.
 - Agent demo (`examples/agent-demo.sh`) and Go API tour (`examples/tour`).
 - Benchmark suite in [`bench/`](bench) (`loget-bench`): YCSB A/B/C/D/F
   against Badger, Pebble, bbolt and SQLite on the same box; streaming against
-  embedded NATS JetStream; OCC contention; the multi-lens transaction; vector
+  embedded NATS JetStream; OCC contention; the multi-index transaction; vector
   recall vs QPS; and S3 request counts and estimated request cost.
   Coordinated-omission-aware (HdrHistogram) latency. See
   [docs/benchmarks.md](docs/benchmarks.md).
@@ -478,7 +478,7 @@ in its "Changes since v0.1.0" section.
 ### Changed
 - KV/topic snapshots are now **off by default** (`WithSnapshotEvery(n)` turns
   them on). The benchmarks showed they are written synchronously inside the
-  commit path and copy the whole lens. With 1M × 1 KB keys that is about 1 GB
+  commit path and copy the whole index. With 1M × 1 KB keys that is about 1 GB
   every 1,000 commits. They also don't speed up open yet, because recovery
   still reads every segment.
 
@@ -488,7 +488,7 @@ in its "Changes since v0.1.0" section.
   `ErrFenced` when it sees a newer epoch.
 - Fuzzing found that the payload decoder accepted non-minimal varints. Payloads
   are now canonical.
-- Property tests found that the vector lens kept empty collections after
+- Property tests found that the vector index kept empty collections after
   `DropSubject`. Its state is now canonical.
 - The simulator found that a delayed DEK create could land after a shred.
   Open and `verify` now sweep such keys.

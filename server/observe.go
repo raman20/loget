@@ -57,8 +57,8 @@ func newObserver(o Options) *observer {
 // DefaultSlowOp is the default Options.SlowOp.
 const DefaultSlowOp = time.Second
 
-// statusWriter records the status code and body size. It forwards Flush
-// (server-sent events) and Unwrap (http.ResponseController).
+// statusWriter records the status code and body size. Unwrap lets
+// http.ResponseController reach the connection (per-request deadlines).
 type statusWriter struct {
 	http.ResponseWriter
 	code int
@@ -81,19 +81,10 @@ func (w *statusWriter) Write(b []byte) (int, error) {
 	return n, err
 }
 
-func (w *statusWriter) Flush() {
-	if f, ok := w.ResponseWriter.(http.Flusher); ok {
-		f.Flush()
-	}
-}
-
 func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
-// wrap instruments one route. Streams and long-polls (?wait=) are counted
-// but kept out of the latency histogram and the slow-op log: their
-// duration is the client's choice.
+// wrap instruments one route: status counts, latency, slow-op log.
 func (ob *observer) wrap(route string, f http.HandlerFunc) http.HandlerFunc {
-	long := strings.HasSuffix(route, "/stream")
 	ob.mu.Lock()
 	rs := ob.routes[route]
 	if rs == nil {
@@ -116,11 +107,8 @@ func (ob *observer) wrap(route string, f http.HandlerFunc) http.HandlerFunc {
 				code = 0
 			}
 			rs.codes[code].Add(1)
-			waits := long || strings.Contains(r.URL.RawQuery, "wait=") && r.URL.Query().Get("wait") != ""
-			if !waits {
-				rs.lat.Observe(d)
-			}
-			slow := !waits && ob.slow > 0 && d >= ob.slow
+			rs.lat.Observe(d)
+			slow := ob.slow > 0 && d >= ob.slow
 			if ob.access || slow {
 				msg, lvl := "request", slog.LevelInfo
 				if slow {
@@ -297,20 +285,14 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	p.head("loget_http_request_duration_seconds", "histogram", "HTTP request latency by route (streams and long-polls excluded).")
+	p.head("loget_http_request_duration_seconds", "histogram", "HTTP request latency by route.")
 	for _, rt := range routes {
 		if h := stats[rt].lat.Snapshot(); h.Count > 0 {
 			p.histogram("loget_http_request_duration_seconds", "", h, "route", rt)
 		}
 	}
 	p.counter("loget_http_unauthorized_total", "Requests refused for a missing or unknown token.", ob.unauthorized.Load())
-	p.gauge("loget_http_inflight", "HTTP requests in progress (including streams).", float64(ob.inflight.Load()))
-	if s.streams != nil {
-		p.gauge("loget_http_streams", "Open server-sent-event streams.", float64(len(s.streams)))
-	}
-	if s.waiters != nil {
-		p.gauge("loget_http_waiters", "Long-polls in progress.", float64(len(s.waiters)))
-	}
+	p.gauge("loget_http_inflight", "HTTP requests in progress.", float64(ob.inflight.Load()))
 
 	var ms runtime.MemStats
 	runtime.ReadMemStats(&ms)

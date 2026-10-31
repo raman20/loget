@@ -2,6 +2,7 @@ package loget
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -10,10 +11,11 @@ import (
 
 func TestSnapshotRoundTrip(t *testing.T) {
 	h := snapHeader{log: "L7", lsn: 42, chain: [32]byte{1, 2, 3}}
-	b := encodeSnapshot(h, []byte("kv-bytes"), []byte("topic"))
-	got, kv, tp, err := decodeSnapshot(b)
-	if err != nil || got != h || string(kv) != "kv-bytes" || string(tp) != "topic" {
-		t.Fatalf("round trip: %+v %q %q %v", got, kv, tp, err)
+	secs := map[string][]byte{"tally@1": []byte("t-bytes"), "z@2": {}}
+	b := encodeSnapshot(h, []byte("kv-bytes"), secs)
+	got, kv, sx, err := decodeSnapshot(b)
+	if err != nil || got != h || string(kv) != "kv-bytes" || fmt.Sprint(sx) != fmt.Sprint(secs) {
+		t.Fatalf("round trip: %+v %q %q %v", got, kv, sx, err)
 	}
 	for i := range b { // every single-byte change is caught
 		c := append([]byte{}, b...)
@@ -31,6 +33,7 @@ func TestSnapshotRoundTrip(t *testing.T) {
 
 func FuzzDecodeSnapshot(f *testing.F) {
 	f.Add(encodeSnapshot(snapHeader{log: "L1", lsn: 9}, []byte("kv"), nil))
+	f.Add(encodeSnapshot(snapHeader{log: "L1", lsn: 9}, []byte("kv"), map[string][]byte{"a@1": []byte("x")}))
 	f.Add([]byte("LGSNAP2\n"))
 	f.Fuzz(func(t *testing.T, b []byte) {
 		h, kv, tp, err := decodeSnapshot(b)

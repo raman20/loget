@@ -9,7 +9,7 @@ otherwise; the latest release is
 | Doc | For |
 |---|---|
 | [README](../README.md) | what LogEt is, quickstart, API tour, guarantees, benchmark summary |
-| [getting-started.md](getting-started.md) | every lens from the CLI, server mode, Go, the agent demo |
+| [getting-started.md](getting-started.md) | every index from the CLI, server mode, Go, the agent demo |
 | [faq.md](faq.md) | production readiness, platforms, upgrading from v0.1.0, S3/R2, shred |
 
 ## Running it
@@ -24,10 +24,10 @@ otherwise; the latest release is
 
 | Doc | For |
 |---|---|
-| [architecture.md](architecture.md) | stores, manifests, fencing, writer and group commit, lenses, branches, shred |
+| [architecture.md](architecture.md) | stores, manifests, fencing, writer and group commit, indexes, branches, shred |
 | [formats.md](formats.md) | byte layouts: bucket keys, journal file, segments, payloads, manifests, snapshots |
 | [compatibility.md](compatibility.md) | format version stamps, upgrade/downgrade policy and tested matrix, golden files |
-| [lens-authoring.md](lens-authoring.md) | the lens contract and how to add or change one |
+| [index-authoring.md](index-authoring.md) | the index contract and how to add or change one |
 | [design-principles.md](design-principles.md) | why one log, and what we refuse to build |
 | [design/01-journal-default.md](design/01-journal-default.md) | design: journal as the default local layout, migration |
 | [design/02-read-path.md](design/02-read-path.md) | design: point reads, the off-heap value cache |

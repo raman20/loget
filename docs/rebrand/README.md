@@ -4,7 +4,7 @@ LogEt evolved from freshDB (github.com/raman20/freshdb, last commit
 5a08052), which began as a rewrite of the goli prototype. LogEt started
 a new git history at the rename. The import commit is the freshDB tree at
 5a08052 with the names changed. Branch `archive/freshdb-final` keeps that
-whole tree, with every lens in it.
+whole tree, with every index in it.
 
 Name choice: [name-check.md](name-check.md).
 
@@ -22,7 +22,7 @@ before:
 | base value chunk `.val` | `FRDBVAL1` | `LGETVAL1` |
 | snapshot `.snap` | `FRSNAP2\n` | `LGSNAP2\n` |
 | local journal | `FRESHJ1\0` | `LOGETJ1\0` |
-| ANN graph image (lens/vectors branch only) | `FHNSW1\0\0` | `LHNSW1\0\0` |
+| ANN graph image (index/vectors branch only) | `FHNSW1\0\0` | `LHNSW1\0\0` |
 
 Also renamed: Go module `github.com/raman20/freshdb` →
 `github.com/raman20/loget`, binary `freshdb` → `loget`, env vars

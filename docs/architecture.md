@@ -10,11 +10,11 @@ flowchart LR
     API["Go API / HTTP / CLI"] --> TX["transactions<br/>(OCC, serializable)"]
     TX --> W["writer<br/>sequencer + group commit"]
     W -->|"encrypt values<br/>per subject (AES-GCM)"| W
-    subgraph Lenses["lenses = pure folds over the log"]
+    subgraph Indexes["indexes = pure folds over the log"]
       KV["KV (MVCC)"]; TOP["topics + groups"]; DOC["docs + indexes"]; VEC["vectors"]
     end
-    W -->|"apply after ack"| Lenses
-    TX -->|reads| Lenses
+    W -->|"apply after ack"| Indexes
+    TX -->|reads| Indexes
   end
   W -->|"create-only PUT<br/>one object per commit"| S3[("storage<br/>S3 / MinIO / R2 · local journal or dir")]
   S3 --- M["manifest/…mf<br/>epoch, branches, reflog"]
@@ -82,18 +82,18 @@ only after that object is durable. If a PUT's outcome is unknown (for example
 a timeout), the writer reads the object back. If it still can't tell, it
 returns `ErrUnknownOutcome` and never acks.
 
-**Lenses** (`lens/`). KV with full version history (MVCC), topics with
+**Indexes** (`index/`). KV with full version history (MVCC), topics with
 consumer-group cursors, documents with secondary indexes, and vectors with
 cosine search. Each is a deterministic fold over log entries; see
-[lens-authoring.md](lens-authoring.md). Lens state lives in memory, with one
-exception: the KV lens keeps values larger than `InlineMax` (64 B) as a
+[index-authoring.md](index-authoring.md). Index state lives in memory, with one
+exception: the KV index keeps values larger than `InlineMax` (64 B) as a
 position (segment, offset, length, CRC-32C) in their immutable segment, and
 reads them back on demand through the **value cache** (`vcache.go`: 64
 shards of byte rings in one off-heap `mmap` arena, default 256 MiB,
 `WithValueCacheBytes`). Every value read from storage is CRC-checked before
 it is returned or cached, and values are copied on the way in and out.
 Vectors live in one contiguous `float32` slab per collection; search is an
-exact, parallel scan with a bounded top-k heap. KV and topic lenses can be
+exact, parallel scan with a bounded top-k heap. KV and topic indexes can be
 checkpointed to `snap/` (off by default), but checkpoints are an
 optimisation, never the source of truth.
 
@@ -115,7 +115,7 @@ each one crash-safe:
 4. Return an ed25519-signed certificate (subject hash, LSN, chain head,
    manifest id).
 
-Lenses drop the subject (`DropSubject` ≡ folding the redacted log), and
+Indexes drop the subject (`DropSubject` ≡ folding the redacted log), and
 ciphertext stays in old segments. Because the hash chain covers the stored
 ciphertext, it still verifies. `Verify` re-checks everything and sweeps any
 DEK that landed late.

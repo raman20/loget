@@ -4,10 +4,10 @@
 
 <h3 align="center">One log. One binary. One API.</h3>
 
-<p align="center"><i>LogEt: Danish/Norwegian for "the log", and "et" also means "one": one log, every lens.</i></p>
+<p align="center"><i>LogEt: Danish/Norwegian for "the log", and "et" also means "one": one log, every index.</i></p>
 
 <p align="center">
-KV, streams, documents, vectors and transactions as lenses over a single append-only log<br>
+KV, streams, documents, vectors and transactions as indexes over a single append-only log<br>
 on object storage or a local disk, with branching, rewind and provable deletion.
 </p>
 
@@ -36,7 +36,7 @@ on object storage or a local disk, with branching, rewind and provable deletion.
 > first version of compaction). The correctness core is model-checked and
 > simulation-tested; `main` also has online backup/restore, metrics,
 > graceful shutdown and S3 fault-injection tests. Still missing:
-> larger-than-RAM lens state, built-in KMS clients, and testing on AWS S3 or
+> larger-than-RAM index state, built-in KMS clients, and testing on AWS S3 or
 > R2 (only MinIO is tested; `loget s3check` probes other endpoints). The
 > on-storage format may change before 1.0. Readiness per area, with what is
 > and is not tested: [docs/PRODUCTION_READINESS.md](docs/PRODUCTION_READINESS.md).
@@ -53,7 +53,7 @@ scripts handle backups and "delete this user". Each one has its own failure
 modes, its own backup story and its own deletion story.
 
 In LogEt, **all of that is one append-only log**. The KV store, topics,
-documents and vectors are not separate engines. They are **lenses**:
+documents and vectors are not separate engines. They are **indexes**:
 deterministic views folded from the same log. Because there is only one log:
 
 - **One transaction covers everything.** Consume a message, write the result
@@ -62,7 +62,7 @@ deterministic views folded from the same log. Because there is only one log:
   so no data is copied. You can undo a bad agent run or test a migration on a
   branch.
 - **Deletion is provable.** `shred alice` destroys Alice's key, so her data
-  becomes unreadable everywhere: every lens, every branch, every point in
+  becomes unreadable everywhere: every index, every branch, every point in
   history. You get a signed certificate, and the log's hash chain still
   verifies.
 - **Operations are simple.** One static Go binary (no CGO) and one URL
@@ -82,7 +82,7 @@ agents. That is the same bet SQLite made. Read the
 | **Topics** | publish, consumer groups, exactly-once consume+write+ack; push via `WaitHead`, HTTP long-poll (`?wait=`) and SSE | retention only at compaction (`--topic-max-age`, `--topic-max-messages`; never past a group's cursor unless told); every kept message is in RAM; no limit on concurrent waiters/streams |
 | **Documents** | JSON documents, secondary indexes added at any time (built by replaying the log) | equality lookups only |
 | **Vectors** | cosine search, exact (recall 1.0, parallel scan) or opt-in HNSW (`vec ann`) | the HNSW graph is in RAM; saved on close and reloaded on open (10 s at 1M), recall@10 0.92 at 1M with the default ef |
-| **Transactions** | serializable OCC across all lenses; hot keys cannot starve | single writer per database |
+| **Transactions** | serializable OCC across all indexes; hot keys cannot starve | single writer per database |
 | **History** | time travel to any LSN, zero-copy branches, rewind, promote, reflog | after `compact`, history below each branch head is gone (`410`); `gc` keeps a window |
 | **Compaction / GC** | `loget compact` drops overwritten, deleted and shredded data; `loget gc --keep-for 24h` keeps a history window and also deletes old manifests, retired logs and pruned reflog; `--shrink` rewrites the journal file | new on `main`; commits pause while it runs; shrink is offline; topic retention is opt-in and runs only at compaction |
 | **Deletion** | per-subject crypto-shred, signed certificate, `verify` | covers subject-tagged values only |
@@ -152,7 +152,7 @@ $ loget shred alice                            # forget alice, provably
     "branch": "main",
     "chain_head": "54fc01cc560a412220302230adce4476bb189af4214ad8ad15520ab9e78de356",
     "dek_deleted": true,
-    "lenses_purged": [ "kv", "topic", "vector" ],
+    "indexes_purged": [ "kv", "topic", "vector" ],
     …                                            (manifest id, public key, timestamp trimmed)
     "shred_lsn": 3,
     "signature": "c38cd13433e48e56e3f011203a9b3d3f…",
@@ -330,7 +330,7 @@ flowchart LR
   subgraph P["your process  (or loget serve)"]
     A["Go API · HTTP · CLI"] --> T["transactions<br/>OCC, serializable"]
     T --> W["single writer<br/>group commit"]
-    W --> LZ["lenses (pure folds)<br/>KV · topics · docs · vectors"]
+    W --> LZ["indexes (pure folds)<br/>KV · topics · docs · vectors"]
     T -- reads --> LZ
   end
   W -- "create-only PUT<br/>1 object per commit" --> S[("object storage<br/>S3 · MinIO · R2 · local dir")]
@@ -346,7 +346,7 @@ flowchart LR
   `epoch+1`. Because manifests are create-only, exactly one opener wins. A
   zombie writer's next create-only write collides, or it sees the newer
   epoch, and it stops with `ErrFenced`.
-- **Lenses** are pure folds over `redact(log, shredded)`. A test enforces that
+- **Indexes** are pure folds over `redact(log, shredded)`. A test enforces that
   they import nothing that could observe the outside world.
 - **Branches** are a parent log plus a fork LSN. Rewind forks a new log and
   keeps the old head in a reflog.
@@ -363,12 +363,12 @@ Read more in [docs/architecture.md](docs/architecture.md) and
 | | Guarantee |
 |---|---|
 | Durability | A transaction is acknowledged only after its segment is durable: S3 PUT returned success, or (locally) the journal record was written and `fdatasync`'d, or, in the files layout, the segment file was fsync'd and atomically linked. Acked transactions survive crashes and restarts. |
-| Atomicity | A transaction's ops all appear or none do, across every lens. |
+| Atomicity | A transaction's ops all appear or none do, across every index. |
 | Isolation | Transactions on a branch are **serializable**. There is a single writer per database with OCC read-set validation on KV, topic and cursor reads. |
 | Exactly-once processing | Fetch + write + ack in one transaction processes each message at most once, and each ack is atomic with its writes. |
 | Fencing | After a newer `Open` succeeds, an older writer can never commit again. |
 | Recoverability | Damage is reported (`ErrCorrupt`, `format.ErrVersion`), never silently dropped; the journal store tells torn appends and interrupted deletes from corruption, checked by a power-loss crash-point test. `--repair-tail` keeps the valid prefix of a damaged final segment (the object stays in place; a repair note records the kept prefix). |
-| Lens consistency | For every lens, `state == fold(redact(log, shredded))`, including after restart, snapshots, branches and rewinds. |
+| Index consistency | For every index, `state == fold(redact(log, shredded))`, including after restart, snapshots, branches and rewinds. |
 | History | Time travel to any LSN returns exactly what was visible then, minus shredded data. Rewind never deletes the old head; it goes into the reflog. |
 | Shred | After `Shred(s)` returns, LogEt returns no value written with subject `s` on any branch, at any LSN. The subject's DEK is deleted, new writes for `s` are refused (`410`), and the hash chain and signed certificate verify. |
 
@@ -406,7 +406,7 @@ simulator seeds, fuzzing and the MinIO tests on every push.
 | | LogEtCompact (base image + garbage list, crashes, a fenced compactor, slow readers) | 1,557,725 states (315,903 distinct), no error; found one design bug before code |
 | | LogEtGC (retention cut, dependent branch, reflog, log drop, manifest deletion, a zombie writer) | 6,582,415 states (1,598,697 distinct), no error; mutants without the post-create check or the dependency cap fail |
 | **Deterministic simulation** ([sim/](sim)) | seeded workload + fault-injecting store; checks against a reference model after every step | 50,000 seeds before the final fixes and 10,000 on the final code, all OK. The 10k run covered 137,293 acked txns, 75,537 crashes, 29,979 writer takeovers and 114,926 injected faults. |
-| **Property tests** ([rapid](https://pgregory.net/rapid)) | `lens == fold(log)`, snapshot+tail == fold, `DropSubject == fold(redacted)`, lenses refine reference models | 5,000 checks per lens property, 500 engine programs |
+| **Property tests** ([rapid](https://pgregory.net/rapid)) | `index == fold(log)`, snapshot+tail == fold, `DropSubject == fold(redacted)`, indexes refine reference models | 5,000 checks per index property, 500 engine programs |
 | **Crash test** | 4 concurrent writers, kill -9 at random points | 200 rounds, 20,166 recovered txns, all checks OK |
 | **Fuzzing** | segment + payload decoders | ~3 min total, clean after fixing one finding |
 
@@ -415,7 +415,7 @@ simulator seeds, fuzzing and the MinIO tests on every push.
 - **TLC** found that a slow opener could write an older-epoch fence after a
   newer one. That would brick the log on the next open.
 - **Fuzzing** found that the payload decoder accepted non-canonical varints.
-- **Property tests** found a vector lens state that wasn't canonical after a
+- **Property tests** found a vector index state that wasn't canonical after a
   shred.
 - **The simulator** found a DEK that landed late, after a shred.
 
@@ -636,7 +636,7 @@ and [docs/benchmarks.md](docs/benchmarks.md)):
 ```
 *.go         engine: open/fencing, writer + group commit, transactions, branches, shred/verify, keyring, value cache
 format/      segment + payload encoding (CRC32C, hash chain), fuzz targets
-lens/        pure folds: KV (MVCC), topics, docs + indexes, vectors; property tests
+index/        pure folds: KV (MVCC), topics, docs + indexes, vectors; property tests
 store/       Store interface: journal, fs, s3, mem, faulty (fault injection); layout detection + migrate
 sim/         deterministic simulator
 server/      HTTP API          cmd/loget/  the single binary

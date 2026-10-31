@@ -10,7 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/raman20/loget/lens"
+	"github.com/raman20/loget/index"
 	"github.com/raman20/loget/store"
 )
 
@@ -207,9 +207,9 @@ func (c *valueCache) close() {
 }
 
 // readValue returns the stored bytes of a version kept as a position in
-// segment seq of log x, via the cache, verifying the lens' checksum. The
+// segment seq of log x, via the cache, verifying the index' checksum. The
 // result is a private copy the caller may modify.
-func (db *DB) readValue(x *logState, seq uint64, ver lens.Version) ([]byte, error) {
+func (db *DB) readValue(x *logState, seq uint64, ver index.Version) ([]byte, error) {
 	k, obj := vcKey{x.meta.ID, seq, ver.Off}, segKey(x.meta.ID, seq)
 	if ver.Chunk != 0 { // in a compaction base's value chunk (x is the based log)
 		k, obj = vcKey{x.meta.Base.Key, 1<<63 | uint64(ver.Chunk), ver.Off}, chunkKey(x.meta.Base.Key, int(ver.Chunk-1))
@@ -224,7 +224,7 @@ func (db *DB) readValue(x *logState, seq uint64, ver lens.Version) ([]byte, erro
 		if b, err = store.GetRange(context.Background(), db.st, obj, int64(ver.Off), int64(ver.Len)); err != nil {
 			return nil, fmt.Errorf("loget: reading value at LSN %d: %w", ver.LSN, err)
 		}
-		ok = crc32.Checksum(b, lens.Castagnoli) == ver.Sum
+		ok = crc32.Checksum(b, index.Castagnoli) == ver.Sum
 	}
 	if !ok {
 		return nil, fmt.Errorf("%w: value at LSN %d (segment %s/%d offset %d) fails its checksum", ErrCorrupt, ver.LSN, x.meta.ID, seq, ver.Off)

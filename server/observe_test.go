@@ -263,44 +263,14 @@ func TestAccessAndSlowLog(t *testing.T) {
 	buf.Reset()
 	h = New(db, Options{Logger: lg, SlowOp: time.Nanosecond})
 	call(h, "GET", "/v1/kv/a", "", "")
-	call(h, "GET", "/v1/topics/t?wait=10ms", "", "")
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
 	if len(lines) != 1 || !strings.Contains(lines[0], `"slow request"`) || !strings.Contains(lines[0], `"WARN"`) {
-		t.Fatalf("slow log (long-polls exempt): %q", buf.String())
+		t.Fatalf("slow log: %q", buf.String())
 	}
 	buf.Reset()
 	h = New(db, Options{Logger: lg})
 	call(h, "GET", "/v1/kv/a", "", "")
 	if buf.Len() != 0 {
 		t.Fatalf("default: no access log, 1s slow threshold: %q", buf.String())
-	}
-}
-
-// The status wrapper must keep server-sent events flushing.
-func TestStreamThroughMetricsWrapper(t *testing.T) {
-	db := memDB(t)
-	srv := httptest.NewServer(New(db, Options{}))
-	defer srv.Close()
-	if err := db.Update(context.Background(), func(tx *loget.Tx) error {
-		return tx.Topic("t").Publish([]byte("hello"))
-	}); err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+"/v1/topics/t/stream", nil)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	var got []byte
-	buf := make([]byte, 4096)
-	for !bytes.Contains(got, []byte("data:")) {
-		n, err := resp.Body.Read(buf)
-		got = append(got, buf[:n]...)
-		if err != nil {
-			t.Fatalf("no event before %v: %q", err, got)
-		}
 	}
 }

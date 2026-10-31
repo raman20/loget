@@ -11,7 +11,7 @@ LogEt is currently a **single-maintainer project**.
 ## How decisions are made
 
 - Day-to-day decisions (reviews, merges, releases) are made by the maintainers.
-- Larger changes, such as a new lens, an on-storage format change, or a new
+- Larger changes, such as a new index, an on-storage format change, or a new
   public API, start as a GitHub issue or discussion. We write the design down
   and give the community time to comment before it is merged.
 - [docs/design-principles.md](docs/design-principles.md) is the tie-breaker.

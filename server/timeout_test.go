@@ -14,18 +14,14 @@ import (
 	"github.com/raman20/loget"
 )
 
-// TestTimeouts: a stalled upload is cut off after ReadTimeout; long polls
-// and streams outlive WriteTimeout (renewed), and a slow handler is not
-// cut by the read deadline once its body is read.
+// TestTimeouts: a stalled upload is cut off after ReadTimeout, and a
+// request whose body was read is still answered after ReadTimeout.
 func TestTimeouts(t *testing.T) {
 	db, err := loget.Open(context.Background(), "mem://", loget.WithLogf(func(string, ...any) {}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	old := streamPing
-	streamPing = 100 * time.Millisecond
-	defer func() { streamPing = old }()
 	srv := httptest.NewServer(New(db, Options{ReadTimeout: 300 * time.Millisecond, WriteTimeout: 300 * time.Millisecond}))
 	defer srv.Close()
 
@@ -49,45 +45,18 @@ func TestTimeouts(t *testing.T) {
 		t.Fatal("stalled upload was written")
 	}
 
-	// long poll longer than WriteTimeout
-	t0 = time.Now()
-	r, err := http.Get(srv.URL + "/v1/topics/t?wait=1s")
+	// body read, then an answer after ReadTimeout has passed
+	req, _ := http.NewRequest("PUT", srv.URL+"/v1/kv/late", strings.NewReader("x"))
+	time.Sleep(400 * time.Millisecond)
+	r, err := http.DefaultClient.Do(req)
 	if err != nil || r.StatusCode != 200 {
-		t.Fatalf("long poll: %v %v", err, r)
-	}
-	r.Body.Close()
-	if d := time.Since(t0); d < 900*time.Millisecond {
-		t.Fatalf("long poll returned after %v", d)
-	}
-
-	// a stream outlives WriteTimeout
-	r, err = http.Get(srv.URL + "/v1/topics/t/stream")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer r.Body.Close()
-	sc := bufio.NewScanner(r.Body)
-	pings := 0
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) && sc.Scan() {
-		if sc.Text() == ": ping" {
-			pings++
-		}
-	}
-	if pings < 5 {
-		t.Fatalf("stream: %d pings in 1 s (err %v)", pings, sc.Err())
-	}
-
-	// body read, then a handler slower than ReadTimeout: still answered
-	r, err = http.Post(srv.URL+"/v1/topics/t2", "text/plain", strings.NewReader("x"))
-	if err != nil || r.StatusCode != 200 {
-		t.Fatalf("publish: %v %v", err, r)
+		t.Fatalf("put: %v %v", err, r)
 	}
 	r.Body.Close()
 }
 
-// TestDrain: closing Options.Drain flips readyz and ends streams and
-// long polls.
+// TestDrain: closing Options.Drain flips readyz to 503 while requests
+// are still served.
 func TestDrain(t *testing.T) {
 	db, err := loget.Open(context.Background(), "mem://", loget.WithLogf(func(string, ...any) {}))
 	if err != nil {
@@ -97,39 +66,21 @@ func TestDrain(t *testing.T) {
 	drain := make(chan struct{})
 	srv := httptest.NewServer(New(db, Options{Drain: drain}))
 	defer srv.Close()
-	sr, err := http.Get(srv.URL + "/v1/topics/t/stream")
-	if err != nil {
-		t.Fatal(err)
+	if r, _ := http.Get(srv.URL + "/readyz"); r == nil || r.StatusCode != 200 {
+		t.Fatalf("readyz before drain: %v", r)
 	}
-	defer sr.Body.Close()
-	done := make(chan string, 2)
-	go func() { b, _ := io.ReadAll(sr.Body); done <- string(b) }()
-	go func() {
-		r, err := http.Get(srv.URL + "/v1/topics/t?wait=60s")
-		if err != nil {
-			done <- err.Error()
-			return
-		}
-		r.Body.Close()
-		done <- r.Status
-	}()
-	time.Sleep(200 * time.Millisecond)
 	close(drain)
-	for i := 0; i < 2; i++ {
-		select {
-		case s := <-done:
-			if !strings.Contains(s, "event: shutdown") && !strings.HasPrefix(s, "200") {
-				t.Errorf("on drain: %q", s)
-			}
-		case <-time.After(5 * time.Second):
-			t.Fatal("stream or long poll still open after drain")
-		}
-	}
 	r, _ := http.Get(srv.URL + "/readyz")
 	b, _ := io.ReadAll(r.Body)
 	r.Body.Close()
 	if r.StatusCode != 503 || !strings.Contains(string(b), "draining") {
 		t.Fatalf("readyz while draining: %d %q", r.StatusCode, b)
+	}
+	if err := db.Put(context.Background(), "k", []byte("v")); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := http.Get(srv.URL + "/v1/kv/k"); r == nil || r.StatusCode != 200 {
+		t.Fatalf("request while draining: %v", r)
 	}
 }
 

@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bufio"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -50,7 +49,7 @@ const tokenFile = `# scoped tokens
 read   reader-0001
 write  writer-0001 name=app
 admin  admin-00001
-write  limited-001 name=svc kv:users/* topic:orders docs:people vectors:emb
+write  limited-001 name=svc kv:users/* kv:jobs
 read   ro-limited1 kv:pub/*
 legacy-admin-token
 `
@@ -82,15 +81,11 @@ func TestScopedTokens(t *testing.T) {
 		{"PUT", "/v1/kv/a", "limited-001", "v", 403},
 		{"GET", "/v1/kv?prefix=users/", "limited-001", "", 200},
 		{"GET", "/v1/kv", "limited-001", "", 403},
-		{"POST", "/v1/topics/orders", "limited-001", "m", 200},
-		{"POST", "/v1/topics/other", "limited-001", "m", 403},
-		{"PUT", "/v1/docs/people/1", "limited-001", `{"a":1}`, 200},
-		{"PUT", "/v1/docs/other/1", "limited-001", `{"a":1}`, 403},
-		{"PUT", "/v1/vectors/emb/1", "limited-001", `[1,2]`, 200},
-		{"PUT", "/v1/vectors/x/1", "limited-001", `[1,2]`, 403},
+		{"PUT", "/v1/kv/jobs", "limited-001", "v", 200},  // exact name
+		{"PUT", "/v1/kv/jobs2", "limited-001", "v", 403}, // not a prefix grant
 		{"GET", "/v1/log", "limited-001", "", 403},
 		{"GET", "/v1/branches", "limited-001", "", 403},
-		{"POST", "/v1/tx", "limited-001", `[{"op":"put","key":"users/2","value":"v"},{"op":"pub","topic":"orders","value":"m"}]`, 200},
+		{"POST", "/v1/tx", "limited-001", `[{"op":"put","key":"users/2","value":"v"},{"op":"del","key":"jobs"}]`, 200},
 		{"POST", "/v1/tx", "limited-001", `[{"op":"put","key":"users/3","value":"v"},{"op":"put","key":"admin","value":"v"}]`, 403},
 		{"GET", "/v1/kv/pub/x", "ro-limited1", "", 404},
 		{"GET", "/v1/kv/users/1", "ro-limited1", "", 403},
@@ -104,7 +99,7 @@ func TestScopedTokens(t *testing.T) {
 	if got := call(h, "GET", "/v1/kv/users/3", "admin-00001", ""); got != 404 {
 		t.Fatalf("refused tx left users/3: %d", got)
 	}
-	for _, bad := range []string{"", "root tok-12345", "read short", "read tok-12345 files:x", "read dup-12345\nwrite dup-12345"} {
+	for _, bad := range []string{"", "root tok-12345", "read short", "read tok-12345 files:x", "read tok-12345 topic:x", "read dup-12345\nwrite dup-12345"} {
 		if _, err := ParseTokens([]byte(bad)); err == nil {
 			t.Errorf("accepted %q", bad)
 		}
@@ -112,7 +107,7 @@ func TestScopedTokens(t *testing.T) {
 }
 
 // TestTokenRotation: the file is re-read without a restart; a bad file
-// keeps the old tokens; an SSE stream of a revoked token ends.
+// keeps the old tokens.
 func TestTokenRotation(t *testing.T) {
 	db := memDB(t)
 	f := filepath.Join(t.TempDir(), "tokens")
@@ -137,22 +132,6 @@ func TestTokenRotation(t *testing.T) {
 	if c := call(h, "GET", "/v1/kv/a", "old-token-1", ""); c != 404 {
 		t.Fatal("old token refused", c)
 	}
-	// open a stream with the old token
-	req, _ := http.NewRequest("GET", srv.URL+"/v1/topics/t/stream", nil)
-	req.Header.Set("Authorization", "Bearer old-token-1")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil || resp.StatusCode != 200 {
-		t.Fatal(resp, err)
-	}
-	defer resp.Body.Close()
-	lines := make(chan string, 16)
-	go func() {
-		sc := bufio.NewScanner(resp.Body)
-		for sc.Scan() {
-			lines <- sc.Text()
-		}
-		close(lines)
-	}()
 	// rotate: both during the overlap, then only the new one
 	write("read old-token-1\nadmin new-token-1\n")
 	if ok, err := a.Reload(); !ok || err != nil {
@@ -166,27 +145,6 @@ func TestTokenRotation(t *testing.T) {
 	if call(h, "GET", "/v1/kv/a", "old-token-1", "") != 401 {
 		t.Fatal("revoked token still works")
 	}
-	// a write wakes the stream, which notices the revocation
-	if call(h, "POST", "/v1/topics/t", "new-token-1", "m") != 200 {
-		t.Fatal("publish")
-	}
-	deadline := time.After(10 * time.Second)
-	for done := false; !done; {
-		select {
-		case l, ok := <-lines:
-			if !ok {
-				t.Fatal("stream closed without an error event")
-			}
-			if strings.Contains(l, "revoked") {
-				done = true
-			}
-			if strings.HasPrefix(l, "event: message") {
-				t.Fatal("revoked stream delivered a message")
-			}
-		case <-deadline:
-			t.Fatal("stream of a revoked token still open")
-		}
-	}
 	// a broken file keeps the current tokens
 	write("superuser x\n")
 	if _, err := a.Reload(); err == nil {
@@ -195,59 +153,6 @@ func TestTokenRotation(t *testing.T) {
 	if call(h, "GET", "/v1/kv/a", "new-token-1", "") != 200 {
 		t.Fatal("tokens lost on a bad reload")
 	}
-}
-
-func TestStreamAndWaiterLimits(t *testing.T) {
-	db := memDB(t)
-	s := newServer(db, Options{MaxStreams: 1, MaxWaiters: 1})
-	srv := httptest.NewServer(s.routes())
-	defer srv.Close()
-	until := func(what string, ok func() bool) {
-		t.Helper()
-		for i := 0; i < 500 && !ok(); i++ {
-			time.Sleep(10 * time.Millisecond)
-		}
-		if !ok() {
-			t.Fatal(what)
-		}
-	}
-	resp, err := http.Get(srv.URL + "/v1/topics/t/stream")
-	if err != nil || resp.StatusCode != 200 {
-		t.Fatal(resp, err)
-	}
-	r2, err := http.Get(srv.URL + "/v1/topics/t/stream")
-	if err != nil {
-		t.Fatal(err)
-	}
-	r2.Body.Close()
-	if r2.StatusCode != 503 || r2.Header.Get("Retry-After") == "" {
-		t.Fatalf("second stream: %d", r2.StatusCode)
-	}
-	resp.Body.Close() // frees the slot once the handler sees it
-	until("stream slot not released", func() bool { return len(s.streams) == 0 })
-	// long-polls: one waits, the next is refused, a plain read is not
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		r, err := http.Get(srv.URL + "/v1/topics/q?wait=3s")
-		if err == nil {
-			r.Body.Close()
-		}
-	}()
-	until("long-poll not waiting", func() bool { return len(s.waiters) == 1 })
-	r, err := http.Get(srv.URL + "/v1/topics/q?wait=3s")
-	if err != nil {
-		t.Fatal(err)
-	}
-	r.Body.Close()
-	if r.StatusCode != 503 {
-		t.Fatalf("second long-poll: %d", r.StatusCode)
-	}
-	if r, err := http.Get(srv.URL + "/v1/topics/q"); err != nil || r.StatusCode != 200 {
-		t.Fatal("plain read refused", err)
-	}
-	<-done
-	until("waiter slot not released", func() bool { return len(s.waiters) == 0 })
 }
 
 func writePair(t *testing.T, dir string, serial int64) (string, string) {

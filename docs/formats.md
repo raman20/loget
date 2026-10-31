@@ -80,7 +80,7 @@ layouts offline, with a backup. It is crash-safe; see
 ## Value positions (in memory, not on storage)
 
 KV values larger than `InlineMax` (default 64 B) are not kept in RAM. The
-KV lens stores a position into the immutable segment that holds them
+KV index stores a position into the immutable segment that holds them
 (segment, offset within the segment, length, CRC-32C of the stored bytes)
 and reads them back with a ranged read. The position is derived from the
 log, so this changes no on-storage bytes; it is why KV snapshots record the
@@ -108,7 +108,7 @@ A fence segment has a header and no frames.
 
 ```
 u64       LSN
-i64       commit timestamp (unix nanos, from the DB clock; part of the log so lenses stay deterministic)
+i64       commit timestamp (unix nanos, from the DB clock; part of the log so indexes stay deterministic)
 [32]      prev  = hash-chain head before this frame
 uvarint   number of ops
 op × n:
@@ -203,8 +203,8 @@ u64  LSN covered
 32B  hash-chain head after that LSN
 u8   len(log id), then the log id
 u64  len(kv)
-kv lens snapshot bytes
-topic lens snapshot bytes
+kv index snapshot bytes
+topic index snapshot bytes
 u32  CRC32C(all of the above)
 ```
 
@@ -213,7 +213,7 @@ its key and the log, the LSN lies between the log's compaction floor and
 its head, and the hash-chain head equals the log's own at that LSN. So the
 bytes of another log's snapshot, or of a snapshot from a different history
 under the same name, are never loaded. Anything else (missing, damaged,
-mismatched) is ignored with a log line and the lens is rebuilt from the
+mismatched) is ignored with a log line and the index is rebuilt from the
 log. Version 1 snapshots (the same layout without magic, LSN chain or log
 id) are ignored by this build; builds before it read the magic as an LSN
 past the head and ignore version 2 snapshots.

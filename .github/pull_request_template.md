@@ -8,7 +8,7 @@
 - [ ] `gofmt`, `go vet`, `staticcheck` clean
 - [ ] For changes to the log, fencing, transactions, branches or shred: simulator run with more seeds (`go test ./sim -run TestSimulation -seeds=5000`)
 - [ ] If the protocol changed: the TLA+ spec in `spec/` is updated and `spec/run_tlc.sh` passes; `spec/RESULTS.md` updated
-- [ ] If a lens changed: property tests in `lens/` still hold (`lens == fold(log)`)
+- [ ] If an index changed: property tests in `index/` still hold (`index == fold(log)`)
 
 ## Compatibility
 

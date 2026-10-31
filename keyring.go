@@ -14,7 +14,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/raman20/loget/lens"
+	"github.com/raman20/loget/index"
 	"github.com/raman20/loget/store"
 )
 
@@ -98,7 +98,7 @@ func openKeyring(ctx context.Context, st store.Store, rnd io.Reader, kek []byte)
 	for _, s := range sh {
 		k.shredded[s[strings.LastIndex(s, "/")+1:]] = true
 	}
-	// Load every DEK eagerly so decryption (and therefore every lens) is a
+	// Load every DEK eagerly so decryption (and therefore every index) is a
 	// deterministic function of (log, shredded set), never of IO timing.
 	ds, err := st.List(ctx, "keys/dek/")
 	if err != nil {
@@ -256,11 +256,11 @@ func (k *keyring) reseal(h string, plain, ad []byte) ([]byte, bool, error) {
 	return ct, err == nil, err
 }
 
-// env implements lens.Env on top of the keyring.
+// env implements index.Env on top of the keyring.
 type env struct{ k *keyring }
 
 func (e env) Shredded(s string) bool { return e.k.isShredded(s) }
-func (e env) Open(en *lens.Entry, i int) ([]byte, bool) {
+func (e env) Open(en *index.Entry, i int) ([]byte, bool) {
 	op := en.Ops[i]
 	if op.Subject == "" {
 		return op.Value, true

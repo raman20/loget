@@ -11,7 +11,7 @@ import (
 	"strings"
 
 	"github.com/raman20/loget/format"
-	"github.com/raman20/loget/lens"
+	"github.com/raman20/loget/index"
 	"github.com/raman20/loget/store"
 )
 
@@ -23,7 +23,7 @@ type Certificate struct {
 	ChainHead   string   `json:"chain_head"` // hash-chain head after the SHRED record
 	ManifestID  uint64   `json:"manifest_id"`
 	DEKDeleted  bool     `json:"dek_deleted"`
-	Lenses      []string `json:"lenses_purged"`
+	Indexes     []string `json:"indexes_purged"`
 	TS          int64    `json:"ts"`
 	PublicKey   string   `json:"public_key"`
 	Signature   string   `json:"signature,omitempty"`
@@ -46,8 +46,8 @@ func VerifyCertificate(c *Certificate) bool {
 	return ed25519.Verify(pk, c.signingBytes(), sig)
 }
 
-// Shred crypto-shreds a subject: its DEK is destroyed, every lens on every
-// open branch drops the subject's data, future lens builds redact it, a
+// Shred crypto-shreds a subject: its DEK is destroyed, every index on every
+// open branch drops the subject's data, future index builds redact it, a
 // SHRED record is appended to main (the hash chain stays verifiable because
 // it covers ciphertext digests), and a signed certificate is returned.
 func (db *DB) Shred(ctx context.Context, subject string) (*Certificate, error) {
@@ -69,30 +69,13 @@ func (db *DB) Shred(ctx context.Context, subject string) (*Certificate, error) {
 	for _, id := range sortedMapKeys(db.views) {
 		v := db.views[id]
 		v.mu.Lock()
-		for _, l := range v.lenses() {
+		for _, l := range v.indexes() {
 			l.DropSubject(h)
 		}
 		v.mu.Unlock()
 	}
-	for _, l := range db.views[db.man.Refs["main"]].lenses() {
+	for _, l := range db.views[db.man.Refs["main"]].indexes() {
 		names = append(names, l.Name())
-	}
-	// Saved HNSW graphs hold a hash per vector and a link structure built
-	// with the shredded vectors present: delete them, and save none built
-	// before now (the next open or compaction rebuilds from scratch).
-	db.annTainted = true
-	ids := map[string]bool{}
-	for id := range db.man.Logs {
-		ids[id] = true
-	}
-	for _, g := range db.man.Garbage {
-		ids[g.Log] = true
-	}
-	for _, id := range sortedMapKeys(ids) {
-		if _, err := db.dropANN(ctx, id); err != nil {
-			db.mu.Unlock()
-			return nil, err
-		}
 	}
 	db.mu.Unlock()
 	lsn, err := db.Branch("main").UpdateLSN(ctx, func(tx *Tx) error {
@@ -114,7 +97,7 @@ func (db *DB) Shred(ctx context.Context, subject string) (*Certificate, error) {
 	mid := db.man.ID
 	db.mu.Unlock()
 	c := &Certificate{SubjectHash: h, ShredLSN: lsn, Branch: "main", ChainHead: hex.EncodeToString(ch[:]), ManifestID: mid,
-		DEKDeleted: true, Lenses: names, TS: db.opts.Clock(), PublicKey: hex.EncodeToString(k.sign.Public().(ed25519.PublicKey))}
+		DEKDeleted: true, Indexes: names, TS: db.opts.Clock(), PublicKey: hex.EncodeToString(k.sign.Public().(ed25519.PublicKey))}
 	c.Signature = hex.EncodeToString(ed25519.Sign(k.sign, c.signingBytes()))
 	b, _ := json.Marshal(c)
 	key := fmt.Sprintf("keys/certs/%s-%d.json", h, lsn)
@@ -233,7 +216,7 @@ func (db *DB) Verify(ctx context.Context) (*VerifyReport, error) {
 			}
 		}
 		r.Warnings = append(r.Warnings, fresh.verifyCheckpoints(ctx, l, objs)...)
-		err = l.eachOwn(ctx, l.head(), func(e *lens.Entry) error { // the parent is verified on its own
+		err = l.eachOwn(ctx, l.head(), func(e *index.Entry) error { // the parent is verified on its own
 			r.Entries++
 			for i, op := range e.Ops {
 				if op.Subject == "" || op.Kind == format.OpDel || op.Kind == format.OpShred {

@@ -9,15 +9,15 @@ import (
 	"sync"
 
 	"github.com/raman20/loget/format"
-	"github.com/raman20/loget/lens"
+	"github.com/raman20/loget/index"
 	"github.com/raman20/loget/store"
 )
 
 // logState is the in-memory index of one log (one branch lineage segment).
 // Segments are immutable objects log/<id>/<seq>.seg, seq dense from 1.
-// Frames are not kept in memory: lenses fold them as they are written or
+// Frames are not kept in memory: indexes fold them as they are written or
 // recovered, and anything that needs them again (time-travel views of
-// other lenses, Entries, Verify, index builds) re-reads the segments.
+// other indexes, Entries, Verify, index builds) re-reads the segments.
 type logState struct {
 	meta    LogMeta
 	parent  *logState
@@ -75,7 +75,7 @@ func (l *logState) floor() uint64 {
 // source finds where a version's bytes live and which log sealed them:
 // the based log for anything at or below the compaction base (its value
 // chunks, re-sealed under its ID), else the segment holding the LSN.
-func (l *logState) source(ver lens.Version) (*logState, uint64, bool) {
+func (l *logState) source(ver index.Version) (*logState, uint64, bool) {
 	if b := l.based(); b != nil && (ver.Chunk != 0 || ver.LSN <= b.meta.Base.LSN) {
 		return b, 0, true
 	}
@@ -147,8 +147,8 @@ func (l *logState) readSeg(ctx context.Context, s segIdx) ([]format.Decoded, err
 	return frames, nil
 }
 
-func (l *logState) entry(d format.Decoded) *lens.Entry {
-	return &lens.Entry{Log: l.meta.ID, LSN: d.Frame.LSN, TS: d.Frame.TS, Ops: d.Frame.Ops}
+func (l *logState) entry(d format.Decoded) *index.Entry {
+	return &index.Entry{Log: l.meta.ID, LSN: d.Frame.LSN, TS: d.Frame.TS, Ops: d.Frame.Ops}
 }
 
 // chainAt returns the hash-chain head after LSN lsn in this lineage.
@@ -193,7 +193,7 @@ func (l *logState) chainAt(ctx context.Context, lsn uint64) ([32]byte, error) {
 
 // each calls fn with every entry visible on this log up to LSN upto, oldest
 // first (parent's entries up to ParentLSN, then our own), reading segments.
-func (l *logState) each(ctx context.Context, upto uint64, fn func(*lens.Entry) error) error {
+func (l *logState) each(ctx context.Context, upto uint64, fn func(*index.Entry) error) error {
 	if l.parent != nil && l.meta.ParentLSN > 0 {
 		if err := l.parent.each(ctx, min(upto, l.meta.ParentLSN), fn); err != nil {
 			return err
@@ -204,7 +204,7 @@ func (l *logState) each(ctx context.Context, upto uint64, fn func(*lens.Entry) e
 
 // eachOwn is each restricted to this log's own frames. Up to readAhead
 // segments are read concurrently; fn still sees entries in LSN order.
-func (l *logState) eachOwn(ctx context.Context, upto uint64, fn func(*lens.Entry) error) error {
+func (l *logState) eachOwn(ctx context.Context, upto uint64, fn func(*index.Entry) error) error {
 	l.mu.RLock()
 	segs := l.segs
 	l.mu.RUnlock()
@@ -247,14 +247,14 @@ func (l *logState) eachOwn(ctx context.Context, upto uint64, fn func(*lens.Entry
 }
 
 // lineage returns every entry visible on this log up to LSN upto.
-func (l *logState) lineage(ctx context.Context, upto uint64) ([]*lens.Entry, error) {
-	var out []*lens.Entry
-	err := l.each(ctx, upto, func(e *lens.Entry) error { out = append(out, e); return nil })
+func (l *logState) lineage(ctx context.Context, upto uint64) ([]*index.Entry, error) {
+	var out []*index.Entry
+	err := l.each(ctx, upto, func(e *index.Entry) error { out = append(out, e); return nil })
 	return out, err
 }
 
 // entryAt returns the entry with the given LSN in this lineage.
-func (l *logState) entryAt(ctx context.Context, lsn uint64) (*lens.Entry, error) {
+func (l *logState) entryAt(ctx context.Context, lsn uint64) (*index.Entry, error) {
 	if lsn <= l.floor() {
 		return nil, fmt.Errorf("%w: LSN %d", ErrCompacted, lsn)
 	}

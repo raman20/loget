@@ -64,7 +64,7 @@ func TestEscalatedUpdate(t *testing.T) {
 		if v, err := tx.Get("a"); err != nil || string(v) != "1" {
 			t.Errorf("own write: %q %v", v, err)
 		}
-		return tx.Topic("t").Publish([]byte("m"))
+		return tx.PutRecord("t:m", "m", []byte("m"))
 	})
 	if err != nil || lsn == 0 {
 		t.Fatalf("commit: %d %v", lsn, err)

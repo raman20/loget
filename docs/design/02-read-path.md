@@ -37,15 +37,15 @@ more than the value cache size, and without changing on-disk formats.
 5. Default cache size: revisit only after 1–4, with RSS measured.
    **Raised 64 → 256 MiB** once the cache moved off-heap (numbers below).
 6. Found while profiling (a bug since v0.1.0): `Get`/`Scan`/`Topic.Read`
-   returned slices aliasing the cache or the in-memory lens, and
+   returned slices aliasing the cache or the in-memory index, and
    `Put`/`Publish` kept the caller's buffer. A caller writing into a
    returned or passed slice could change what later readers saw. Values
    are now copied both ways (R6).
 
 ## Invariants
-- R1: a read at LSN `at` returns exactly the value the lens fold gives at
+- R1: a read at LSN `at` returns exactly the value the index fold gives at
   `at` (snapshot semantics unchanged; existing tests + sim digests).
-- R2: every value read from storage is CRC-checked against the lens before
+- R2: every value read from storage is CRC-checked against the index before
   it is returned or cached (`ErrCorrupt` otherwise).
 - R3: the cache never returns bytes for a different position (key =
   log, segment, offset; positions are immutable).

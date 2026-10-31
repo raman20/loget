@@ -6,7 +6,7 @@ a vector database for memory, an outbox table to keep them consistent, and a
 pile of scripts for backups and GDPR deletes. Each one has its own failure
 modes, its own backup story and its own deletion story.
 
-LogEt's bet is that **one log, read through several lenses, is simpler than
+LogEt's bet is that **one log, read through several indexes, is simpler than
 six systems** for small and medium workloads. Every principle below exists to
 protect that simplicity.
 
@@ -17,17 +17,17 @@ marker — is a record in one append-only, hash-chained log. Everything else is
 derived and can be thrown away and rebuilt:
 
 ```
-state(lens) == fold(apply, empty, redact(log, shredded))
+state(index) == fold(apply, empty, redact(log, shredded))
 ```
 
 This equation is checked by property tests and by the simulator on every run.
 New features must preserve it. If a feature needs state that cannot be
 rebuilt from the log, it needs a very good reason.
 
-## 2. Lenses are pure
+## 2. Indexes are pure
 
-A lens may not read clocks, randomness, files or the network. All it sees is
-the log entry and a deterministic environment. `lens/purity_test.go` enforces
+An index may not read clocks, randomness, files or the network. All it sees is
+the log entry and a deterministic environment. `index/purity_test.go` enforces
 this with an import allow-list. Purity is what makes replay, time travel,
 branches and "add an index later" correct by construction.
 
@@ -72,7 +72,7 @@ Some may be revisited with strong evidence; the default answer is no.
 - **Server-side user code:** no stored procedures, triggers or UDFs.
 - **The Kafka wire protocol in the core.** A compatibility shim, if ever,
   lives in a separate project.
-- **A graph query language, or joins across lenses** beyond what a Go loop can do.
+- **A graph query language, or joins across indexes** beyond what a Go loop can do.
 - **"AI features" inside the database.** You bring the embeddings; LogEt
   stores and searches them.
 - **Tunables without evidence.** Every knob costs every user some

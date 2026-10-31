@@ -139,7 +139,7 @@ OCC transfers, fsync on (commits/s; ops that gave up after 16 retries):
     ~10×, not 3×.
   - A heap profile (300k keys, then 600k updates at 8 clients) found
     217 B of retained heap per update with the journal vs 141 B with the
-    files layout. 64% of it is the KV lens's MVCC version history,
+    files layout. 64% of it is the KV index's MVCC version history,
     which is kept forever. The journal run also did about 2.8× more
     writes in the same timed phases (2.99M vs 1.06M), so it built more
     history. Bounding this needs history retention / compaction (now on `main`: run `Compact`),
@@ -243,7 +243,7 @@ OCC transfers, fsync on (commits/s; ops that gave up after 16 retries):
   | 1M | HNSW ef 32 / 64 / 128 | 0.669 / 0.804 / 0.919 | 2,062 / 1,109 / 676 | 29,881 / 16,025 / 8,467 |
 
   - Build (single-threaded insert) and reopen (the graph was rebuilt from
-    the lens) took 23 s at 100k and 992 / 1,037 s at 1M. Heap after
+    the index) took 23 s at 100k and 992 / 1,037 s at 1M. Heap after
     reopen: 107 MiB at 100k, 1,088 MiB at 1M. Reopen is now fast (next
     item).
   - At 1M these defaults are not enough: recall 0.92 needs ef 128, and
@@ -289,7 +289,7 @@ OCC transfers, fsync on (commits/s; ops that gave up after 16 retries):
   - The journal frees space by punching holes, so `du` drops but the file's
     apparent size never shrinks, and the 8 MiB preallocation plus
     hole-punch granularity leave ~34 MiB allocated for 10.5 MiB of base.
-  - Heap falls because the KV lens no longer holds the overwritten
+  - Heap falls because the KV index no longer holds the overwritten
     versions: compaction is what bounds the memory growth noted above.
     Between compactions the history grows again.
   - Manifests are not collected: each compaction adds two small manifest
@@ -310,7 +310,7 @@ OCC transfers, fsync on (commits/s; ops that gave up after 16 retries):
 | Memory (1M × 1 KiB keys) | LogEt peak RSS **7.1 GiB**, vs Pebble 0.7, bbolt 1.7, Badger 3.5, SQLite 0.3 |
 | Streaming, durable publish (64 producers) | LogEt 42.4k msgs/s; NATS JetStream (SyncAlways) 8.5k |
 | Streaming e2e latency at 1k msgs/s | p99: LogEt **23.4 ms**; NATS 1.9 ms |
-| Multi-lens exactly-once txn (fetch+put+publish+ack) | 61.9k msgs/s (8 partitions, 10 msgs/txn); exactly-once check passes in every cell |
+| Multi-index exactly-once txn (fetch+put+publish+ack) | 61.9k msgs/s (8 partitions, 10 msgs/txn); exactly-once check passes in every cell |
 | OCC, 1 hot key, 64 clients | LogEt 2.1k commits/s; Badger 14.1k |
 | Vectors, 100k × 128-d, exact search | LogEt **19 QPS**; a flat Go loop gets 145 QPS. There is no ANN index. |
 | S3 request cost (MinIO-counted, AWS list price) | 1 PUT per commit at 1 client (≈ **$5.00 per 1M commits**, estimate); 0.031 PUT per commit at 64 clients (≈ $0.16) |
@@ -326,14 +326,14 @@ OCC transfers, fsync on (commits/s; ops that gave up after 16 retries):
 - **Hot-key contention.** OCC aborts a conflicting transaction instead of
   queueing it. In YCSB F at 64 clients, 9,660 read-modify-writes gave up
   after 16 retries. With 1 hot key, Badger's OCC commits about 7× more.
-- **Memory.** Lenses keep the MVCC state in RAM, so 1M × 1 KiB values used
+- **Memory.** Indexes keep the MVCC state in RAM, so 1M × 1 KiB values used
   7.1 GiB RSS with fsync on. Pebble used 0.7 GiB.
 - **Disk.** The append-only log uses 3.3 GB after the fsync-on run, against
   1.3–1.7 GB for the LSM and B-tree engines.
 - **Low-rate streaming latency.** Consumers poll and sleep 200 µs on an empty
   fetch (push was added after v0.1.0). Each durable publish also pays the commit path
   above. So e2e p99 at 1k msgs/s is 23 ms, against NATS's 1.9 ms.
-- **Vectors.** Search is exact brute force over the lens. It is about 7.5×
+- **Vectors.** Search is exact brute force over the index. It is about 7.5×
   slower than a plain float32 loop, and QPS falls linearly with N. There is
   no ANN index.
 - **Cold open on S3.** Open reads every segment, so open time and GETs grow
@@ -497,7 +497,7 @@ fsync off:
 | peak RSS | 9.7 GiB | 4.6 GiB | 0.7 GiB | 2.3 GiB | 0.3 GiB |
 | disk after run | 5.5G | 1.5G | 1.7G | 2.3G | 4.6G |
 
-LogEt keeps lens state, including MVCC history, in memory. That is the RSS column, and it is the main thing keeping LogEt from larger-than-RAM data today.
+LogEt keeps index state, including MVCC history, in memory. That is the RSS column, and it is the main thing keeping LogEt from larger-than-RAM data today.
 
 ### bbolt: `db.Update` (headline) vs `db.Batch` with 1 ms delay
 
@@ -580,7 +580,7 @@ commits/s (abort rate). `invariant` (sum of balances unchanged) held in every ce
 | false | 64 | 256 | 63071 (50%) | 84477 (38%) |
 | false | 64 | 65536 | 76046 (0%) | 89483 (0%) |
 
-### Multi-lens transaction (LogEt only)
+### Multi-index transaction (LogEt only)
 
 Each transaction fetches N messages from a consumer group, writes one KV key per message, publishes one message per input to an output topic, and acks. Latency is in ms (p50 / p99 / p99.9).
 
@@ -726,7 +726,7 @@ filtered.
   Badger.
 - Reports commits/s, the abort rate (conflicts ÷ attempts), how many ops gave
   up after 16 retries, and checks that **the sum over all keys is unchanged**.
-- Multi-lens transaction (LogEt only):
+- Multi-index transaction (LogEt only):
   - Fetch N messages from a consumer group, write one KV key per message,
     publish one message per input to an output topic, and Ack — all in one
     transaction.
@@ -778,7 +778,7 @@ filtered.
   one `db.Update` per write. `db.Batch` with a 1 ms delay is in
   [`bbolt-batch-1ms/`](../bench/results/2026-10-27/bbolt-batch-1ms/):
   it is faster at 64 writers and slower at 1.
-- **Multi-lens harness bug (fixed, rerun).** In the first pass, batch-10 cells
+- **Multi-index harness bug (fixed, rerun).** In the first pass, batch-10 cells
   drained the 200k-message input. The loop then counted empty fetches as
   transactions (reporting "2.8M txns/s"), and the run failed its "never ran
   dry" guard, which was reported as `exactly-once: false`. Message counts were

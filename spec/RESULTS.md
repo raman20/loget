@@ -1,5 +1,14 @@
 # TLA+ model-checking results
 
+**LogEt main (2026-10-31).** main keeps the specs for the log, transactions,
+branches, compaction, GC, migration, journal growth, notification and
+shredding. LogEtANN (persisted HNSW graphs) and LogEtRetain (topic retention
+vs consumer groups) moved with their indexes to the `index/vectors` and
+`index/topics` branches. The `Fresh*` names are historical (freshDB) and kept
+so results stay comparable. LogEtTxn still models its transaction as
+"consume a message + write KV + advance a cursor"; on main that is the shape
+of any read-modify-write over two keys and a counter, so the model stands.
+
 TLC 2.19 (tla2tools v1.8.0), Java 21, 8 workers, on the dev box (2026-10-27).
 
 **Jar pin (2026-10-29).** `v1.8.0` turned out to be a prerelease tag whose
@@ -28,8 +37,6 @@ the first run reported 32 with identical state counts.
 | LogEtNotify | consumer change notification: a writer moves the head (commit or rewind) then closes and replaces the channel; 2 waiters run take-channel / read-head / block; MaxHead=2, MaxSteps=5 | 87,149 | 29,427 | 19 | no error |
 | LogEtGC | GC with retention (item 8): two logs (main's log and a rewind child forked at P=1, kept by the reflog), retention window W=1 commits, a base at the cut capped by the dependent child's branch point, reflog pruning, dropping unreachable logs, sweeping, deleting old manifests (Keep=1), 2 processes with crashes, ≤2 epochs, a fenced writer that keeps running (incl. committing into a deleted manifest slot), create-only manifest put + post-create List check; MaxLSN=3, MaxMan=6, process symmetry | 6,582,415 | 1,598,697 | 28 | no error |
 | LogEtGrow | journal preallocation (item 9): 2 appenders, 2 background growers, a file of ≤6 blocks; appends extend synchronously when needed, growers write one zero block at the current size under the writer lock | 97 | 28 | 8 | no error |
-| LogEtANN | persisted HNSW graphs (item 10): 2 ids × 3 versions, owner put/delete/shred/save/crash/open with restore, one takeover whose zombie saves on Close with a fence check before and after its put | 982,783 | 222,948 | 23 | no error |
-| LogEtRetain | topic retention vs consumer groups (component C, 2026-10-30): one topic, 2 groups × 2 workers doing Fetch (read clamped to the retained start) → OCC Commit of the cursor or Abort, publishing, compaction moving the start up to the end, clamped to the smallest committed cursor; MaxMsgs=4 | 73,958 | 9,143 | 24 | no error |
 | LogEtShred | DEK per subject, marker → delete → audit entry + certificate; crash between steps; DEK create landing late; sweep; hash chain | 25,570 | 6,481 | 16 | no error (incl. liveness) |
 
 ## Properties checked
@@ -108,7 +115,6 @@ the first run reported 32 with identical state counts.
   `Covered` (the file covers `end` and every block below it is a record).
   A small model: it exists to show the locking rule is needed, see the
   mutant below.
-- **LogEtANN**: `GraphCurrent` (after any restore the in-memory graph holds exactly the current (id, version) vectors) and `ShredClean` (no saved graph holds a shredded vector, except a zombie's in the step before its own fence re-check deletes it).
 
 ## Mutation checks (are the properties strong enough?)
 
@@ -124,10 +130,6 @@ the first run reported 32 with identical state counts.
 | LogEtGC with the parent's cut ignoring a dependent branch (`LogEtGC_nodeps.cfg`) | `GarbageFinal` violated |
 | LogEtGC deleting the manifest it holds (`Keep = 0`, `LogEtGC_keep0.cfg`) | `TypeOK` violated (no manifest left) |
 | LogEtGrow with the grower writing at a size read before releasing the lock (`LogEtGrow_unlocked.cfg`) | `NoLostRecord` violated in 4 steps |
-| LogEtANN with the zombie's re-check after its put removed (`LogEtANN_norecheck.cfg`) | `ShredClean` violated in 7 steps (takeover, check, fence, shred, zombie put) |
-| LogEtANN restoring saved nodes without the vector check (`LogEtANN_novalidate.cfg`) | `GraphCurrent` violated in 6 steps (put, save, put, crash, open) |
-| LogEtRetain without the clamp to the slowest group (`LogEtRetain_noclamp.cfg`, the `IgnoreGroups` option) | `ExactlyOnce` violated (a lagging group skips messages; expected and documented) |
-| LogEtRetain with the OCC cursor check removed | `ExactlyOnce` violated (needs 2 workers per group) |
 | LogEtShred with `Sweep` disabled | `KeyEventuallyGone` violated |
 | LogEtShred with reads ignoring the shred marker | `ShreddedNeverRevealed` violated |
 
@@ -140,4 +142,4 @@ the first run reported 32 with identical state counts.
   tests (see README) check the code itself against reference models.
 - Torn writes are over-approximated as any subset of a batch's frames (the
   real format keeps a prefix).
-- Snapshots, vector/doc lenses and the HTTP layer are not modelled.
+- Snapshots, vector/doc indexes and the HTTP layer are not modelled.

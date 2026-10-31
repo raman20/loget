@@ -24,8 +24,8 @@ type ftb interface {
 }
 
 // dump renders everything a client can read on a branch at at (0 =
-// head): KV, docs, an index, vector hits and topic messages (TS left
-// out: compaction reads the clock).
+// head): KV, the records of two tally spaces, and the tally index's
+// counts over them.
 func dump(t ftb, db *DB, br string, at uint64) string {
 	t.Helper()
 	var b strings.Builder
@@ -37,33 +37,21 @@ func dump(t ftb, db *DB, br string, at uint64) string {
 		for _, kv := range kvs {
 			fmt.Fprintf(&b, "kv %s=%q\n", kv.Key, kv.Value)
 		}
-		docs, err := tx.scan(docSpace("d"), "")
-		if err != nil {
-			return err
-		}
-		for _, kv := range docs {
-			fmt.Fprintf(&b, "doc %s=%s\n", kv.Key, kv.Value)
-		}
-		for _, v := range []any{0, 1} {
-			ids, err := tx.Doc("d").Find("f", v)
+		for _, sp := range []string{"t:d", "t:v"} {
+			recs, err := tx.ScanRecords(sp, "")
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(&b, "find f=%v %v\n", v, ids)
-		}
-		hits, err := tx.Vector("v").Search([]float32{1, 1}, 100)
-		if err != nil {
-			return err
-		}
-		for _, h := range hits {
-			fmt.Fprintf(&b, "vec %s %.4f\n", h.ID, h.Score)
-		}
-		ms, err := tx.Topic("t").Read(0, 0)
-		if err != nil {
-			return err
-		}
-		for _, m := range ms {
-			fmt.Fprintf(&b, "msg %d@%d %q %v\n", m.Offset, m.LSN, m.Value, m.Redacted)
+			for _, r := range recs {
+				fmt.Fprintf(&b, "%s %s=%q\n", sp, r.Key, r.Value)
+			}
+			for _, v := range []string{"f0", "f1", "f2"} {
+				n, err := tallyCount(tx, sp, v)
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(&b, "tally %s %s=%d\n", sp, v, n)
+			}
 		}
 		return nil
 	})
@@ -93,8 +81,8 @@ func objects(t testing.TB, st store.Store, prefix string) (n int, size int64) {
 }
 
 // fill writes a mixed workload: overwrites (some values above the inline
-// limit), deletes, subject data, docs, vectors, topics, a branch, a
-// rewind and a shred.
+// limit), deletes, subject data, and records of the tally index (some
+// large, some subject-bound, some overwritten, some deleted).
 func fill(t testing.TB, db *DB, rounds int, subj ...string) {
 	sp := "s"
 	if len(subj) > 0 {
@@ -120,10 +108,18 @@ func fill(t testing.TB, db *DB, rounds int, subj ...string) {
 			if r%3 == 2 {
 				tx.Delete("k7")
 			}
-			tx.Doc("d").Put(fmt.Sprint("d", r%5), map[string]any{"f": r % 2, "pad": string(big)}, Subject(fmt.Sprint(sp, r%2)))
-			tx.Vector("v").Put(fmt.Sprint("x", r%4), []float32{float32(r % 3), 1})
-			tx.Topic("t").Publish([]byte(fmt.Sprint("plain", r)))
-			return tx.Topic("t").Publish(append([]byte(fmt.Sprint("secret", r)), big...), Subject(fmt.Sprint(sp, r%2)))
+			if r%2 == 0 {
+				if err := tx.PutRecord("t:d", fmt.Sprint("d", r%5), []byte(fmt.Sprint("f", r%3)), Subject(fmt.Sprint(sp, r%2))); err != nil {
+					return err
+				}
+			}
+			if r%7 == 6 {
+				tx.DeleteRecord("t:d", fmt.Sprint("d", r%5))
+			}
+			if err := tx.PutRecord("t:v", fmt.Sprint("x", r%4), append([]byte(fmt.Sprint("f", r%3)), big[:r%2*100]...)); err != nil {
+				return err
+			}
+			return tx.PutRecord("t:v", fmt.Sprint("s", r%3), []byte(fmt.Sprint("f", r%2)), Subject(fmt.Sprint(sp, (r+1)%2)))
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -136,8 +132,19 @@ func TestCompactKeepsStateAndFreesStorage(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			st := mk()
 			db := mustOpen(t, st, WithSnapshotEvery(7))
-			db.RegisterIndex(ctx, "d", "f")
 			fill(t, db, 40)
+			for i := 0; i < 30; i++ { // derived-index records: overwrites, deletes, a shredded subject
+				err := db.Update(ctx, func(tx *Tx) error {
+					k := fmt.Sprintf("r%d", i%7)
+					if i%5 == 4 {
+						return tx.DeleteRecord("t:c", k)
+					}
+					return tx.PutRecord("t:c", k, []byte(fmt.Sprintf("v%d", i%3)), Subject(fmt.Sprintf("s%d", i%2)))
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
 			if err := db.CreateBranch(ctx, "feat", "main", 0); err != nil {
 				t.Fatal(err)
 			}
@@ -153,7 +160,7 @@ func TestCompactKeepsStateAndFreesStorage(t *testing.T) {
 			want := map[string]string{"main": dump(t, db, "main", 0), "feat": dump(t, db, "feat", 0)}
 			dg := map[string]map[string][32]byte{}
 			for br := range want {
-				dg[br], _, _ = db.LensDigests(br)
+				dg[br], _, _ = db.IndexDigests(br)
 			}
 			nBefore, szBefore := objects(t, st, "")
 			cs, err := db.Compact(ctx, CompactOptions{})
@@ -171,14 +178,14 @@ func TestCompactKeepsStateAndFreesStorage(t *testing.T) {
 					if got := dump(t, db, br, 0); got != w {
 						t.Fatalf("%s %s: state differs\nwant:\n%s\ngot:\n%s", when, br, w, got)
 					}
-					d1, _, _ := db.LensDigests(br)
+					d1, _, _ := db.IndexDigests(br)
 					d2, err := db.RebuildDigests(br)
 					if err != nil || fmt.Sprint(d1) != fmt.Sprint(d2) {
-						t.Fatalf("%s %s: lens != fold (%v)", when, br, err)
+						t.Fatalf("%s %s: index != fold (%v)", when, br, err)
 					}
-					for _, l := range []string{"vector", "docindex:d.f"} {
+					for _, l := range []string{"tally"} { // kv digests include history, which compaction drops
 						if d1[l] != dg[br][l] {
-							t.Fatalf("%s %s: lens %s digest changed by compaction", when, br, l)
+							t.Fatalf("%s %s: index %s digest changed by compaction", when, br, l)
 						}
 					}
 				}
@@ -221,7 +228,7 @@ func TestCompactKeepsStateAndFreesStorage(t *testing.T) {
 			midDump := dump(t, db, "main", mid)
 			want["main"] = dump(t, db, "main", 0)
 			for br := range want {
-				dg[br], _, _ = db.LensDigests(br)
+				dg[br], _, _ = db.IndexDigests(br)
 			}
 			if _, err := db.Compact(ctx, CompactOptions{}); err != nil {
 				t.Fatal(err)
@@ -282,7 +289,7 @@ func TestCompactConcurrentCommits(t *testing.T) {
 					n := 0
 					fmt.Sscan(string(v), &n)
 					tx.Put(fmt.Sprint("c", g), []byte(fmt.Sprint(n+1)))
-					return tx.Topic("t").Publish([]byte(fmt.Sprint(g, ":", i)))
+					return tx.PutRecord("t:log", fmt.Sprint(g, ":", i), []byte("x"))
 				})
 				if err != nil {
 					t.Errorf("g%d: %v", g, err)
@@ -311,8 +318,8 @@ func TestCompactConcurrentCommits(t *testing.T) {
 			}
 			total += n
 		}
-		if l := tx.Topic("t").Len(); int64(l) != total {
-			t.Fatalf("%d messages, %d commits", l, total)
+		if l, err := tallyCount(tx, "t:log", "x"); err != nil || int64(l) != total {
+			t.Fatalf("%d tally records (%v), %d commits", l, err, total)
 		}
 		return nil
 	})
@@ -447,7 +454,7 @@ func TestPropCompactEqualsUncompacted(t *testing.T) {
 		inline := rapid.SampledFrom([]int{0, 4, 64}).Draw(t, "inline")
 		stA, stB := store.NewMem(), store.NewMem()
 		mk := func(st store.Store) *DB {
-			db, err := OpenStore(ctx, st, quiet(), WithRand(rand.New(rand.NewSource(seed))), WithInlineMax(inline),
+			db, err := OpenStore(ctx, st, quiet(), WithIndex(tallyKind()), WithRand(rand.New(rand.NewSource(seed))), WithInlineMax(inline),
 				WithSnapshotEvery(rapid.IntRange(1, 10).Draw(t, "snapEvery")))
 			if err != nil {
 				t.Fatal(err)
@@ -457,7 +464,6 @@ func TestPropCompactEqualsUncompacted(t *testing.T) {
 		a, b := mk(stA), mk(stB)
 		defer func() { a.Close(); b.Close() }()
 		both := func(f func(db *DB) error) (error, error) { return f(a), f(b) }
-		both(func(db *DB) error { return db.RegisterIndex(ctx, "d", "f") })
 		branches := []string{"main"}
 		n := rapid.IntRange(1, 50).Draw(t, "n")
 		for i := 0; i < n; i++ {
@@ -477,26 +483,26 @@ func TestPropCompactEqualsUncompacted(t *testing.T) {
 				})
 			case 3:
 				both(func(db *DB) error {
-					return db.Branch(br).Update(ctx, func(tx *Tx) error { return tx.Topic("t").Publish(val, o...) })
+					return db.Branch(br).Update(ctx, func(tx *Tx) error { return tx.PutRecord("t:d", fmt.Sprint("d", k), []byte(fmt.Sprint("f", i%3)), o...) })
 				})
 			case 4:
 				both(func(db *DB) error {
 					return db.Branch(br).Update(ctx, func(tx *Tx) error {
-						return tx.Vector("v").Put(fmt.Sprint("x", k), []float32{float32(i % 3), 1}, o...)
+						return tx.PutRecord("t:v", fmt.Sprint("x", k), append([]byte(fmt.Sprint("f", i%2)), val...), o...)
 					})
 				})
 			case 5:
 				both(func(db *DB) error {
 					return db.Branch(br).Update(ctx, func(tx *Tx) error {
 						tx.Delete(fmt.Sprint("k", k))
-						return tx.Doc("d").Put(fmt.Sprint("d", k), map[string]any{"f": i % 2, "s": string(val)}, o...)
+						return tx.PutRecord("t:d", fmt.Sprint("d", k), []byte(fmt.Sprint("f", i%2)), o...)
 					})
 				})
 			case 6:
 				both(func(db *DB) error {
 					return db.Branch(br).Update(ctx, func(tx *Tx) error {
-						tx.Vector("v").Delete(fmt.Sprint("x", k))
-						return tx.Doc("d").Delete(fmt.Sprint("d", k))
+						tx.DeleteRecord("t:v", fmt.Sprint("x", k))
+						return tx.DeleteRecord("t:d", fmt.Sprint("d", k))
 					})
 				})
 			case 7:
@@ -572,10 +578,10 @@ func TestPropCompactEqualsUncompacted(t *testing.T) {
 			} else if !errors.Is(errA, ErrCompacted) {
 				t.Fatal(errA)
 			}
-			d1, _, _ := a.LensDigests(br)
+			d1, _, _ := a.IndexDigests(br)
 			d2, _ := a.RebuildDigests(br)
 			if fmt.Sprint(d1) != fmt.Sprint(d2) {
-				t.Fatalf("branch %s: lens != fold", br)
+				t.Fatalf("branch %s: index != fold", br)
 			}
 		}
 		if r, err := a.Verify(ctx); err != nil || !r.OK {

@@ -1,6 +1,6 @@
 // Command loget-soak is a real-time soak and chaos test of a loget
 // server binary: mixed workload (puts, deletes, large values, atomic
-// multi-key transactions, topic publishes) from several clients while the
+// multi-key transactions) from several clients while the
 // harness periodically kills the server with SIGKILL and restarts it, and
 // compaction, GC and online backups run concurrently. After every restart,
 // periodically while running, and on every backup it checks:
@@ -9,8 +9,6 @@
 //     acknowledged one and the last attempted one (no lost acked write,
 //     no value from nowhere, no resurrected older value);
 //   - the keys of one transaction are always seen together (atomicity);
-//   - each topic holds every acknowledged message, in order, no
-//     duplicates, nothing never published;
 //   - a restored backup satisfies the same bounds as of the backup.
 //
 // It stops at the first violation (exit 1, data directory kept).
@@ -58,7 +56,7 @@ var (
 	keys     = flag.Int("keys", 64, "keys per worker")
 	seed     = flag.Int64("seed", time.Now().UnixNano(), "random seed")
 	profE    = flag.Duration("profile-every", 0, "save heap and goroutine profiles and /metrics to DIR/prof this often (0: off; starts the server with --pprof)")
-	retain   = flag.String("compact-params", "", "extra query parameters for /v1/compact and /v1/gc, e.g. topic-max-messages=10000")
+	retain   = flag.String("compact-params", "", "extra query parameters for /v1/compact and /v1/gc, e.g. grace=1m")
 )
 
 const token = "soak-admin-token"
@@ -119,18 +117,11 @@ func (k *keyModel) allowed(v []byte, lo, hi int) bool {
 	return false
 }
 
-type topicModel struct {
-	tried, acked int // next message n is tried+1; acked: highest acked n (-1)
-	verified     int // messages 0..verified-1 checked (offsets)
-	lastSeen     int // n of the last verified message (-1)
-}
-
 type worker struct {
 	id    int
 	rng   *rand.Rand
 	mu    sync.Mutex // guards the model against checkers
 	keys  map[string]*keyModel
-	topic topicModel
 	seq   int
 	ops   atomic.Int64
 	errs  atomic.Int64
@@ -227,7 +218,7 @@ func (h *harness) run() error {
 		return err
 	}
 	for i := 0; i < *workers; i++ {
-		w := &worker{id: i, rng: rand.New(rand.NewSource(*seed + int64(i) + 1)), keys: map[string]*keyModel{}, topic: topicModel{tried: -1, acked: -1, lastSeen: -1}}
+		w := &worker{id: i, rng: rand.New(rand.NewSource(*seed + int64(i) + 1)), keys: map[string]*keyModel{}}
 		h.ws = append(h.ws, w)
 	}
 	end := time.Now().Add(*duration)
@@ -420,12 +411,10 @@ func (h *harness) killRestart() error {
 	return h.checkAll(h.readLive, "after kill -9 #"+strconv.Itoa(h.kills))
 }
 
-// reader returns a key's value (nil if absent) and a topic's messages
-// from an offset.
+// reader returns a key's value (nil if absent) and a prefix's keys.
 type reader struct {
-	get   func(key string) ([]byte, error)
-	scan  func(prefix string) (map[string][]byte, error)
-	topic func(t string, from int) ([]string, error)
+	get  func(key string) ([]byte, error)
+	scan func(prefix string) (map[string][]byte, error)
 }
 
 func (h *harness) readLive() reader {
@@ -457,30 +446,6 @@ func (h *harness) readLive() reader {
 			}
 			return out, nil
 		},
-		// topic pages through the server's per-request cap (1000).
-		topic: func(t string, from int) ([]string, error) {
-			var out []string
-			for {
-				c, b, err := h.do("GET", fmt.Sprintf("/v1/topics/%s?from=%d&max=1000", url.PathEscape(t), from), nil)
-				if err != nil || c != 200 {
-					return nil, fmt.Errorf("topic %s: %d %s %v", t, c, b, err)
-				}
-				var ms []struct {
-					Offset int
-					Value  string
-				}
-				if err := json.Unmarshal(b, &ms); err != nil {
-					return nil, err
-				}
-				for _, m := range ms {
-					out = append(out, fmt.Sprintf("%s@%d", m.Value, m.Offset))
-				}
-				if len(ms) < 1000 {
-					return out, nil
-				}
-				from = ms[len(ms)-1].Offset + 1
-			}
-		},
 	}
 }
 
@@ -505,52 +470,39 @@ func readDB(db *loget.DB) reader {
 			})
 			return out, err
 		},
-		topic: func(t string, from int) ([]string, error) {
-			var out []string
-			err := db.View(ctx, func(tx *loget.Tx) error {
-				ms, err := tx.Topic(t).Read(uint64(from), 1<<30)
-				for _, m := range ms {
-					out = append(out, fmt.Sprintf("%s@%d", m.Value, m.Offset))
-				}
-				return err
-			})
-			return out, err
-		},
 	}
 }
 
-// bounds is a copy of the model's [acked, tried] per key and topic.
+// bounds is a copy of the model's [acked, tried] per key.
 type bounds struct {
-	keys   map[string][2]int
-	topics map[int][2]int // worker -> acked, tried
+	keys map[string][2]int
 }
 
 func (h *harness) snapshotBounds() bounds {
-	b := bounds{keys: map[string][2]int{}, topics: map[int][2]int{}}
+	b := bounds{keys: map[string][2]int{}}
 	for _, w := range h.ws {
 		w.mu.Lock()
 		for k, m := range w.keys {
 			b.keys[k] = [2]int{m.acked, m.tried}
 		}
-		b.topics[w.id] = [2]int{w.topic.acked, w.topic.tried}
 		w.mu.Unlock()
 	}
 	return b
 }
 
-// checkAll checks every key and topic. Workers are idle (server lock held
+// checkAll checks every key. Workers are idle (server lock held
 // exclusively), so the model is stable.
 func (h *harness) checkAll(mk func() reader, when string) error {
 	b := h.snapshotBounds()
-	return h.check(mk(), b, b, when, true)
+	return h.check(mk(), b, b, when)
 }
 
-// check: values within [lo.acked, hi.tried]; pairs atomic; topics.
-func (h *harness) check(r reader, lo, hi bounds, when string, live bool) error {
+// check: values within [lo.acked, hi.tried]; pairs atomic.
+func (h *harness) check(r reader, lo, hi bounds, when string) error {
 	h.checks.Add(1)
 	for _, w := range h.ws {
 		w.mu.Lock()
-		err := h.checkWorker(r, w, lo, hi, when, live)
+		err := h.checkWorker(r, w, lo, hi, when)
 		w.mu.Unlock()
 		if err != nil {
 			return err
@@ -559,7 +511,7 @@ func (h *harness) check(r reader, lo, hi bounds, when string, live bool) error {
 	return nil
 }
 
-func (h *harness) checkWorker(r reader, w *worker, lo, hi bounds, when string, live bool) error {
+func (h *harness) checkWorker(r reader, w *worker, lo, hi bounds, when string) error {
 	all, err := r.scan(fmt.Sprintf("w%d/", w.id))
 	if err != nil {
 		return err
@@ -589,41 +541,6 @@ func (h *harness) checkWorker(r reader, w *worker, lo, hi bounds, when string, l
 		if _, ok := w.keys[k]; !ok {
 			return fmt.Errorf("%s: key %s exists but was never written", when, k)
 		}
-	}
-	// topic: values "n" strictly increasing by 1 from 0; at least acked+1
-	// messages, at most tried+1.
-	from := 0
-	last := -1
-	if live {
-		from, last = w.topic.verified, w.topic.lastSeen
-	}
-	ms, err := r.topic(fmt.Sprintf("t%d", w.id), from)
-	if err != nil {
-		return err
-	}
-	prev := ""
-	for _, s := range ms { // "value@offset"
-		v, _, _ := strings.Cut(s, "@")
-		n, err := strconv.Atoi(v)
-		if err != nil || n <= last {
-			return fmt.Errorf("%s: topic t%d (read from %d): message %q after %d (%q) (duplicate or out of order)", when, w.id, from, s, last, prev)
-		}
-		last, prev = n, s
-	}
-	l, u := lo.topics[w.id], hi.topics[w.id]
-	if last < l[0] || last > u[1] {
-		return fmt.Errorf("%s: topic t%d: last message %d, acked %d, tried %d", when, w.id, last, l[0], u[1])
-	}
-	if live && len(ms) > 0 {
-		// next offset to verify: offsets, not a count, since retention
-		// can start a read above from.
-		_, o, _ := strings.Cut(ms[len(ms)-1], "@")
-		off, err := strconv.Atoi(o)
-		if err != nil {
-			return fmt.Errorf("%s: topic t%d: bad offset in %q", when, w.id, ms[len(ms)-1])
-		}
-		w.topic.verified = off + 1
-		w.topic.lastSeen = last
 	}
 	return nil
 }
@@ -693,7 +610,7 @@ func (h *harness) backupCheck() error {
 		return fmt.Errorf("verify restored backup %d: %v %+v", h.backups, err, vr)
 	}
 	h.restores++
-	return h.check(readDB(db), lo, hi, fmt.Sprintf("restored backup %d", h.backups), false)
+	return h.check(readDB(db), lo, hi, fmt.Sprintf("restored backup %d", h.backups))
 }
 
 func closeStore(s store.Store) {
@@ -790,7 +707,7 @@ func (h *harness) step(w *worker) error {
 			c = 200
 		}
 		return h.settle(w, idx, c, b, err)
-	case r < 67: // atomic pair + publish
+	case r < 67: // atomic pair
 		w.mu.Lock()
 		p := w.rng.Intn(16)
 		if p >= w.pairs {
@@ -800,34 +717,23 @@ func (h *harness) step(w *worker) error {
 		w.mu.Unlock()
 		v := w.next("pair")
 		a, b := fmt.Sprintf("w%d/pair%d/a", w.id, p), fmt.Sprintf("w%d/pair%d/b", w.id, p)
-		w.mu.Lock()
-		n := w.topic.tried + 1
-		w.topic.tried = n
-		w.mu.Unlock()
 		idx := w.attempt(map[string][]byte{a: []byte(v), b: []byte(v)})
-		ops, _ := json.Marshal([]map[string]any{
-			{"op": "put", "key": a, "value": v}, {"op": "put", "key": b, "value": v},
-			{"op": "pub", "topic": fmt.Sprintf("t%d", w.id), "value": strconv.Itoa(n)},
-		})
+		ops, _ := json.Marshal([]map[string]any{{"op": "put", "key": a, "value": v}, {"op": "put", "key": b, "value": v}})
 		c, body, err := h.do("POST", "/v1/tx", ops)
-		if err == nil && c == 200 {
-			w.mu.Lock()
-			w.topic.acked = n
-			w.mu.Unlock()
-		}
 		return h.settle(w, idx, c, body, err)
-	case r < 72: // publish alone
+	case r < 72: // atomic pair delete
 		w.mu.Lock()
-		n := w.topic.tried + 1
-		w.topic.tried = n
-		w.mu.Unlock()
-		c, b, err := h.do("POST", fmt.Sprintf("/v1/topics/t%d", w.id), []byte(strconv.Itoa(n)))
-		if err == nil && c == 200 {
-			w.mu.Lock()
-			w.topic.acked = n
+		if w.pairs == 0 {
 			w.mu.Unlock()
+			return nil
 		}
-		return h.settle(w, nil, c, b, err)
+		p := w.rng.Intn(w.pairs)
+		w.mu.Unlock()
+		a, b := fmt.Sprintf("w%d/pair%d/a", w.id, p), fmt.Sprintf("w%d/pair%d/b", w.id, p)
+		idx := w.attempt(map[string][]byte{a: nil, b: nil})
+		ops, _ := json.Marshal([]map[string]any{{"op": "del", "key": a}, {"op": "del", "key": b}})
+		c, body, err := h.do("POST", "/v1/tx", ops)
+		return h.settle(w, idx, c, body, err)
 	default: // read-your-acked-writes
 		w.mu.Lock()
 		m := w.keys[key]

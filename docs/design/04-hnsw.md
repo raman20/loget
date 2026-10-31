@@ -13,14 +13,14 @@ stays the default, the fallback, and the reference for recall.
   `2M` at 0. When an existing node's list overflows it is re-pruned with
   the same heuristic (see the outcome: keeping only the closest was
   faster but stranded clusters).
-- One graph per (collection, dimension) slab, inside the vector lens.
+- One graph per (collection, dimension) slab, inside the vector index.
   Nodes point at slab slots (the slab's swap-delete updates the mapping),
   so vectors are not copied: memory is the links (~`2M`+ int32 per node).
 - **Deterministic**: a node's level comes from a hash of its id, not
   from a global RNG, and nodes are inserted in log order; the same history
   gives the same graph. Results may still differ between two histories
   with the same final vectors (e.g. after compaction, which replays in a
-  different order). The graph is a cache: the lens digest covers the
+  different order). The graph is a cache: the index digest covers the
   vectors only, exactly as before.
 - **Deletes** (delete, overwrite, shred) unlink the node immediately and
   repair each former neighbor by re-selecting from its own and the deleted
@@ -52,7 +52,7 @@ stays the default, the fallback, and the reference for recall.
 No new storage or concurrency protocol: the declaration is a manifest
 field committed like `Indexes`, and the graph is in-memory state mutated
 under the view's existing lock. No model is added; the safety property
-(never return an id that is not live in the lens) is a property test.
+(never return an id that is not live in the index) is a property test.
 
 ## Test plan
 - Unit: graph invariants after churn (slot/node maps agree, degree ≤ max,
@@ -63,7 +63,7 @@ under the view's existing lock. No model is added; the safety property
   every ANN hit is live; with ef = n, recall@10 ≥ 0.9 against exact.
 - Recall test: 10k random 32-d vectors, recall@10 ≥ 0.9 at default ef
   (measured 0.979); every hit carries the exact score.
-- Sim: unchanged (the lens digest excludes the graph); DB test with
+- Sim: unchanged (the index digest excludes the graph); DB test with
   reopen, compaction, shred.
 - Bench: recall@10 vs exact and QPS at 100k and 1M, plus build time and
   open time.
