@@ -1,0 +1,189 @@
+# Getting started
+
+This walks through every lens from the CLI, then the same engine from Go.
+All commands and outputs below are from a real run of unreleased `main` on
+Linux (LSNs depend on what you ran before; hashes differ every run).
+
+## Install
+
+The latest release is v0.1.0, which predates the journal layout and
+`loget migrate`. To get what these docs describe, install `main`:
+
+```sh
+go install github.com/raman20/loget/cmd/loget@main     # needs Go 1.27+
+loget version
+```
+
+or build from a clone:
+
+```sh
+git clone https://github.com/raman20/loget && cd loget
+go build ./cmd/loget && ./loget version
+```
+
+## Where the data goes
+
+Every command takes `--db URL`, or reads `LOGET_URL`, and defaults to
+`./loget-data`. A new local directory gets the journal layout on
+Linux/macOS/BSD (one file, `journal.fj`). See [operations.md](operations.md)
+for every URL form.
+
+```console
+$ export LOGET_URL=./gs
+```
+
+Without `--addr` each CLI call opens the database itself (embedded mode),
+which takes the write lease. That is fine for trying things out; for
+anything long-running, use `loget serve` (below).
+
+## KV
+
+```console
+$ loget put config/model small
+{"lsn":1}
+$ loget put config/temp 0.2
+{"lsn":2}
+$ loget scan config/
+[{"key":"config/model","value":"small"},{"key":"config/temp","value":"0.2"}]
+$ loget del config/temp
+{"lsn":3}
+$ loget scan config/
+[{"key":"config/model","value":"small"}]
+$ loget get config/temp --at 2              # time travel: as of LSN 2
+0.2
+```
+
+## Documents and indexes
+
+```console
+$ loget doc put memories m1 '{"user":"alice","text":"likes tea"}' --subject alice
+{"lsn":4}
+$ loget doc index memories user              # built by replaying the log
+{"ok":true}
+$ loget doc find memories user alice
+["m1"]
+$ loget doc get memories m1
+{"user":"alice","text":"likes tea"}
+```
+
+`--subject alice` encrypts the value under Alice's key so it can be
+shredded later.
+
+## Vectors
+
+Cosine similarity, exact search.
+
+```console
+$ loget vec put mem m1 0.9,0.1,0 --subject alice
+{"lsn":5}
+$ loget vec put mem m2 0,1,0
+{"lsn":6}
+$ loget vec search mem 1,0,0 -k 2
+[{"id":"m1","score":0.9938837},{"id":"m2","score":0}]
+```
+
+## Topics and exactly-once processing
+
+```console
+$ loget pub tasks "summarise inbox"
+{"lsn":7}
+$ loget sub tasks --from 0 --max 1           # read without a group
+[{"lsn":7,"offset":0,"value":"summarise inbox"}]
+```
+
+To process a message exactly once, write the result and ack the group
+cursor in **one** transaction:
+
+```console
+$ loget tx '[{"op":"put","key":"result/t0","value":"3 unread"},{"op":"ack","topic":"tasks","group":"worker","offset":0}]'
+{"lsn":8,"ops":2}
+$ loget sub tasks --group worker             # nothing left for this group
+[]
+$ loget get result/t0
+3 unread
+```
+
+`loget sub --group G` on its own fetches *and* acks, so it is at-most-once
+for the client. `tx` ops: `put`, `del`, `pub`, `ack`, `doc`, `vec`.
+`sub --follow` long-polls (`?wait=30s`), so new messages arrive as soon as
+they commit. Over HTTP, `GET /v1/topics/{t}/stream` is a Server-Sent Events
+stream.
+
+## Forget a subject
+
+```console
+$ loget shred alice                          # prints a signed certificate
+{ "certificate": { ... "dek_deleted": true, ... "shred_lsn": 9, ... }, "valid_signature": true }
+$ loget doc find memories user alice
+[]
+$ loget vec search mem 1,0,0 -k 2            # m1 was Alice's
+[{"id":"m2","score":0}]
+$ loget verify
+{ ..., "ok": true, ... }
+```
+
+`loget log [--from LSN]` prints the raw log. Subject-tagged values show
+only as `<encrypted N bytes, sha256 …>`, and after a shred nothing can
+decrypt them.
+
+## Branches, rewind, promote
+
+```console
+$ loget branch create try --at 2             # fork main as of LSN 2; copies nothing
+{"heads":{"main":9,"try":2},"ok":true}
+$ loget get config/temp --branch try
+0.2
+$ loget branch list                          # refs, heads and the reflog
+$ loget rewind main 1                        # main back to LSN 1; old head kept in the reflog
+{"heads":{"main":1,"try":2},"ok":true}
+```
+
+`branch promote SRC DST` points `DST` at `SRC`'s log; it only succeeds as a
+fast-forward (`409 promote is not a fast-forward` otherwise).
+
+## Server mode
+
+```sh
+loget serve --db ./gs --listen 127.0.0.1:7070 &
+export LOGET_ADDR=http://127.0.0.1:7070       # the CLI now talks to the server
+loget put k v
+curl -s localhost:7070/v1/kv/k                  # v
+curl -s -X PUT localhost:7070/v1/kv/k2 -d v2    # {"lsn":...}
+```
+
+The endpoint list is in the [README](../README.md#api-tour). The server listens
+on `127.0.0.1` by default. To expose it, add `--token` (or `LOGET_TOKEN`)
+and `--tls-cert` / `--tls-key`; see [operations](operations.md).
+
+## From Go
+
+```sh
+go get github.com/raman20/loget@main
+```
+
+[`examples/tour/main.go`](../examples/tour/main.go) uses every lens, time
+travel, branches, rewind, shred and verify on `mem://`. From a clone:
+`go run ./examples/tour`.
+
+```go
+db, err := loget.Open(ctx, "./data")       // or "s3://bucket/prefix?endpoint=...", "mem://x"
+if err != nil { ... }
+defer db.Close()
+db.Put(ctx, "config/model", []byte("small"))
+```
+
+Options: `WithValueCacheBytes`, `WithInlineMax`, `WithKEK`,
+`WithSnapshotEvery`, `WithLogf` (see [operations.md](operations.md) and
+[pkg.go.dev](https://pkg.go.dev/github.com/raman20/loget)).
+
+## The agent demo
+
+[`examples/agent-demo.sh`](../examples/agent-demo.sh) runs a server and walks
+an AI agent through memory, exactly-once tasks, undo, a branch plan and
+forgetting. It needs `jq` and `curl`:
+
+```sh
+go build -o /tmp/loget ./cmd/loget && LOGET=/tmp/loget ./examples/agent-demo.sh
+```
+
+It writes `./agent-demo-data` in the current directory.

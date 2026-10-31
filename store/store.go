@@ -1,0 +1,72 @@
+// Package store is loget's only coordination primitive: a blob store with
+// create-only writes. Every object loget writes is immutable and created with
+// PutIfAbsent (S3 "If-None-Match: *"), which is what gives single-writer
+// fencing without Raft, ZooKeeper or leases.
+package store
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/url"
+	"strings"
+
+	"github.com/raman20/loget/format"
+)
+
+var (
+	ErrExists   = errors.New("store: object already exists") // create-only conflict (S3 412)
+	ErrNotFound = errors.New("store: not found")
+	// ErrCorrupt: stored bytes fail their checksum (or the file holds
+	// damaged records followed by valid ones). Never repaired silently.
+	ErrCorrupt = errors.New("store: corrupt")
+	// ErrShortRead: a transfer ended before the whole object arrived.
+	// Transient: retry the read.
+	ErrShortRead = errors.New("store: short read")
+	// ErrVersion: a journal file of a format this build does not know.
+	ErrVersion = format.ErrVersion
+)
+
+// Store is a minimal object store.
+type Store interface {
+	// PutIfAbsent atomically creates key with data, or fails with ErrExists.
+	// Readers never observe a partially written object.
+	PutIfAbsent(ctx context.Context, key string, data []byte) error
+	// Get returns the whole object or an error: a store must detect a
+	// truncated transfer (ErrShortRead) and never return a silent prefix,
+	// because a prefix that ends on a frame boundary is indistinguishable
+	// from a shorter object.
+	Get(ctx context.Context, key string) ([]byte, error)
+	// List returns the sorted keys directly under prefix (prefix must end in "/").
+	List(ctx context.Context, prefix string) ([]string, error)
+	Delete(ctx context.Context, key string) error
+}
+
+// Open opens a store from a URL: mem://name; a bare path or file:///path
+// (OpenLocal: the directory's existing layout, else DefaultLayout);
+// journal:///path or fs:///path to force a layout (each refuses a
+// directory holding the other one);
+// s3://bucket/prefix?endpoint=host:port&insecure=1 (credentials from
+// AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY or MINIO_ROOT_USER/PASSWORD).
+func Open(raw string) (Store, error) {
+	if !strings.Contains(raw, "://") {
+		return OpenLocal(raw)
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, err
+	}
+	switch u.Scheme {
+	case "mem":
+		return SharedMem(u.Host + u.Path), nil
+	case "file":
+		return OpenLocal(u.Path)
+	case "fs":
+		return NewFS(u.Path)
+	case "journal":
+		return NewJournal(u.Path)
+	case "s3":
+		return NewS3FromURL(u)
+	}
+	return nil, fmt.Errorf("store: unsupported scheme %q", u.Scheme)
+}

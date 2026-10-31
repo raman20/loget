@@ -1,0 +1,6 @@
+/loget
+/loget-data/
+/dist/
+*.test
+*.prof
+/.bin/
