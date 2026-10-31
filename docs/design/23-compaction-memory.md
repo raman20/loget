@@ -9,6 +9,20 @@ layout, fsync on), single runs of `loget-bench ycsb -keys N -value 100
 `Compact` (new bench field `compact` in the JSON, `peak rss/anon/heap` in
 the log). Heap is Go heap objects, live and not yet collected garbage.
 
+## Summary (final run, 26208d9, 02:09-02:13 IST, `final/`)
+
+| | before item 6 (`before/`) | after all three parts |
+|---|---|---|
+| 10M, compact after C: peak RSS / heap MiB | 6,416 / 4,170 | **2,517** / 1,606 |
+| 10M, compact after C: time | 76.8 s | 35.0 s |
+| 10M, compact after A: peak RSS MiB, time (deleted) | 5,254, 137.9 s | 2,862, 43.8 s (447,997) |
+| 1M, compact after A: time (deleted) — the "480k deletes" case | 62.3 s (~490k) | **6.9 s** (455,202) |
+| 10M bulk load: Go heap live / RSS after load MiB | 561 / 1,368 | **19** / 353 |
+
+Single runs; workload throughput within noise. Not production-ready:
+one base object per log remains (journal limit 1 GiB ≈ 15M keys of
+100 B), and compaction is not incremental.
+
 ## Part 1: stream the compaction base
 
 ### Problem

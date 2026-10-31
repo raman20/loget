@@ -14,6 +14,7 @@ runs. Each directory was produced by `run.sh BIN NAME` with a
 | `fix1-streaming-base/` | part 1 (streamed base) | 00:40-00:46 |
 | `fix2-batched-deletes/` | part 2 (batched journal deletes, garbage batches of 1024) | 01:08-01:12 |
 | `fix3-occ-window/` | part 3 (OCC window bounded by open snapshots) | 01:54-01:58 |
+| `final/` | 26208d9, all three parts (repeat for the summary) | 02:09-02:13 |
 
 `fix2-batched-deletes/sweep-bench.txt` has `BenchmarkCompactSweepPause`
 before and after part 2 and the time one `Journal.DeleteBatch` holds the
