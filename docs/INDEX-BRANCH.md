@@ -6,7 +6,7 @@ Status: **parked**. Main ships only KV.
 
 - Index: `lens/vector.go`, `lens/vector_test.go`, `lens/vector_fuzz_test.go`,
   `lens/hnsw.go`, `lens/hnsw_persist.go`, `lens/hnsw_*_test.go`. Records: `OpPut` / `OpDel`
-  in spaces `vec:<collection>`; persisted graph images (`UHNSW1`).
+  in spaces `vec:<collection>`; persisted graph images (`LHNSW1\0\0`).
 - Engine: `VecTx` in `tx.go`; `ann.go` (graph persistence and restore);
   `EnableANN` and `ANNOptions` in `branch.go`; the `vec` field in `view.go`;
   the `vec:` synthetic entries in `compact.go`.
