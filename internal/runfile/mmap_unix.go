@@ -18,7 +18,14 @@ func seal(b []byte) error {
 	if err := unix.Mprotect(b, unix.PROT_READ); err != nil {
 		return err
 	}
-	return unix.Madvise(b, unix.MADV_RANDOM)
+	if err := unix.Madvise(b, unix.MADV_RANDOM); err != nil {
+		return err
+	}
+	// Building the run touched every page; drop them from this process's
+	// page tables (a shared file mapping keeps them, dirty or not, in the
+	// page cache). Lookups fault back only the pages they read, so RSS
+	// counts the index's working set, not every run ever built (design 25).
+	return unix.Madvise(b, unix.MADV_DONTNEED)
 }
 
 func unmap(b []byte) { _ = unix.Munmap(b) }

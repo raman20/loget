@@ -307,6 +307,20 @@ OCC transfers, fsync on (commits/s; ops that gave up after 16 retries):
     than RAM. YCSB was not rerun; the commit path is unchanged except for a
     pause check.
 
+- **Memory at 10M keys (design 25, 2026-11-04).** 10M × 100 B, YCSB C then
+  A, 8 clients, fsync on, one run each (`bench/results/2026-11-04-memory/`).
+  Local stores now default to a 32 MiB value cache (was 256 MiB) and run
+  files drop their build-time pages after sealing.
+
+  | | peak RSS (anon / file) | end RSS | C ops/s | A ops/s |
+  |---|---|---|---|---|
+  | LogEt before | 1,053 (481 / 572) MiB | 850 MiB | 1.90M | 94.5k |
+  | LogEt after | 701 (130 / 570) MiB | 490 MiB | 1.65M | 92.3k |
+  | Pebble (defaults) | 737 (719 / 18) MiB | 52 MiB | 0.20M | 137.6k |
+
+  The steady-state gap remains: ~320 MiB of mapped index pages
+  (reclaimable, but counted in RSS) and ~150 MiB of Go heap.
+
 ## Summary
 
 | | result (fsync on unless noted) |

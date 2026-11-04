@@ -86,7 +86,13 @@ func TestCacheForMem(t *testing.T) {
 			t.Errorf("cacheForMem(%d) = %d, want %d", c.mem, got, c.want)
 		}
 	}
-	if n := defaultValueCacheBytes(); n < 16<<20 || n > 256<<20 {
+	if n := defaultValueCacheBytes(false); n < 16<<20 || n > 256<<20 {
 		t.Fatalf("default %d out of range", n)
+	}
+	if n := defaultValueCacheBytes(true); n < 16<<20 || n > localValueCache {
+		t.Fatalf("local default %d out of range", n)
+	}
+	if !localStore(store.NewMem()) || localStore(store.NewFaulty(store.NewMem(), 1, store.FaultProbs{})) {
+		t.Fatal("localStore misclassifies Mem / Faulty")
 	}
 }

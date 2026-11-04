@@ -65,7 +65,9 @@ type Options struct {
 	// cache lives off the Go heap (anonymous mmap where available), so RSS
 	// grows by about this much once it fills, not by a GC multiple.
 	// 0 = default: 1/16 of the memory limit (cgroup v2, else MemTotal),
-	// between 16 and 256 MiB; negative = no cache.
+	// between 16 and 256 MiB, and at most 32 MiB on a local store, where
+	// the OS page cache already holds segment bytes (design 25);
+	// negative = no cache.
 	ValueCacheBytes int
 	// IndexDir is where the KV index keeps its large runs (design 21):
 	// memory-mapped files, unlinked as soon as they are created, so the
@@ -257,7 +259,7 @@ func OpenStore(ctx context.Context, st store.Store, opts ...Option) (*DB, error)
 		o.InlineMax = 0
 	}
 	if o.ValueCacheBytes == 0 {
-		o.ValueCacheBytes = defaultValueCacheBytes()
+		o.ValueCacheBytes = defaultValueCacheBytes(localStore(st))
 	}
 	reg, err := newRegistry(o.Indexes)
 	if err != nil {

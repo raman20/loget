@@ -4,14 +4,37 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/raman20/loget/store"
 )
 
 // defaultValueCacheBytes sizes the value cache from the memory available
 // to the process: 1/16 of it, at most 256 MiB and at least 16 MiB. On a
 // 4 GiB+ machine that is 256 MiB (the earlier fixed default); in a 1 GiB
 // container it is 64 MiB. Unknown memory (non-Linux) keeps 256 MiB.
-func defaultValueCacheBytes() int {
-	return cacheForMem(availableMem())
+//
+// On a local store the cache is capped at localValueCache: segment reads
+// there are page-cache hits, so a large cache mostly duplicates the OS
+// page cache in anonymous memory (design 25: at 10M keys, 256 MiB cost
+// ~250 MiB RSS plus GC headroom for ~8% more read throughput).
+func defaultValueCacheBytes(local bool) int {
+	n := cacheForMem(availableMem())
+	if local {
+		n = min(n, localValueCache)
+	}
+	return n
+}
+
+const localValueCache = 32 << 20
+
+// localStore reports whether st keeps its objects on a local file system
+// (or in memory). Wrapped or unknown stores count as remote.
+func localStore(st store.Store) bool {
+	switch st.(type) {
+	case *store.FS, *store.Journal, *store.Mem:
+		return true
+	}
+	return false
 }
 
 func cacheForMem(mem int64) int {
