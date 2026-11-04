@@ -1,0 +1,6 @@
+13:26:39 scan loget: loading 10000000 x 100B
+13:27:06 mem after load: rss 71 anon 51 file 20 MiB | go-resident 54 heap-live 18 goal 39 | off-heap anon -3 MiB
+13:27:13 loget prefix100 c=8: 21966 scans/s, 2196720 keys/s, p50 306.4us p99 1079.3us, errs 0 
+13:27:29 loget full-iter: 10000000 keys in 16.49s (606475 keys/s) RSS 260 -> peak 260 MiB, heap peak 58 MiB
+13:27:29 mem end: rss 131 anon 104 file 27 MiB | go-resident 75 heap-live 30 goal 61 | off-heap anon 29 MiB
+wrote f-scan-67108864/scan-loget.json

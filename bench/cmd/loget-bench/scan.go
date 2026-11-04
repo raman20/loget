@@ -131,6 +131,7 @@ func cmdScan(args []string) {
 	compact := fs.Bool("compact", false, "loget only: Compact after the load (keys move to the base)")
 	dataDir := fs.String("dir", "/tmp/loget-bench", "data directory (wiped)")
 	out := fs.String("out", "results", "output directory")
+	fs.Int64Var(&indexResident, "index-resident", 0, "loget only: IndexResidentBytes (0 = unbounded)")
 	fs.BoolVar(&indexInMemory, "index-in-memory", false, "loget only: keep the whole KV index on the Go heap")
 	fs.Parse(args)
 	clients := parseInts(*clientsF)

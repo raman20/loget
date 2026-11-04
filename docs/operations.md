@@ -101,6 +101,7 @@ RSS grows by about its size once it fills. Go API options:
 
 | Option | Default | Effect |
 |---|---|---|
+| `WithIndexResidentBytes(n)` | 0 (unbounded) | opt-in soft bound on the KV index's mapped pages in RSS: every 100 ms, above n bytes of `RssFile`, run pages are dropped from the process (they stay in the page cache). Halves steady RSS at 10M keys but adds ms-scale read tail latency (design 25); Linux only |
 | `WithValueCacheBytes(n)` | 1/16 of the memory limit (cgroup v2 `memory.max`, else MemTotal), 16–256 MiB; at most 32 MiB on a local store (design 25) | cache size; negative disables the cache |
 | `WithIndexDir(dir)` / `--index-dir` / `LOGET_INDEX_DIR` | OS temp dir (`$TMPDIR`, else `/tmp`) | where the KV index's run files go (unlinked at creation, never reused across restarts). A default dir that is unusable is logged and the index stays on the heap; an explicit one that is unusable fails Open |
 | `WithIndexInMemory(true)` | false | keep the whole KV index on the Go heap (the behaviour before design 21; non-Unix builds always do) |

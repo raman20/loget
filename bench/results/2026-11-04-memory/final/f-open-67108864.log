@@ -1,0 +1,12 @@
+13:25:40 mem after open: rss 56 anon 38 file 17 MiB | go-resident 44 heap-live 10 goal 25 | off-heap anon -6 MiB
+13:25:41 mem after reads: rss 351 anon 65 file 286 MiB | go-resident 46 heap-live 15 goal 31 | off-heap anon 19 MiB
+13:25:41 open loget: 2.05s, 200000 reads in 0.81s (0 missing)
+wrote f-open-67108864/open-loget.json
+13:25:43 mem after open: rss 54 anon 36 file 17 MiB | go-resident 41 heap-live 10 goal 26 | off-heap anon -5 MiB
+13:25:44 mem after reads: rss 373 anon 67 file 306 MiB | go-resident 49 heap-live 15 goal 31 | off-heap anon 18 MiB
+13:25:44 open loget: 1.98s, 200000 reads in 0.82s (0 missing)
+wrote f-open-67108864/open-loget.json
+13:25:46 mem after open: rss 58 anon 40 file 17 MiB | go-resident 45 heap-live 10 goal 24 | off-heap anon -5 MiB
+13:25:47 mem after reads: rss 362 anon 63 file 298 MiB | go-resident 45 heap-live 15 goal 31 | off-heap anon 18 MiB
+13:25:47 open loget: 1.99s, 200000 reads in 0.98s (0 missing)
+wrote f-open-67108864/open-loget.json

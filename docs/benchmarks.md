@@ -321,6 +321,15 @@ OCC transfers, fsync on (commits/s; ops that gave up after 16 retries):
   The steady-state gap remains: ~320 MiB of mapped index pages
   (reclaimable, but counted in RSS) and ~150 MiB of Go heap.
 
+  Part 2 (same day; `bench/results/2026-11-04-memory/final`): merges drop
+  consumed pages, opt-in `IndexResidentBytes`, faster open.
+
+  | | peak RSS | end RSS | C ops/s (p99) | A ops/s | open | full scan |
+  |---|---|---|---|---|---|---|
+  | LogEt mapped (default) | 557 MiB | 512 MiB | 1.75M (0.05 ms) | 117.6k | 1.97–2.19 s (was 3.40) | 590k keys/s |
+  | LogEt bounded 64 MiB | 410 MiB | 274 MiB | 1.65M (3.6 ms) | 106.0k | 1.98–2.05 s | 606k keys/s |
+  | Pebble | 737 MiB | 52 MiB | 0.20M (4.5 ms) | 137.6k | < 0.2 s | 7.20M keys/s |
+
 ## Summary
 
 | | result (fsync on unless noted) |
