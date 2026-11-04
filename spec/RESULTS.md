@@ -47,6 +47,7 @@ the first run reported 32 with identical state counts.
 | LogEtGrow | journal preallocation (item 9): 2 appenders, 2 background growers, a file of ≤6 blocks; appends extend synchronously when needed, growers write one zero block at the current size under the writer lock | 97 | 28 | 8 | no error |
 | LogEtShred | DEK per subject, marker → delete → audit entry + certificate; crash between steps; DEK create landing late; sweep; hash chain | 25,570 | 6,481 | 16 | no error (incl. liveness) |
 | LogEtCkpt | index checkpoints and the sharded base (design 24, 2026-11-01): runs as LSN intervals; freeze and merge, piece and descriptor uploads, conditional checkpoint commit, compaction dropping the checkpoint, garbage sweeps with grace, orphan sweep by epoch, 2 processes with crashes, ≤2 epochs, open from a checkpoint, a reader of an older manifest; MaxLSN=2, MaxMans=5, process symmetry. Run with `-workers 2` (3 min 14 s). Larger bounds did not finish and are partial only (below) | 33,127,486 | 6,621,739 | 36 | no error |
+| LogEtIngest | bulk ingest (design 26, 2026-11-04): pieces stored beside the segment, frame committed by segment PutIfAbsent, open-time fence, fenced/crashed writers of older epochs, abort, GC with the segment, orphan sweep by epoch; 2 processes, process symmetry. CI config MaxSeq=3, MaxEpoch=3 (14,318 / 2,677 states, depth 17); `LogEtIngest_big.cfg` MaxSeq=5, MaxEpoch=4 shown | 2,480,463 | 279,519 | 27 | no error |
 
 ## Properties checked
 
@@ -134,6 +135,8 @@ the first run reported 32 with identical state counts.
 | LogEtTxn with OCC validation removed | `ExactlyOnce` violated (911 states) |
 | LogEtCompact without the grace guard on sweeps | `ReaderOK` violated |
 | LogEtNotify with the head read before taking the channel (`LogEtNotifyBug.cfg`) | `NoLostWakeup` violated |
+| LogEtIngest committing the frame before every piece is stored (`LogEtIngest_early.cfg`) | `IngestIntact` violated (66 distinct states) |
+| LogEtIngest without the sweep's "below our next segment" guard | not violated: the open-time fence already stops older writers; the guard is defence in depth |
 | LogEtCompact with the manifest commit not create-only (no fencing) | `EpochMonotone` violated |
 | LogEtGC without the post-create manifest List (`LogEtGC_nopost.cfg`) | `GarbageFinal` violated in 10 steps: a fenced writer commits its stale GC manifest into a deleted slot below the latest, listing a segment the live child branch needs as garbage |
 | LogEtGC with the parent's cut ignoring a dependent branch (`LogEtGC_nodeps.cfg`) | `GarbageFinal` violated |

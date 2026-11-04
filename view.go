@@ -148,6 +148,9 @@ func (db *DB) buildView(ctx context.Context, l *logState, upto uint64, snap *sna
 	}
 	err := l.eachAfter(ctx, after, upto, func(e *index.Entry) error {
 		if e.LSN > from {
+			if err := db.resolveIngest(ctx, v.kv, e); err != nil {
+				return err
+			}
 			v.kv.Apply(e, env)
 		}
 		for i, d := range v.derived {

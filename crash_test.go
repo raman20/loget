@@ -2,6 +2,7 @@ package loget
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -19,6 +20,8 @@ import (
 )
 
 const crashG = 4
+
+const crashIngestN = 3000 // keys per ingest (LOGET_CRASH_INGEST)
 
 // crashChild is run in a subprocess: 4 goroutines commit forever, printing
 // "ACK g i" only after Update returned nil (i.e. after fsync+rename).
@@ -52,10 +55,33 @@ func crashChild(loc string) {
 		go func() { // compaction racing the commits: SIGKILL lands mid-compaction too
 			for {
 				time.Sleep(5 * time.Millisecond)
-				if _, err := db.Compact(ctx, CompactOptions{}); err != nil {
+				if _, err := db.Compact(ctx, CompactOptions{}); err != nil && !errors.Is(err, ErrBusy) { // busy: an ingest
 					fmt.Println("ERR compact", err)
 					os.Exit(5)
 				}
+			}
+		}()
+	}
+	if os.Getenv("LOGET_CRASH_INGEST") != "" {
+		go func() { // bulk ingests racing the commits: all or nothing
+			for {
+				time.Sleep(10 * time.Millisecond) // leave compaction a turn
+				id := time.Now().UnixNano()
+				_, err := db.Ingest(ctx, func(add func(string, []byte) error) error {
+					for j := 0; j < crashIngestN; j++ {
+						if err := add(fmt.Sprintf("ing/%d/%05d", id, j), []byte("v")); err != nil {
+							return err
+						}
+					}
+					return nil
+				})
+				if err != nil {
+					fmt.Println("ERR ingest", err)
+					os.Exit(6)
+				}
+				mu.Lock()
+				os.Stdout.WriteString(fmt.Sprintf("ING %d\n", id))
+				mu.Unlock()
 			}
 		}()
 	}
@@ -124,6 +150,12 @@ func TestCrashKill9Ckpt(t *testing.T) {
 	crashKill9(t, "fs://"+t.TempDir(), "LOGET_CRASH_COMPACT=1", "LOGET_CRASH_CKPT=1")
 }
 
+// Kills during bulk ingests (and compactions, checkpoints): each ingest
+// is recovered whole or not at all, and an acknowledged one always.
+func TestCrashKill9Ingest(t *testing.T) {
+	crashKill9(t, "fs://"+t.TempDir(), "LOGET_CRASH_COMPACT=1", "LOGET_CRASH_CKPT=1", "LOGET_CRASH_INGEST=1")
+}
+
 func TestCrashKill9IndexFiles(t *testing.T) {
 	if !runfile.Supported {
 		t.Skip("run files need mmap")
@@ -142,6 +174,8 @@ func crashKill9(t *testing.T, dir string, env ...string) {
 		iters, _ = strconv.Atoi(s)
 	}
 	acked := make([]int, crashG)
+	ingested := map[string]bool{} // acknowledged ingests
+	sawIngest := 0
 	based := 0  // recoveries that started from a compaction base
 	ckpted := 0 // recoveries with an index checkpoint in the manifest
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
@@ -157,7 +191,9 @@ func crashKill9(t *testing.T, dir string, env ...string) {
 			sc := bufio.NewScanner(out)
 			for sc.Scan() {
 				f := strings.Fields(sc.Text())
-				if len(f) == 3 && f[0] == "ACK" {
+				if len(f) == 2 && f[0] == "ING" {
+					ingested[f[1]] = true
+				} else if len(f) == 3 && f[0] == "ACK" {
 					g, _ := strconv.Atoi(f[1])
 					i, _ := strconv.Atoi(f[2])
 					if i > acked[g] {
@@ -231,6 +267,24 @@ func crashKill9(t *testing.T, dir string, env ...string) {
 				}
 				acked[g] = n // unacked-but-durable commits count from now on
 			}
+			kvs, _ := tx.Scan("ing/")
+			per := map[string]int{}
+			for _, kv := range kvs {
+				id, _, _ := strings.Cut(strings.TrimPrefix(kv.Key, "ing/"), "/")
+				per[id]++
+			}
+			for id, n := range per {
+				if n != crashIngestN {
+					t.Fatalf("iter %d: ingest %s recovered %d of %d keys (not atomic)", it, id, n, crashIngestN)
+				}
+				ingested[id] = true
+			}
+			for id := range ingested {
+				if per[id] == 0 {
+					t.Fatalf("iter %d: acknowledged ingest %s lost", it, id)
+				}
+			}
+			sawIngest = max(sawIngest, len(per))
 			return nil
 		})
 		r, err := db.Verify(ctx)
@@ -254,6 +308,9 @@ func crashKill9(t *testing.T, dir string, env ...string) {
 	}
 	if len(env) > 0 && based == 0 {
 		t.Fatal("no recovery started from a compaction base")
+	}
+	if slices.Contains(env, "LOGET_CRASH_INGEST=1") && sawIngest == 0 {
+		t.Fatal("no ingest recovered")
 	}
 	if slices.Contains(env, "LOGET_CRASH_CKPT=1") && ckpted == 0 {
 		t.Fatal("no recovery started from an index checkpoint")

@@ -24,6 +24,7 @@ var (
 	ErrBusy = errors.New("loget: compaction already running")
 	ErrBadName = errors.New("loget: invalid name")
 	ErrBadValue = errors.New("loget: invalid value")
+var ErrUnsorted = fmt.Errorf("loget: %w", index.ErrUnsorted)
 var LatencyBounds = []float64{0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}
 func Formats() string
 func HolderName() string
@@ -61,6 +62,7 @@ func (b *Batch) Size() int
 type Branch struct {
 func (br *Branch) Apply(ctx context.Context, b *Batch) (uint64, error)
 func (b *Branch) Head() (uint64, error)
+func (b *Branch) Ingest(ctx context.Context, src IngestSource) (st IngestStats, err error)
 func (b *Branch) Name() string
 func (b *Branch) Update(ctx context.Context, fn func(*Tx) error) error
 func (b *Branch) UpdateLSN(ctx context.Context, fn func(*Tx) error) (uint64, error)
@@ -119,6 +121,7 @@ func (db *DB) Get(ctx context.Context, key string) (v []byte, err error)
 func (db *DB) Head(branch string) (uint64, error)
 func (db *DB) Healthy() error
 func (db *DB) IndexDigests(branch string) (map[string][32]byte, uint64, error)
+func (db *DB) Ingest(ctx context.Context, src IngestSource) (IngestStats, error)
 func (db *DB) IsShredded(subject string) bool
 func (db *DB) Manifest() *Manifest
 func (db *DB) Ping(ctx context.Context) error
@@ -153,6 +156,12 @@ type Histogram struct {
 	Count  uint64   `json:"count"`
 	Sum    float64  `json:"sum_seconds"`
 func (h Histogram) Quantile(q float64) float64
+type IngestSource func(add func(key string, val []byte) error) error
+type IngestStats struct {
+	LSN    uint64
+	Keys   int
+	Bytes  int64
+	Pieces int
 type IterOptions struct {
 	Prefix  string
 	Start   string

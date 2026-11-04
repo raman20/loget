@@ -2,6 +2,7 @@ const BaseHeaderLen = 8 + 3 + 8 + 8
 var Castagnoli = crc32.MakeTable(crc32.Castagnoli)
 var ErrBadRun = errors.New("index: bad stored run")
 var ErrBadSnapshot = errors.New("index: bad snapshot")
+var ErrUnsorted = errors.New("index: ingest keys not strictly increasing")
 var PieceBytes = 64 << 20
 func PrefixEnd(p string) string
 func StripChunks(p []byte) (int, error)
@@ -27,8 +28,21 @@ type Entry struct {
 	LSN uint64
 	TS  int64
 	Ops []format.Op
+	Ingest *IngestRun
 type Env interface {
 type Index interface {
+type Ingest struct {
+func NewIngest(o KVOptions, space string, lsn uint64) (*Ingest, error)
+func (g *Ingest) Abort()
+func (g *Ingest) Add(key string, val []byte) error
+func (g *Ingest) Finish() (*IngestRun, error)
+func (g *Ingest) Len() int
+type IngestRun struct {
+	Key  string
+	Meta RunMeta
+func (x *IngestRun) DropPiece(i int)
+func (x *IngestRun) Piece(i int) []byte
+func (x *IngestRun) Release()
 type KV struct {
 func LoadKV(b []byte, inline int) (*KV, error)
 func LoadKVBase(b []byte, inline int) (*KV, error)
@@ -47,6 +61,7 @@ func (l *KV) Get(space, key string, at uint64) (Version, bool)
 func (l *KV) Inline() int
 func (l *KV) LastWrite(space, key string) uint64
 func (l *KV) Latest(fn func(space, key string, v Version) error) error
+func (l *KV) LoadIngest(src RunSource, lsn uint64) (*IngestRun, error)
 func (*KV) Name() string
 func (l *KV) Range(space, lo, hi string, at uint64, reverse bool, fn func(key string, v Version) bool)
 func (l *KV) Scan(space, prefix string, at uint64) []Pair

@@ -25,6 +25,9 @@ payload's bytes canonical, which the hash chain relies on.
   ckpt/<logID>/<lsn:%020d>-e<epoch>-<nonce>.r<i>.<p:%06d>.run piece p of a stored record-store run
   log/<logID>/<seq>.idx                 segment-index checkpoint covering segments up to <seq> (cache, never
                                         truth; create-only; deleted with the segment by GC)
+  log/<logID>/<seq>-e<epoch>-<nonce>.ingest.<p:%06d>  piece p of a bulk-ingest run committed by segment <seq>'s
+                                        INGEST op (create-only; deleted with the segment by GC; orphans
+                                        of an older epoch deleted by the orphan sweep)
   log/<logID>/<seq>.repair              repair note of a damaged segment kept by --repair-tail:
                                         "loget-repair v1 seq= frames= valid= size= sha256=" (create-only;
                                         the segment stays as is; deleted with the segment by GC)
@@ -126,6 +129,8 @@ i64       commit timestamp (unix nanos, from the DB clock; part of the log so in
 uvarint   number of ops
 op × n:
   u8      kind   1=PUT 2=DEL 3=APPEND (reserved for the topics index; main never writes it) 4=SHRED
+                 5=INGEST (alone in its frame; space "kv", key = the run's object key,
+                 value = JSON {meta, sha256}: design 26)
   uvarint+bytes  subject   ("" = not subject-scoped; else subjectHash)
   uvarint+bytes  space     "kv", or a space owned by a registered index (index.Kind.Spaces)
   uvarint+bytes  key

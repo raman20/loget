@@ -829,3 +829,7 @@ filtered.
   no ANN index.
 - **Not measured:** AWS S3 or R2, other hardware, Windows or macOS, datasets
   larger than RAM, long-running (hours) behaviour, or compaction under load.
+
+## Bulk ingest and batches vs Pebble (2026-11-04)
+
+See [`bench/results/2026-11-04-ingest/`](../bench/results/2026-11-04-ingest/README.md): 10M keys, fsync: LogEt `Ingest` 1.45M keys/s (172 MiB peak) vs Pebble sstable ingest 3.96M keys/s (46 MiB); batches of 1,000: 335k vs 2.09M keys/s. One run each.

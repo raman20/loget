@@ -50,6 +50,8 @@ func main() {
 		cmdCalib(args)
 	case "open":
 		cmdOpen(args)
+	case "ingest":
+		cmdIngest(args)
 	case "report":
 		cmdReport(args)
 	default:

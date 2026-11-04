@@ -1,0 +1,2 @@
+{"system":"pebble","mode":"bulk","keys":10000000,"batch":1000,"secs":2.52,"keys_per_sec":3963331,"peak_rss_mib":46}
+{"system":"pebble","mode":"batch","keys":10000000,"batch":1000,"secs":4.79,"keys_per_sec":2088630,"peak_rss_mib":35}

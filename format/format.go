@@ -19,7 +19,7 @@ var castagnoli = crc32.MakeTable(crc32.Castagnoli)
 // CRC returns the CRC32C of b.
 func CRC(b []byte) uint32 { return crc32.Checksum(b, castagnoli) }
 
-// Op kinds. The log has exactly four verbs; every model is an index over them.
+// Op kinds. The log has five verbs; every model is an index over them.
 type Kind uint8
 
 const (
@@ -27,6 +27,11 @@ const (
 	OpDel    Kind = 2 // delete (space,key)
 	OpAppend Kind = 3 // append to stream `space`: written only by the topics index (branch index/topics); main never writes it
 	OpShred  Kind = 4 // audit marker: subject (Key) was crypto-shredded
+	// OpIngest installs a sorted run of puts into space Space, built by bulk
+	// ingest and stored beside the log under object key Key; Value is the
+	// run's description (pieces and their CRC-32C), so the frame pins the
+	// exact bytes. Every put in the run is at the frame's LSN (design 26).
+	OpIngest Kind = 5
 )
 
 func (k Kind) String() string {
@@ -39,6 +44,8 @@ func (k Kind) String() string {
 		return "APPEND"
 	case OpShred:
 		return "SHRED"
+	case OpIngest:
+		return "INGEST"
 	}
 	return fmt.Sprintf("KIND(%d)", uint8(k))
 }
@@ -294,7 +301,7 @@ func parsePayload(p []byte, in names, f *Frame, build bool) error {
 		}
 		k := Kind(r.b[0])
 		r.b = r.b[1:]
-		if k < OpPut || k > OpShred {
+		if k < OpPut || k > OpIngest {
 			return ErrCorrupt
 		}
 		subj, space, key := r.bytes(), r.bytes(), r.bytes()

@@ -319,7 +319,32 @@ func (s *sim) txn() error {
 	}
 	var lsn uint64
 	var err error
-	if blind && s.rng.Intn(2) == 0 {
+	ingest := blind
+	for _, m := range ops {
+		ingest = ingest && m.kind == 'p' && m.subject == ""
+	}
+	if ingest && s.rng.Intn(3) == 0 { // puts only: a bulk ingest
+		last := map[string]string{"__tx": strconv.Itoa(id)}
+		for _, m := range ops {
+			last[m.key] = m.val
+		}
+		keys := make([]string, 0, len(last))
+		for k := range last {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		var st loget.IngestStats
+		st, err = s.db.Branch("main").Ingest(s.ctx, func(add func(string, []byte) error) error {
+			for _, k := range keys {
+				if err := add(k, []byte(last[k])); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		lsn = st.LSN
+		s.log("ingest")
+	} else if blind && s.rng.Intn(2) == 0 {
 		var b loget.Batch
 		b.Put("__tx", []byte(strconv.Itoa(id)))
 		for _, m := range ops {
@@ -499,6 +524,18 @@ func (s *sim) recovered() ([]int, error) {
 		for _, op := range e.Ops {
 			if op.Kind == format.OpPut && op.Space == "kv" && op.Key == "__tx" {
 				id, _ := strconv.Atoi(string(op.Value))
+				ids = append(ids, id)
+				lsns = append(lsns, e.LSN)
+			}
+			if op.Kind == format.OpIngest { // its __tx is in the run: read it at the LSN
+				var v []byte
+				if err := s.db.Branch("main").ViewAt(s.ctx, e.LSN, func(tx *loget.Tx) (err error) {
+					v, err = tx.Get("__tx")
+					return err
+				}); err != nil {
+					return nil, fmt.Errorf("ingest at %d: %v", e.LSN, err)
+				}
+				id, _ := strconv.Atoi(string(v))
 				ids = append(ids, id)
 				lsns = append(lsns, e.LSN)
 			}

@@ -27,6 +27,10 @@ type Entry struct {
 	LSN uint64
 	TS  int64
 	Ops []format.Op
+	// Ingest is the run an OpIngest op names, resolved by the engine
+	// (built by the ingest itself, or loaded and checked against the op on
+	// replay: KV.LoadIngest). Only the record store uses it.
+	Ingest *IngestRun
 }
 
 // Env is the deterministic environment an index may consult.

@@ -1,0 +1,2 @@
+{"system":"loget","mode":"bulk","keys":10000000,"batch":1000,"secs":6.91,"keys_per_sec":1446309,"peak_rss_mib":172,"end_anon_mib":19,"end_file_mib":17}
+{"system":"loget","mode":"batch","keys":10000000,"batch":1000,"secs":29.84,"keys_per_sec":335073,"peak_rss_mib":249,"end_anon_mib":41,"end_file_mib":66}

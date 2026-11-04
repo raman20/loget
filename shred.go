@@ -218,6 +218,14 @@ func (db *DB) Verify(ctx context.Context) (*VerifyReport, error) {
 		r.Warnings = append(r.Warnings, fresh.verifyCheckpoints(ctx, l, objs)...)
 		err = l.eachOwn(ctx, l.head(), func(e *index.Entry) error { // the parent is verified on its own
 			r.Entries++
+			if len(e.Ops) > 0 && e.Ops[0].Kind == format.OpIngest { // its pieces: checksums and SHA-256
+				if err := fresh.resolveIngest(ctx, index.NewKVOptions(fresh.kvOptions()), e); err != nil {
+					bad("log %s: %v", id, err)
+				} else {
+					e.Ingest.Release()
+					e.Ingest = nil
+				}
+			}
 			for i, op := range e.Ops {
 				if op.Subject == "" || op.Kind == format.OpDel || op.Kind == format.OpShred {
 					continue

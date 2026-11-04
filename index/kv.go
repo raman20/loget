@@ -245,6 +245,12 @@ func (l *KV) Apply(e *Entry, env Env) {
 			l.put(ck(op.Space, op.Key), Version{LSN: e.LSN, Op: uint32(i), Del: true})
 		case format.OpShred:
 			l.DropSubject(op.Key)
+		case format.OpIngest:
+			x := e.Ingest
+			if x == nil || x.r == nil || x.Key != op.Key || x.lsn != e.LSN {
+				panic("index: OpIngest applied without its run") // the engine resolves it first
+			}
+			l.install(x)
 		}
 	}
 	l.work(len(e.Ops) * mergeStep)

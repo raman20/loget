@@ -478,7 +478,7 @@ func (s *Server) log(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out := []LogEntry{}
-	kinds := map[format.Kind]string{format.OpPut: "put", format.OpDel: "del", format.OpAppend: "append", format.OpShred: "shred"}
+	kinds := map[format.Kind]string{format.OpPut: "put", format.OpDel: "del", format.OpAppend: "append", format.OpShred: "shred", format.OpIngest: "ingest"}
 	for _, e := range es {
 		if e.LSN < from {
 			continue

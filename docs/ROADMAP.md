@@ -50,8 +50,11 @@ Nothing else is added to `main` meanwhile.
    faster than before with memory bounded by a page; still 4-15x slower
    than Pebble (one value open per key). Left: value readahead, seek on a
    live iterator.
-3. **Batch and transaction API**: write-only batches, bulk load, explicit
-   transaction size limits.
+3. **Batch and transaction API**: done (design 26): `Batch`/`Apply` with
+   size limits checked at add time, `POST /v1/batch`, and sorted bulk
+   `Ingest` as one commit (10M keys: 1.45M keys/s, 172 MiB peak vs Pebble
+   3.96M/s, 46 MiB). Left: stream pieces while building, let commits run
+   during an ingest, batch throughput (335k vs Pebble 2.09M keys/s).
 4. **TTL**: per-key expiry that is still a pure function of the log
    (expiry by entry timestamp, never by wall clock at read time).
 5. **Open and snapshots**: open without full replay: done (design 24):

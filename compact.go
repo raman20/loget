@@ -657,6 +657,9 @@ func (db *DB) deleteGarbage(ctx context.Context, g Garbage) (int, error) {
 			if !ok && g.Kind == "segs" {
 				n, ok = parseNum(k, dir, ".idx") // so does a checkpoint ending there
 			}
+			if !ok && g.Kind == "segs" {
+				n, _, _, ok = parseIngest(k, dir) // so does an ingest run committed there
+			}
 			if ok && n < g.Below {
 				keys = append(keys, k)
 			}
@@ -781,6 +784,13 @@ func (db *DB) sweepOrphans(ctx context.Context, man *Manifest) (int, error) {
 				return n, err
 			}
 			n++
+		}
+	}
+	for _, id := range sortedMapKeys(ids) {
+		c, err := db.sweepIngests(ctx, id)
+		n += c
+		if err != nil {
+			return n, err
 		}
 	}
 	for _, id := range sortedMapKeys(ids) {

@@ -25,7 +25,11 @@ type commitReq struct {
 	// exec, if set, is the transaction body to run inside the writer at the
 	// applied head (see escalateAfter); ops/reads/at are filled from it.
 	exec func(*Tx) error
-	done chan commitRes
+	// ingest, if set, is a bulk ingest (ingest.go) served alone by
+	// runIngest; ingestRun is the run its OpIngest frame installs.
+	ingest    *ingestJob
+	ingestRun *index.IngestRun
+	done      chan commitRes
 }
 
 // size estimates the bytes r adds to a segment (an escalated transaction's
@@ -349,7 +353,20 @@ func (w *writer) loop() {
 		if timer != nil {
 			batch = w.linger(batch, start, timer)
 		}
-		w.process(batch)
+		for len(batch) > 0 { // ingests run alone, in arrival order
+			i := 0
+			for i < len(batch) && batch[i].ingest == nil {
+				i++
+			}
+			if i > 0 {
+				w.process(batch[:i])
+			}
+			if i < len(batch) {
+				w.runIngest(batch[i])
+				i++
+			}
+			batch = batch[i:]
+		}
 	}
 }
 
@@ -565,7 +582,7 @@ func (w *writer) process(batch []*commitReq) {
 		chain = format.ChainNext(chain, payload)
 		head = lsn
 		accepted = append(accepted, r)
-		entries = append(entries, &index.Entry{Log: w.l.meta.ID, LSN: lsn, TS: ts, Ops: ops})
+		entries = append(entries, &index.Entry{Log: w.l.meta.ID, LSN: lsn, TS: ts, Ops: ops, Ingest: r.ingestRun})
 		rc := recentCommit{lsn: lsn}
 		for _, op := range ops {
 			if op.Kind == format.OpPut || op.Kind == format.OpDel {

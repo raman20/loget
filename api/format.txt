@@ -32,6 +32,7 @@ const (
 	OpDel    Kind = 2
 	OpAppend Kind = 3
 	OpShred  Kind = 4
+	OpIngest Kind = 5
 func (k Kind) String() string
 type Op struct {
 	Kind    Kind
