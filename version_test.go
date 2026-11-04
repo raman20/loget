@@ -42,12 +42,12 @@ func TestNewerFormatsRefused(t *testing.T) {
 		k := latest(st, "manifest/")
 		rewrite(st, k, func(b []byte) []byte {
 			m, _ := decodeManifest(b)
-			m.Format = manifestFormatRunBase + 1
+			m.Format = manifestFormatMax + 1
 			return encodeManifest(m)
 		})
 		_, err := OpenStore(ctx, st, quiet())
 		if !errors.Is(err, ErrVersion) || !strings.Contains(err.Error(), "upgrade the binary") {
-			t.Fatalf("manifest format %d: %v", manifestFormatRunBase+1, err)
+			t.Fatalf("manifest format %d: %v", manifestFormatMax+1, err)
 		}
 		if latest(st, "manifest/") != k {
 			t.Fatal("a refused open wrote a manifest")

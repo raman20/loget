@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash/crc32"
@@ -31,8 +32,10 @@ import (
 const (
 	baseMagic  = "LGETBAS1"
 	chunkMagic = "LGETVAL1"
-	chunkMax   = 64 << 20
 )
+
+// chunkMax: target value chunk size (a var so tests can make many chunks).
+var chunkMax = 64 << 20
 
 var errPaused = errors.New("loget: writer paused for compaction")
 
@@ -53,6 +56,9 @@ type CompactStats struct {
 	Pending   int   `json:"pending"`           // garbage items still waiting for their grace period
 	Pinned    int   `json:"pinned,omitempty"`  // logs held back by a live Snapshot
 	Expired   int   `json:"expired,omitempty"` // expired keys left out of bases
+	// design 28: value chunks of the previous base kept, not copied
+	SharedChunks int   `json:"shared_chunks,omitempty"`
+	SharedBytes  int64 `json:"shared_bytes,omitempty"` // live value bytes in them
 
 	// GC only
 	LogsDropped      int `json:"logs_dropped,omitempty"`      // unreachable logs removed from the manifest
@@ -315,7 +321,10 @@ func (db *DB) compactLocked(ctx context.Context, o GCOptions, gc bool, stats *Co
 		for _, b := range bs {
 			lm := m.Logs[b.id]
 			if old := lm.Base; old != nil {
-				m.Garbage = append(m.Garbage, baseGarbage(b.id, old, after))
+				m.Garbage = append(m.Garbage, baseGarbage(b.id, old, b.base, after)...)
+			}
+			if b.base.Refs != nil {
+				m.Format = max(m.Format, manifestFormatRefs)
 			}
 			dropCkpt(b.id)
 			m.Garbage = append(m.Garbage,
@@ -330,7 +339,7 @@ func (db *DB) compactLocked(ctx context.Context, o GCOptions, gc bool, stats *Co
 		for _, id := range drop {
 			lm := m.Logs[id]
 			if lm.Base != nil {
-				m.Garbage = append(m.Garbage, baseGarbage(id, lm.Base, after))
+				m.Garbage = append(m.Garbage, baseGarbage(id, lm.Base, nil, after)...)
 			}
 			dropCkpt(id)
 			m.Garbage = append(m.Garbage,
@@ -350,13 +359,33 @@ func (db *DB) compactLocked(ctx context.Context, o GCOptions, gc bool, stats *Co
 	return true, nil
 }
 
-// baseGarbage lists base b's objects as garbage.
-func baseGarbage(id string, b *BaseMeta, after int64) Garbage {
+// baseGarbage lists base b's objects as garbage, except value chunks the
+// base replacing it (next, nil if none) still refers to.
+func baseGarbage(id string, b, next *BaseMeta, after int64) []Garbage {
 	g := Garbage{Kind: "base", Log: id, Key: b.Key, Chunks: b.Chunks, After: after}
 	if b.Run != nil {
 		g.Pieces = len(b.Run.Sums)
 	}
-	return g
+	if b.Refs == nil && (next == nil || next.Refs == nil) {
+		return []Garbage{g} // no chunk shared either way
+	}
+	g.Chunks = 0
+	keep := map[string]bool{}
+	if next != nil {
+		for _, o := range next.chunkObjs() {
+			keep[o] = true
+		}
+	}
+	vals := Garbage{Kind: "vals", Log: id, After: after}
+	for _, o := range b.chunkObjs() {
+		if !keep[o] {
+			vals.Objs = append(vals.Objs, o)
+		}
+	}
+	if len(vals.Objs) == 0 {
+		return []Garbage{g}
+	}
+	return []Garbage{g, vals}
 }
 
 // writeBase writes the base of log l at head from its view v.
@@ -385,8 +414,9 @@ func (db *DB) writeBase(ctx context.Context, l *logState, v *view, head uint64, 
 	// invisible to every read at or after the cut, so the base drops it
 	// (expiry GC is part of the fold: docs/design/27-ttl-snapshots.md).
 	l.mu.RLock()
-	ts, seq := l.lastTS, l.nextSeq
+	seq := l.nextSeq
 	l.mu.RUnlock()
+	var ts int64
 	if at != nil {
 		ts, seq = at.ts, at.seq
 	} else if ts, err = frameTS(ctx, l, head); err != nil {
@@ -396,6 +426,10 @@ func (db *DB) writeBase(ctx context.Context, l *logState, v *view, head uint64, 
 	}
 	v.mu.RLock()
 	defer v.mu.RUnlock()
+	shared, remap, err := db.shareChunks(l, v, ts)
+	if err != nil {
+		return nil, err
+	}
 	err = v.kv.Latest(func(space, k string, ver index.Version) error {
 		if ver.Del {
 			return nil
@@ -403,6 +437,13 @@ func (db *DB) writeBase(ctx context.Context, l *logState, v *view, head uint64, 
 		if ver.Expired(ts) {
 			stats.Expired++
 			return nil
+		}
+		if nc := remap[ver.Chunk]; nc != 0 && ownChunk(l, ver) {
+			// in a chunk of the previous base kept as it is: point at it
+			stats.Keys++
+			stats.SharedBytes += int64(ver.Len)
+			return rw.Add(space, k, index.Version{LSN: ver.LSN, Op: ver.Op, Exp: ver.Exp,
+				Chunk: nc, Off: ver.Off, Len: ver.Len, Sum: ver.Sum})
 		}
 		val := ver.Val
 		if ver.Ref() || ver.Subject != "" {
@@ -436,7 +477,7 @@ func (db *DB) writeBase(ctx context.Context, l *logState, v *view, head uint64, 
 			if err != nil {
 				return err
 			}
-			nv.Chunk, nv.Off, nv.Len, nv.Sum = uint32(n+1), uint32(off), uint32(len(val)), crc32.Checksum(val, index.Castagnoli)
+			nv.Chunk, nv.Off, nv.Len, nv.Sum = uint32(len(shared)+n+1), uint32(off), uint32(len(val)), crc32.Checksum(val, index.Castagnoli)
 		} else {
 			nv.Val = val // Latest's copy, or ours: encoded before the next key
 		}
@@ -482,7 +523,70 @@ func (db *DB) writeBase(ctx context.Context, l *logState, v *view, head uint64, 
 		}
 	}
 	stats.BaseBytes += run.Len + cw.bytes
-	return &BaseMeta{LSN: head, Seq: seq, Key: key, Chunks: cw.n, Chain: hex.EncodeToString(chain[:]), TS: ts, Run: run}, nil
+	bm := &BaseMeta{LSN: head, Seq: seq, Key: key, Chunks: cw.n, ChunkSizes: cw.sizes, Chain: hex.EncodeToString(chain[:]), TS: ts, Run: run}
+	if len(shared) > 0 {
+		bm.Refs = shared
+		for i, n := range cw.sizes {
+			bm.Refs = append(bm.Refs, ChunkRef{Key: key, N: i, Size: n})
+		}
+		stats.SharedChunks += len(shared)
+	}
+	return bm, nil
+}
+
+// shareMin: a chunk of the previous base is shared, not copied, while at
+// least this fraction of its bytes is still live (else its live values
+// are copied into new chunks and it becomes garbage). Space amplification
+// of value chunks is so bounded by 1/shareMin.
+const shareMin = 0.5
+
+// ownChunk: ver is stored in a value chunk of l's own current base.
+func ownChunk(l *logState, ver index.Version) bool {
+	if ver.Chunk == 0 || ver.Subject != "" {
+		return false
+	}
+	x, _, ok := l.source(ver)
+	return ok && x == l
+}
+
+// shareChunks decides which value chunks of l's current base the next
+// base keeps (design 28): those at least shareMin live at time ts.
+// remap maps a kept chunk's old number to its number in the new base
+// (1..len(shared)). Subject values are always rewritten (resealed).
+// Caller holds v.mu (read).
+func (db *DB) shareChunks(l *logState, v *view, ts int64) ([]ChunkRef, map[uint32]uint32, error) {
+	ob := l.meta.Base
+	if ob == nil || db.opts.CompactCopyAll {
+		return nil, nil, nil
+	}
+	old := ob.Refs
+	if old == nil {
+		if len(ob.ChunkSizes) != ob.Chunks {
+			return nil, nil, nil // written before design 28: sizes unknown
+		}
+		for i, n := range ob.ChunkSizes {
+			old = append(old, ChunkRef{Key: ob.Key, N: i, Size: n})
+		}
+	}
+	live := make([]int64, len(old))
+	err := v.kv.Latest(func(_, _ string, ver index.Version) error {
+		if !ver.Del && !ver.Expired(ts) && ownChunk(l, ver) && int(ver.Chunk) <= len(live) {
+			live[ver.Chunk-1] += int64(ver.Len)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	var shared []ChunkRef
+	remap := map[uint32]uint32{}
+	for i, r := range old {
+		if r.Size > 0 && float64(live[i]) >= shareMin*float64(r.Size) {
+			shared = append(shared, r)
+			remap[uint32(i+1)] = uint32(len(shared))
+		}
+	}
+	return shared, remap, nil
 }
 
 // chunkWriter packs base values into chunk objects of about chunkMax.
@@ -492,6 +596,7 @@ type chunkWriter struct {
 	buf   []byte
 	n     int // chunks written
 	bytes int64
+	sizes []int64 // of each chunk written
 }
 
 func (c *chunkWriter) add(ctx context.Context, val []byte) (int, int, error) {
@@ -516,6 +621,7 @@ func (c *chunkWriter) flush(ctx context.Context) error {
 		return err
 	}
 	c.bytes += int64(len(c.buf))
+	c.sizes = append(c.sizes, int64(len(c.buf)))
 	c.n++
 	c.buf = c.buf[:0]
 	return nil
@@ -640,14 +746,15 @@ func (db *DB) sweep(ctx context.Context, stats *CompactStats, idle bool) error {
 
 // withoutGarbage returns gs minus one occurrence of each entry of drop.
 func withoutGarbage(gs, drop []Garbage) []Garbage {
-	n := map[Garbage]int{}
+	id := func(g Garbage) string { b, _ := json.Marshal(g); return string(b) }
+	n := map[string]int{}
 	for _, g := range drop {
-		n[g]++
+		n[id(g)]++
 	}
 	var keep []Garbage
 	for _, g := range gs {
-		if n[g] > 0 {
-			n[g]--
+		if k := id(g); n[k] > 0 {
+			n[k]--
 			continue
 		}
 		keep = append(keep, g)
@@ -698,6 +805,8 @@ func (db *DB) deleteGarbage(ctx context.Context, g Garbage) (int, error) {
 		for i := 0; i < g.Pieces; i++ {
 			keys = append(keys, ckptPieceKey(g.Key, i))
 		}
+	case "vals":
+		keys = append(keys, g.Objs...)
 	case "ckpt":
 		keys = append(keys, ckptDescObj(g.Key))
 	case "run":
@@ -759,9 +868,22 @@ func (db *DB) sweepOrphans(ctx context.Context, man *Manifest) (int, error) {
 			live[lm.Base.Key] = true
 		}
 	}
+	liveObj := map[string]bool{} // value chunks shared from older bases
+	for _, lm := range man.Logs {
+		if lm.Base != nil && lm.Base.Refs != nil {
+			for _, o := range lm.Base.chunkObjs() {
+				liveObj[o] = true
+			}
+		}
+	}
 	for _, g := range man.Garbage {
-		if g.Kind == "base" {
+		switch g.Kind {
+		case "base":
 			live[g.Key] = true
+		case "vals":
+			for _, o := range g.Objs {
+				liveObj[o] = true
+			}
 		}
 	}
 	n := 0
@@ -826,7 +948,7 @@ func (db *DB) sweepOrphans(ctx context.Context, man *Manifest) (int, error) {
 		}
 		for _, k := range keys {
 			bk, ok := baseKeyOf(k)
-			if !ok || live[bk] {
+			if !ok || live[bk] || liveObj[k] {
 				continue
 			}
 			if ep, ok := baseEpoch(bk); !ok || ep >= db.epoch {

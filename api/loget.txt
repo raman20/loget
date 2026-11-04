@@ -55,6 +55,8 @@ type BaseMeta struct {
 	Chain  string         `json:"chain"`
 	TS     int64          `json:"ts"`
 	Run    *index.RunMeta `json:"run,omitempty"`
+	Refs []ChunkRef `json:"refs,omitempty"`
+	ChunkSizes []int64 `json:"chunk_sizes,omitempty"`
 type Batch struct {
 func (b *Batch) Delete(key string) error
 func (b *Batch) Len() int
@@ -82,6 +84,10 @@ type Certificate struct {
 	TS          int64    `json:"ts"`
 	PublicKey   string   `json:"public_key"`
 	Signature   string   `json:"signature,omitempty"`
+type ChunkRef struct {
+	Key  string `json:"key"`
+	N    int    `json:"n"`
+	Size int64  `json:"size"`
 type CkptMeta struct {
 	LSN   uint64    `json:"lsn"`
 	Floor uint64    `json:"floor"`
@@ -103,6 +109,8 @@ type CompactStats struct {
 	Pending   int   `json:"pending"`
 	Pinned    int   `json:"pinned,omitempty"`
 	Expired   int   `json:"expired,omitempty"`
+	SharedChunks int   `json:"shared_chunks,omitempty"`
+	SharedBytes  int64 `json:"shared_bytes,omitempty"`
 	LogsDropped      int `json:"logs_dropped,omitempty"`
 	ReflogPruned     int `json:"reflog_pruned,omitempty"`
 	ManifestsDeleted int `json:"manifests_deleted,omitempty"`
@@ -157,7 +165,8 @@ type Garbage struct {
 	Key    string `json:"key,omitempty"`
 	Chunks int    `json:"chunks,omitempty"`
 	Pieces int    `json:"pieces,omitempty"`
-	After  int64  `json:"after"`
+	Objs  []string `json:"objs,omitempty"`
+	After int64    `json:"after"`
 type Histogram struct {
 	Counts []uint64 `json:"counts"`
 	Count  uint64   `json:"count"`
@@ -214,6 +223,7 @@ type Option func(*Options)
 func WithCheckpointBytes(n int64) Option
 func WithClock(f func() int64) Option
 func WithCommitPolicy(p CommitPolicy) Option
+func WithCompactCopyAll() Option
 func WithHolder(s string) Option
 func WithIndex(k index.Kind) Option
 func WithIndexDir(dir string) Option
@@ -231,6 +241,7 @@ func WithSnapshotEvery(n int) Option
 func WithSnapshotMaxAge(d time.Duration) Option
 func WithValueCacheBytes(n int) Option
 type Options struct {
+	CompactCopyAll bool
 	Clock func() int64
 	Rand io.Reader
 	Holder string

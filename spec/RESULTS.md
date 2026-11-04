@@ -50,6 +50,7 @@ the first run reported 32 with identical state counts.
 | LogEtIngest | bulk ingest (design 26, 2026-11-04): pieces stored beside the segment, frame committed by segment PutIfAbsent, open-time fence, fenced/crashed writers of older epochs, abort, GC with the segment, orphan sweep by epoch; 2 processes, process symmetry. CI config MaxSeq=3, MaxEpoch=3 (14,318 / 2,677 states, depth 17); `LogEtIngest_big.cfg` MaxSeq=5, MaxEpoch=4 shown | 2,480,463 | 279,519 | 27 | no error |
 | LogEtSnapshot | snapshot retention (design 27, 2026-11-04): writers append, snapshot creation (check floor and planned cut, register) and compaction planning (skip a cut below a live snapshot, record the cut, monotone) under one mutex, then commit or fail; snapshots age out (stop pinning) and are released; 3 snapshots, MaxLSN=4 | 768,903 | 151,967 | 17 | no error |
 | LogEtTTL | per-key expiry in the fold (design 27): frames with non-decreasing commit timestamps, puts with absolute expiries, reads at LSN L using TS(L), compaction to a base at any cut dropping keys expired at TS(cut); checks base+tail = full replay at every L ≥ cut and that OCC validation with the expiry rule implies the read is unchanged at commit; 2 keys, 4 frames, timestamps 0..3 | 5,085,081 | 1,833,081 | 6 | no error |
+| LogEtChunks | value chunks shared between bases (design 28): compactions sharing any subset of the current base's chunks and uploading fresh ones, crashes before commit (orphans), garbage = old refs minus new refs, due-garbage sweeps under grace, orphan sweep, readers of older manifests; checks no chunk a manifest, reader or in-flight compaction refers to is deleted; 5 chunks, 4 compactions | 9,826,032 | 2,158,748 | 15 | no error |
 
 ## Properties checked
 
@@ -150,6 +151,8 @@ the first run reported 32 with identical state counts.
 | LogEtSnapshot with creation ignoring the planned cut (`LogEtSnapshot_nocut.cfg`) | `SnapshotReadable` violated (175 distinct states, depth 6) |
 | LogEtTTL with compaction dropping keys expired at a later (wall-clock) time than TS(cut) (`LogEtTTL_wallclock.cfg`) | `BaseEqReplay` violated in 2 steps |
 | LogEtTTL with OCC validation ignoring expiries (`LogEtTTL_noexpcheck.cfg`) | `OCCSound` violated in 2 steps |
+| LogEtChunks with garbage listing all old chunks, shared ones too (`LogEtChunks_nosub.cfg`) | `NoDangling` violated in 6 steps |
+| LogEtChunks with the orphan sweep keeping only chunks the current base wrote (`LogEtChunks_byowner.cfg`) | `NoDangling` violated in 6 steps |
 | LogEtShred with `Sweep` disabled | `KeyEventuallyGone` violated |
 | LogEtShred with reads ignoring the shred marker | `ShreddedNeverRevealed` violated |
 

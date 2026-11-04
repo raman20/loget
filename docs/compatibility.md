@@ -61,7 +61,8 @@ recognise LogEt objects either.
 | written by → read by | main |
 |---|---|
 | main, uncompacted (files and journal layouts) | yes (golden `main`) |
-| main, compacted (manifest 3) | yes (golden `main-compacted`) |
+| main, compacted (manifest 3, chunk sizes; manifest 4 once a base shares chunks) | yes (golden `main-compacted`) |
+| 3ac2e00, compacted (manifest 3, before design 28) | yes (golden `3ac2e00-compacted`) |
 | d557e72 (before design 24), uncompacted, with a snapshot | yes (golden `d557e72`) |
 | d557e72, compacted (manifest 2, `.base` object) | yes (golden `d557e72-compacted`) |
 

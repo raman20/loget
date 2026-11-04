@@ -42,7 +42,9 @@ type Garbage struct {
 	Key    string `json:"key,omitempty"`
 	Chunks int    `json:"chunks,omitempty"`
 	Pieces int    `json:"pieces,omitempty"`
-	After  int64  `json:"after"`
+	// "vals" (design 28): value chunk objects, by name
+	Objs  []string `json:"objs,omitempty"`
+	After int64    `json:"after"`
 }
 
 // BaseMeta locates a log's compaction base: the full state at LSN, in
@@ -57,6 +59,40 @@ type BaseMeta struct {
 	Chain  string         `json:"chain"` // hex hash-chain head at LSN
 	TS     int64          `json:"ts"`
 	Run    *index.RunMeta `json:"run,omitempty"`
+	// Refs, if set (design 28), lists every value chunk the base's
+	// versions name: chunk number c is Refs[c-1]. Chunks of the previous
+	// base that are still mostly live are shared instead of copied, so a
+	// compaction uploads only values written since. Chunks then counts
+	// only the chunks this base wrote (Key's own).
+	Refs []ChunkRef `json:"refs,omitempty"`
+	// ChunkSizes: the size of each chunk this base wrote (design 28; lets
+	// the next compaction decide what to share without listing).
+	ChunkSizes []int64 `json:"chunk_sizes,omitempty"`
+}
+
+// ChunkRef names one value chunk object: chunk N of base Key, Size bytes.
+type ChunkRef struct {
+	Key  string `json:"key"`
+	N    int    `json:"n"`
+	Size int64  `json:"size"`
+}
+
+func (c ChunkRef) obj() string { return chunkKey(c.Key, c.N) }
+
+// chunkObjs lists the value chunk objects base b refers to.
+func (b *BaseMeta) chunkObjs() []string {
+	if b.Refs != nil {
+		o := make([]string, len(b.Refs))
+		for i, r := range b.Refs {
+			o[i] = r.obj()
+		}
+		return o
+	}
+	o := make([]string, b.Chunks)
+	for i := range o {
+		o[i] = chunkKey(b.Key, i)
+	}
+	return o
 }
 
 // LogMeta describes one log. A branch is a log whose history is its
@@ -93,13 +129,18 @@ const (
 	manifestFormat        = 1
 	manifestFormatBase    = 2
 	manifestFormatRunBase = 3
+	// manifestFormatRefs: a base shares value chunks of earlier bases
+	// (BaseMeta.Refs, design 28); a build before it would read the wrong
+	// chunk objects.
+	manifestFormatRefs = 4
+	manifestFormatMax  = manifestFormatRefs
 )
 
 // Formats describes the on-storage format versions this build reads and
 // writes (`loget version`; docs/compatibility.md).
 func Formats() string {
 	return fmt.Sprintf("manifest %d-%d, segment %d, base %s and run pieces, journal 1-%d, snapshot 2 (KV2, read only), checkpoint 1, index checkpoint %s",
-		manifestFormat, manifestFormatRunBase, format.SegVersion, baseMagic[7:], store.JournalVersion, ckptMagic[6:7])
+		manifestFormat, manifestFormatMax, format.SegVersion, baseMagic[7:], store.JournalVersion, ckptMagic[6:7])
 }
 
 func manifestKey(id uint64) string { return fmt.Sprintf("manifest/%020d.mf", id) }
@@ -130,9 +171,9 @@ func decodeManifest(b []byte) (*Manifest, error) {
 	if err := json.Unmarshal(b[:len(b)-4], &m); err != nil {
 		return nil, fmt.Errorf("%w: manifest: %v", ErrCorrupt, err)
 	}
-	if m.Format < manifestFormat || m.Format > manifestFormatRunBase {
+	if m.Format < manifestFormat || m.Format > manifestFormatMax {
 		return nil, fmt.Errorf("%w: manifest format %d (this build reads %d to %d; written by a newer loget? upgrade the binary)",
-			ErrVersion, m.Format, manifestFormat, manifestFormatRunBase)
+			ErrVersion, m.Format, manifestFormat, manifestFormatMax)
 	}
 	c := m.clone2()
 	if err := c.validate(); err != nil {
@@ -155,6 +196,8 @@ func (m *Manifest) validate() error {
 			return fmt.Errorf("log %q: base chunks %d", id, lm.Base.Chunks)
 		case lm.Base != nil && lm.Base.Run != nil && (lm.Base.Run.Len < 0 || len(lm.Base.Run.Sums) != lm.Base.Run.Pieces()):
 			return fmt.Errorf("log %q: base run of %d bytes in %d pieces", id, lm.Base.Run.Len, len(lm.Base.Run.Sums))
+		case lm.Base != nil && lm.Base.Refs != nil && !refsOK(lm.Base):
+			return fmt.Errorf("log %q: bad base chunk refs", id)
 		case lm.Ckpt != nil && lm.Ckpt.Key == "":
 			return fmt.Errorf("log %q: empty checkpoint", id)
 		}
@@ -324,4 +367,22 @@ func readBackIs(ctx context.Context, st store.Store, key string, data []byte) (b
 		err = ctx.Err()
 	}
 	return false, err
+}
+
+// refsOK: every ref names a chunk; the base's own chunks are numbered
+// 0..Chunks-1 and all listed.
+func refsOK(b *BaseMeta) bool {
+	own := 0
+	for _, r := range b.Refs {
+		if r.Key == "" || r.N < 0 || r.Size < 0 {
+			return false
+		}
+		if r.Key == b.Key {
+			if r.N >= b.Chunks {
+				return false
+			}
+			own++
+		}
+	}
+	return own == b.Chunks
 }

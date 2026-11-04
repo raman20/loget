@@ -18,6 +18,11 @@ import (
 
 // Options configure a DB. Every field has a working default.
 type Options struct {
+	// CompactCopyAll makes every compaction copy all live values into new
+	// chunks instead of sharing mostly-live chunks of the previous base
+	// (design 28). For benchmarks and tests.
+	CompactCopyAll bool
+
 	// Clock returns the commit timestamp (unix nanos). Recorded in the log,
 	// so indexes never read a clock themselves. Fake it in simulations.
 	Clock func() int64
@@ -124,6 +129,7 @@ func WithCommitPolicy(p CommitPolicy) Option { return func(o *Options) { o.Commi
 func WithSnapshotEvery(n int) Option         { return func(o *Options) { o.SnapshotEvery = n } }
 func WithCheckpointBytes(n int64) Option     { return func(o *Options) { o.CheckpointBytes = n } }
 func WithLogf(f func(string, ...any)) Option { return func(o *Options) { o.Logf = f } }
+func WithCompactCopyAll() Option             { return func(o *Options) { o.CompactCopyAll = true } }
 func WithInlineMax(n int) Option             { return func(o *Options) { o.InlineMax = n } }
 func WithValueCacheBytes(n int) Option       { return func(o *Options) { o.ValueCacheBytes = n } }
 func WithRepairTail(on bool) Option          { return func(o *Options) { o.RepairTail = on } }

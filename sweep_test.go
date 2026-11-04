@@ -2,6 +2,7 @@ package loget
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -103,7 +104,7 @@ func TestSweepStopsAfterCrash(t *testing.T) {
 func TestWithoutGarbage(t *testing.T) {
 	a, b := Garbage{Kind: "segs", Log: "L1", Below: 3}, Garbage{Kind: "base", Key: "k"}
 	got := withoutGarbage([]Garbage{a, b, a}, []Garbage{a})
-	if len(got) != 2 || got[0] != b || got[1] != a {
+	if len(got) != 2 || !reflect.DeepEqual(got[0], b) || !reflect.DeepEqual(got[1], a) {
 		t.Fatalf("%v", got)
 	}
 }

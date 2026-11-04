@@ -35,7 +35,14 @@ type pfReq struct {
 // valuePos returns where a referenced value is stored.
 func (db *DB) valuePos(x *logState, seq uint64, ver index.Version) (vcKey, string) {
 	if ver.Chunk != 0 { // in a compaction base's value chunk (x is the based log)
-		return vcKey{x.meta.Base.Key, 1<<63 | uint64(ver.Chunk), ver.Off}, chunkKey(x.meta.Base.Key, int(ver.Chunk-1))
+		b := x.meta.Base
+		if b.Refs != nil && int(ver.Chunk) <= len(b.Refs) {
+			// named by the object, so cached values survive a compaction
+			// that shares the chunk
+			r := b.Refs[ver.Chunk-1]
+			return vcKey{r.Key, 1<<63 | uint64(r.N+1), ver.Off}, r.obj()
+		}
+		return vcKey{b.Key, 1<<63 | uint64(ver.Chunk), ver.Off}, chunkKey(b.Key, int(ver.Chunk-1))
 	}
 	return vcKey{x.meta.ID, seq, ver.Off}, segKey(x.meta.ID, seq)
 }

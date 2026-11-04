@@ -54,6 +54,9 @@ func crashChild(loc string) {
 	}
 	var mu sync.Mutex
 	var wg sync.WaitGroup
+	if os.Getenv("LOGET_CRASH_SMALLCHUNKS") != "" {
+		chunkMax = 2 << 10 // many value chunks: compactions share and copy some
+	}
 	if os.Getenv("LOGET_CRASH_COMPACT") != "" {
 		go func() { // compaction racing the commits: SIGKILL lands mid-compaction too
 			for {
@@ -144,6 +147,11 @@ func TestCrashKill9Journal(t *testing.T) { crashKill9(t, "journal://"+t.TempDir(
 // Same, with the child compacting (grace 0) in a loop while it commits.
 func TestCrashKill9Compact(t *testing.T) {
 	crashKill9(t, "fs://"+t.TempDir(), "LOGET_CRASH_COMPACT=1")
+}
+// Design 28: kills while compactions share value chunks of the previous
+// base, copy the rest and list the dead ones as garbage.
+func TestCrashKill9CompactShared(t *testing.T) {
+	crashKill9(t, "fs://"+t.TempDir(), "LOGET_CRASH_COMPACT=1", "LOGET_CRASH_SMALLCHUNKS=1")
 }
 func TestCrashKill9CompactJournal(t *testing.T) {
 	crashKill9(t, "journal://"+t.TempDir(), "LOGET_CRASH_COMPACT=1")
