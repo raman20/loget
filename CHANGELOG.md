@@ -7,6 +7,11 @@ break APIs and the on-storage format.
 
 ## [Unreleased]
 
+### Docs (2026-11-04)
+
+- README, website and docs brought to the current KV state (roadmap items
+  1–4 done) with the 10M-key numbers against Pebble and the remaining gaps.
+
 ### Changed (KV item 6 part: shared value chunks, faster scans, design 28, 2026-11-04)
 
 - Compaction keeps value chunks of the previous base that are at least

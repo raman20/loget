@@ -35,6 +35,11 @@ LogEt's predecessor, and are kept as they were apart from the rename.
 | [design/21-disk-key-index.md](design/21-disk-key-index.md) | design: the KV key index in memory-mapped run files |
 | [design/22-range-reads.md](design/22-range-reads.md) | design: range reads and iterators |
 | [design/23-compaction-memory.md](design/23-compaction-memory.md) | design: streamed compaction bases, batched journal deletes, bounded OCC window |
+| [design/24-open-checkpoints.md](design/24-open-checkpoints.md) | design: open from index checkpoints, bases as run pieces |
+| [design/25-memory.md](design/25-memory.md) | design: memory at 10M keys, bounded index mode, open time |
+| [design/26-batch-ingest.md](design/26-batch-ingest.md) | design: batches and sorted bulk ingest |
+| [design/27-ttl-snapshots.md](design/27-ttl-snapshots.md) | design: deterministic per-key TTL, snapshot handles |
+| [design/28-incremental-compaction.md](design/28-incremental-compaction.md) | design: value chunks shared across compactions, batched scan reads |
 | [components/log.md](components/log.md), [components/kv.md](components/kv.md) | component reviews: the log, the KV index |
 | [design-principles.md](design-principles.md) | why one log, and what we refuse to build |
 | [design/01-journal-default.md](design/01-journal-default.md) | design: journal as the default local layout, migration |

@@ -23,6 +23,26 @@ hand.
 > not on `main`. "v0.1.0" below is freshDB v0.1.0. New KV measurements
 > (vs Pebble) land with each [ROADMAP](ROADMAP.md) item.
 
+## Current KV vs Pebble, 10M keys × 100 B (LogEt, 2026-11-01 to 2026-11-04)
+
+Same box, single runs, from the result directories named in
+[STATUS.md](STATUS.md) rows G–N:
+
+| | LogEt | Pebble |
+|---|---:|---:|
+| YCSB C, 8 clients | 1.65M ops/s | 0.20M ops/s |
+| peak RSS (load + C + A) | 557 MiB | 737 MiB |
+| steady RSS after the run | 490 MiB (274 bounded mode) | 52 MiB |
+| open | 1.97–2.19 s | < 0.2 s |
+| full iterator scan | 1.54M keys/s | 7.28M keys/s |
+| sorted bulk ingest | 1.45M keys/s, 172 MiB | 3.96M keys/s, 46 MiB |
+| batches of 1,000 | 335k keys/s | 2.09M keys/s |
+| compaction after 1% churn | 6.7 s, 213 MiB written | incremental, background |
+
+LogEt loses on steady memory, open time, scans, bulk writes and
+compaction work (the key run is rewritten whole). Nothing has been run on
+AWS S3, R2 or a real deployment.
+
 The sections from **Summary** on are the freshDB v0.1.0 run; see
 **Changes since v0.1.0** for later reruns. These numbers show where the
 design is fast and where it is slow. They are not a claim of production

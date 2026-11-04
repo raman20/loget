@@ -20,11 +20,11 @@ runs, not performance claims.
 
 | # | gap | LogEt today | Pebble / RocksDB / LMDB | impact |
 |---|---|---|---|---|
-| 1 | **Key index mostly in RAM → mapped run files (design 21)** | runs of ≥ 1 MiB live in unlinked, memory-mapped files (file-backed, reclaimable pages); the hot set, small runs and block offsets stay on the heap. 10M × 100 B YCSB: peak RSS 3,546 → 1,916 MiB, end 920 MiB of which 319 MiB file-backed; 1M × 1 KiB: 958 → 640 MiB peak. Open loads the newest index checkpoint (design 24): 3.4 s at 10M keys, 26–28 s replaying | Pebble 740 MiB peak, 53 MiB end at 10M; opens in under 0.2 s | design 25 (2026-11-04): OCC window bounded (item 6), 32 MiB value cache on local stores, merges drop consumed pages, open 3.4 → 2.0 s; 10M peak 557 MiB (Pebble 737), end 512 MiB mapped / 274 MiB with opt-in `IndexResidentBytes` (Pebble 52). Remaining: no hard bound (pread + block cache not built), ~150 MiB Go heap, open ~10× Pebble |
-| 2 | **Range reads → iterators (design 22)** | `Tx.Iter` with prefix and `[start, end)` bounds, reverse, limit, `After` pagination (HTTP `after=` / `Loget-Next-After`), paged under the read lock so memory stays bounded; OCC conflicts cover only the returned range. Full iterator scan at 10M × 100 B: 498k keys/s, no growth over the resident index (before: 207k keys/s via the slice API, heap peak 4.8 GiB); 100-key prefix scan 6.2k/s at c=1 | Pebble 7.2M keys/s full scan, 39k/s prefix100 at c=1, flat 163 MiB RSS; a live iterator can `SeekGE`/`SeekLT` | values read in coalesced batches per page since design 28 (10M full scan 1.54M keys/s), still 3–5× slower than Pebble; no seek on a live iterator (open a new one with `Start`/`After`) |
-| 3 | **Batches and bulk load** | every write is an OCC transaction (`Update`, auto-retry); one segment and one `fdatasync` per group commit; index ingest 2.0–2.9 µs/key | Pebble `Batch`/`IndexedBatch`, SST ingestion; RocksDB `WriteBatch`, `IngestExternalFile`; LMDB `MDB_APPEND` | no write-only fast path; no bulk import; no per-write durability choice |
-| 4 | **Compaction** | whole-log: writes a base image of live data per log, then deletes garbage after a grace period. Commits pause 11–14 ms; branch operations wait for the whole run; journal file shrinks only offline | Pebble/RocksDB: leveled, incremental, in the background without commit pauses. LMDB: copy-on-write with a free list, no compaction | pauses and O(live data) rewrites per run |
-| 5 | **Open / recovery time** | loads the newest index checkpoint (stored runs, written in the background every 512 MiB of segments and at close; design 24) and replays the tail: 10M keys 3.4 s / 580 MiB peak (full replay 26–28 s); still O(index size): pieces are copied and hash slots rebuilt | replay the WAL into a memtable only | open time grows with the index; after a crash, the tail since the last checkpoint is replayed |
+| 1 | **Key index in mapped run files (designs 21, 25)** | done: runs of ≥ 1 MiB live in unlinked, memory-mapped files; hot set, small runs and block offsets on the heap. 10M × 100 B YCSB C+A: peak RSS 557 MiB (Pebble 737), end 490 MiB mapped / 274 MiB with `IndexResidentBytes` (Pebble 52) | Pebble 737 MiB peak, 52 MiB steady at 10M | steady memory still ~5–10× Pebble (no pread + block cache) |
+| 2 | **Iterators (designs 22, 28)** | done: `Tx.Iter` with prefix, `[start, end)`, reverse, limit, `After` pagination; values read in coalesced parallel batches per page (design 28). Full scan 10M × 100 B: 1.54M keys/s (606k before batching), 2.56M after compaction | Pebble 7.28M keys/s full scan; seek on a live iterator | scans 3–5× slower than Pebble; no seek on a live iterator |
+| 3 | **Batches and bulk ingest (design 26)** | done: `Batch`/`Apply` (atomic, no OCC), sorted `Ingest` as one commit. 10M × 100 B fsync: ingest 1.45M keys/s / 172 MiB peak, batches of 1,000 335k keys/s | Pebble SST ingest 3.96M keys/s / 46 MiB; batches 2.09M keys/s | ingest 2.7× and batches 6× slower; commits wait during an ingest |
+| 4 | **Compaction (designs 23, 28)** | whole-log fold into a base, streamed; value chunks ≥ ½ live are shared between bases instead of copied (design 28): 10M × 100 B with 1% churn 26–27 s → 6.7 s, 1,158 → 213 MiB written. The key run is still rewritten whole each time; peak RSS 1.4–1.9 GiB; commits pause 11–14 ms | Pebble/RocksDB: leveled, incremental, in the background without commit pauses. LMDB: copy-on-write with a free list | O(keys) work and memory per compaction; short commit pauses |
+| 5 | **Open / recovery time (designs 24, 25)** | loads the newest index checkpoint (stored runs) and replays the tail: 10M keys 1.97–2.19 s (full replay 26–28 s); still O(index size) | Pebble opens in under 0.2 s | ~10× Pebble; grows with the index |
 | 6 | **Snapshot lifetime** | time travel to any LSN and zero-copy branches (stronger than all three); snapshot handles pin compaction for up to `SnapshotMaxAge` (design 27), else history below each branch head is dropped (`410`) (checkpoints and bases are stored in ≤ 64 MiB pieces since design 24) | Pebble/RocksDB: in-memory snapshot handles pin versions until released; LMDB: a read txn pins pages | readers longer than `SnapshotMaxAge` get `ErrSnapshotTooOld` |
 | 7 | **TTL** | per-key TTL, deterministic (design 27) | RocksDB: TTL DB / compaction filters; Pebble and LMDB: none built in | expired data is freed only by compaction; no HTTP TTL |
 | 8 | **Compression** | key runs are front-coded; values are not compressed | per-block Snappy/Zstd/LZ4 (Pebble, RocksDB); LMDB none | larger disk and object-store footprint |
@@ -46,10 +46,10 @@ Nothing else is added to `main` meanwhile.
    cache if page-cache residency proves a problem (design 21 option C).
 2. **Range scans and iterators**: done (design 22): `Tx.Iter` with
    prefix/`[start, end)`, reverse, limits and `After` pagination, paged
-   over the hot set and runs; HTTP pagination. Full iterator scans 2.4x
-   faster than before with memory bounded by a page; still 4-15x slower
-   than Pebble (one value open per key). Left: value readahead, seek on a
-   live iterator.
+   over the hot set and runs; HTTP pagination. Design 28 batches a page's
+   value reads: 10M full scan 606k → 1.54M keys/s, still 3–5× slower
+   than Pebble (7.28M). Left: seek on a live iterator, faster scans of
+   randomly loaded values.
 3. **Batch and transaction API**: done (design 26): `Batch`/`Apply` with
    size limits checked at add time, `POST /v1/batch`, and sorted bulk
    `Ingest` as one commit (10M keys: 1.45M keys/s, 172 MiB peak vs Pebble
@@ -82,7 +82,9 @@ Nothing else is added to `main` meanwhile.
    chunks, short commit pause.
 
 Also open for KV, no order yet: tests on AWS S3 and Cloudflare R2 (only
-MinIO is tested), online journal shrink, value compression.
+MinIO is tested; no real-world deployment yet), online journal shrink,
+value compression. There is no replication or HA: one writer per
+database (read replicas are listed under "Later").
 
 ## After KV
 

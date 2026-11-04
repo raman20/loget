@@ -32,9 +32,10 @@ provable deletion. More indexes come one at a time.
 > [!WARNING]
 > **Pre-1.0 and unreleased. Do not use it in production.** No LogEt
 > version has been tagged. The log, transactions, branches and shred are
-> model-checked and simulation-tested, but the KV index still keeps every
-> key in RAM, only MinIO is tested among object stores, and the on-disk
-> format may change before 1.0. Gaps by area:
+> model-checked and simulation-tested, but steady memory is still ~5–10×
+> Pebble's, full scans are 3–5× slower, only MinIO is tested among object
+> stores (no real-world deployment), there is no replication, and the
+> on-disk format may change before 1.0. Gaps by area:
 > [docs/PRODUCTION_READINESS.md](docs/PRODUCTION_READINESS.md).
 
 ---
@@ -240,8 +241,11 @@ flowchart LR
   writer stops with `ErrFenced`.
 - **Indexes** are pure folds over `redact(log, shredded)`; a test enforces
   that index code imports nothing that could observe the outside world.
-- **Compaction** writes a base image of live records per log and deletes
-  replaced segments after a grace period; `gc` keeps a time-travel window.
+- **Compaction** folds a log into a base (a key run in pieces plus value
+  chunks; chunks still mostly live are shared with the next base, not
+  copied) and deletes replaced objects after a grace period; `gc` keeps a
+  time-travel window. Open loads the newest index checkpoint and replays
+  only the tail.
 
 More: [architecture](docs/architecture.md), [formats](docs/formats.md).
 
@@ -294,43 +298,55 @@ spec/get_tla.sh && TLA_JAR=~/tla/tla2tools.jar spec/run_tlc.sh
 > [bench/results](bench/results/). These runs were made on freshDB, before
 > the rename, with the same KV write and read path.
 
-YCSB, 1M × 1 KiB records, zipfian, fsync on, ops/s
-([`2026-10-28-read-path/`](bench/results/2026-10-28-read-path/); other
-engines from [`2026-10-27/`](bench/results/2026-10-27/)):
+**KV against Pebble at 10M keys × 100 B** (same box, single runs; LogEt with its key
+index in mapped run files; per-item sources in [docs/STATUS.md](docs/STATUS.md)
+and [bench/results](bench/results/)):
+
+| | LogEt | Pebble | |
+|---|---:|---:|---|
+| YCSB C (read-only), 8 clients | **1.65M ops/s** | 0.20M ops/s | LogEt ahead while the index pages are resident |
+| Peak RSS (load + C + A) | **557 MiB** | 737 MiB | |
+| Steady RSS after the run | 490 MiB (274 bounded mode) | **52 MiB** | LogEt ~5–10× worse |
+| Open | 1.97–2.19 s | **< 0.2 s** | ~10× worse |
+| Full scan (iterator) | 1.54M keys/s | **7.28M keys/s** | 3–5× slower |
+| Bulk ingest (sorted) | 1.45M keys/s, 172 MiB | **3.96M keys/s, 46 MiB** | 2.7× slower |
+| Batches of 1,000 | 335k keys/s | **2.09M keys/s** | 6× slower |
+| Compaction, 1% churn | 6.7 s, 213 MiB written | background, incremental | LogEt rewrites the whole key run each time |
+
+Older YCSB at 1M × 1 KiB (zipfian, fsync on, ops/s, made on freshDB before
+the rename; [`2026-10-28-read-path/`](bench/results/2026-10-28-read-path/),
+[`2026-10-27/`](bench/results/2026-10-27/)):
 
 | | LogEt | Badger | Pebble | bbolt | SQLite |
 |---|---:|---:|---:|---:|---:|
 | C (read-only), 8 clients | **1.83M** | 261k | 197k | 752k | 37k |
-| B (95% read), 64 clients | **1.15M** | 159k | 194k | 242k | 34k |
-| A (50% update), 1 client | **46k** | 19k | 32k | 22k | 9.3k |
 | A (50% update), 64 clients | **231k** | 25k | 119k | 24k | 13k |
-| F (read-modify-write), 64 clients | **131k** | 28k | 81k | 22k | 8.9k |
 | Peak RSS | 1.55 GiB | 3.5 GiB | 0.7 GiB | 1.7 GiB | **0.3 GiB** |
 
-**Where LogEt loses, and why it is next on the list:**
-
-- **Memory.** Every key and version is indexed in RAM. Pebble's 0.7 GiB
-  is only its bulk-load peak; it then holds ~0.09 GiB and relies on the
-  OS page cache. The compressed key runs that followed cut the index heap
-  to ~30 B/key at 10M keys (from 172), but the database is still capped
-  by RAM. A disk-backed key index is roadmap item 1.
-- **Range reads** are prefix-only and materialise the whole result.
-- **Compaction** pauses commits (11–14 ms) and rewrites all live data.
+**Where LogEt still loses:** steady memory (the mapped index pages and
+the Go heap stay resident; Pebble relies on the page cache), open time
+(the checkpoint is O(index)), full scans, bulk writes, and compaction work
+that is still O(keys) (the key run is rewritten whole; only value chunks
+are shared). Point reads lead only while the index fits in memory.
 
 The full list, ordered by impact against Pebble, RocksDB and LMDB, is in
 [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Status
 
-**Done** (per-item numbers in [docs/STATUS.md](docs/STATUS.md)): journal
-layout by default, off-heap value cache, compaction and GC with
-retention windows, compressed key runs, online backup/restore and
-point-in-time restore, metrics and structured logs, scoped bearer tokens
-and TLS, S3 fault injection, format versioning with golden files, a 6 h
-soak, and the generic index framework.
+**Done** (per-item numbers in [docs/STATUS.md](docs/STATUS.md)): KV
+roadmap items 1–4: key index in memory-mapped run files, iterators with
+batched value reads, batches and sorted bulk ingest, open from index
+checkpoints, memory work at 10M keys, per-key TTL and snapshot handles,
+value chunks shared across compactions. Earlier: journal layout, off-heap
+value cache, compaction and GC with retention windows, online
+backup/restore and point-in-time restore, metrics, scoped tokens and TLS,
+S3 fault injection, format versioning with golden files, a 6 h soak, the
+index framework.
 
-**Not done:** larger-than-RAM keys, range iterators, bulk load, TTL,
-incremental compaction, testing on AWS S3 or R2, KMS clients, HA. See
+**Not done:** compaction that avoids rewriting the whole key run, steady
+memory and open time close to Pebble, faster scans, testing on AWS S3 or
+R2 or any real-world deployment, replication/HA, KMS clients. See
 [docs/ROADMAP.md](docs/ROADMAP.md).
 
 ## Deployment notes
@@ -373,9 +389,7 @@ examples/  tour, counter index, agent demo
 bench/     loget-bench suite (separate module) + results
 ```
 
-*Lineage: LogEt evolved from freshDB (github.com/raman20/freshdb, last
-commit 5a08052), which began as a rewrite of an earlier prototype called
-goli. History was restarted at the rename; see [docs/rebrand/](docs/rebrand/).*
+*LogEt succeeds freshDB (this repository was freshDB until the rename; see [docs/rebrand/](docs/rebrand/)).*
 
 ## License
 

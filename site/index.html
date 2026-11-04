@@ -28,7 +28,7 @@
     <p class="eyebrow">Open source · Apache-2.0 · Go · pre-1.0, unreleased</p>
     <h1>One log.<br><span class="grad">Different indexes over it.</span></h1>
     <p class="lede"><strong>LogEt</strong> is Danish and Norwegian for <em>“the log”</em>, and <em>“et”</em> also means <em>“one”</em>. Everything is stored once, in one append-only log on a local disk or in an S3 bucket. An <strong>index</strong> is a pure fold over that log. The first one is <strong>KV</strong>, and every index gets transactions, branches, time travel and provable deletion from the log.</p>
-    <p class="banner"><b>Pre-1.0 and unreleased — not for production.</b> The log, transactions and shred are model-checked and simulation-tested. KV still keeps every key in RAM, only MinIO is tested among object stores, and the format may change before 1.0. <a href="https://github.com/raman20/loget/blob/main/docs/PRODUCTION_READINESS.md">Readiness per area</a>.</p>
+    <p class="banner"><b>Pre-1.0 and unreleased — not for production.</b> The log, transactions and shred are model-checked and simulation-tested. Steady memory is still ~5–10× Pebble’s, full scans 3–5× slower, open ~10× slower; only MinIO is tested among object stores, there is no replication, and the format may change before 1.0.</p>
     <div class="cta">
       <a class="btn primary" href="https://github.com/raman20/loget">View on GitHub</a>
       <a class="btn" href="#install">Install</a>
@@ -114,19 +114,22 @@ db.Update(ctx, <span class="k">func</span>(tx *loget.Tx) error {
 <section class="band" id="benchmarks">
   <div class="wrap">
   <h2>Benchmarks, caveats first</h2>
-  <p class="sub">Single runs on one shared, noisy 8-vCPU VM; engines embedded in one Go process; fsync on. Measured on freshDB, LogEt's predecessor, with the same KV path. Not a performance claim. <a href="https://github.com/raman20/loget/blob/main/docs/benchmarks.md">Method and raw data →</a></p>
+  <p class="sub">Single runs on one shared, noisy 8-vCPU VM; engines embedded in one Go process. Not a performance claim. <a href="https://github.com/raman20/loget/blob/main/docs/benchmarks.md">Method and raw data</a>.</p>
   <div class="tblwrap"><table class="tbl">
-    <tr><th>YCSB, 1M × 1 KiB, ops/s</th><th class="n">LogEt</th><th class="n">Pebble</th><th class="n">bbolt</th><th class="n">Badger</th><th class="n">SQLite</th></tr>
-    <tr><td>C read-only, 8 clients</td><td class="n">1.83M</td><td class="n">197k</td><td class="n">752k</td><td class="n">261k</td><td class="n">37k</td></tr>
-    <tr><td>B 95% read, 64 clients</td><td class="n">1.15M</td><td class="n">194k</td><td class="n">242k</td><td class="n">159k</td><td class="n">34k</td></tr>
-    <tr><td>A 50% update, 1 client</td><td class="n">46k</td><td class="n">32k</td><td class="n">22k</td><td class="n">19k</td><td class="n">9.3k</td></tr>
-    <tr><td>A 50% update, 64 clients</td><td class="n">231k</td><td class="n">119k</td><td class="n">24k</td><td class="n">25k</td><td class="n">13k</td></tr>
-    <tr><td>F read-modify-write, 64 clients</td><td class="n">131k</td><td class="n">81k</td><td class="n">22k</td><td class="n">28k</td><td class="n">8.9k</td></tr>
-    <tr><td>Peak RSS</td><td class="n">1.55 GiB</td><td class="n">0.7 GiB</td><td class="n">1.7 GiB</td><td class="n">3.5 GiB</td><td class="n">0.3 GiB</td></tr>
+    <tr><th>KV, 10M keys × 100 B</th><th class="n">LogEt</th><th class="n">Pebble</th><th>verdict</th></tr>
+    <tr><td>YCSB C read-only, 8 clients</td><td class="n">1.65M ops/s</td><td class="n">0.20M ops/s</td><td>LogEt ahead while index pages are resident</td></tr>
+    <tr><td>Peak RSS (load + C + A)</td><td class="n">557 MiB</td><td class="n">737 MiB</td><td>LogEt lower</td></tr>
+    <tr><td>Steady RSS after the run</td><td class="n">490 MiB (274 bounded)</td><td class="n">52 MiB</td><td>Pebble ~5–10× lower</td></tr>
+    <tr><td>Open</td><td class="n">1.97–2.19 s</td><td class="n">&lt; 0.2 s</td><td>Pebble ~10× faster</td></tr>
+    <tr><td>Full scan (iterator)</td><td class="n">1.54M keys/s</td><td class="n">7.28M keys/s</td><td>Pebble 3–5× faster</td></tr>
+    <tr><td>Sorted bulk ingest</td><td class="n">1.45M keys/s</td><td class="n">3.96M keys/s</td><td>Pebble 2.7× faster</td></tr>
+    <tr><td>Batches of 1,000 puts</td><td class="n">335k keys/s</td><td class="n">2.09M keys/s</td><td>Pebble 6× faster</td></tr>
+    <tr><td>Compaction after 1% churn</td><td class="n">6.7 s, 213 MiB written</td><td class="n">incremental, background</td><td>LogEt still rewrites the whole key run</td></tr>
   </table></div>
+  <p class="note">Older YCSB at 1M × 1 KiB (freshDB, before the rename), ops/s, C read-only 8 clients: LogEt 1.83M, Pebble 197k, bbolt 752k, Badger 261k, SQLite 37k; A 50% update 64 clients: 231k, 119k, 24k, 25k, 13k.</p>
   <div class="split" style="margin-top:22px">
-    <div class="card"><span class="tag ok">Where it does well</span><p>Reads while the key index fits in RAM, durable single-client writes on the journal layout (one <code>write</code> + <code>fdatasync</code> per commit), and concurrent writers through group commit. No read-modify-write gave up.</p></div>
-    <div class="card"><span class="tag bad">Where it loses</span><p>Memory: every key and version is indexed in RAM (~30 B/key heap at 10M keys); Pebble holds ~0.09 GiB after its load and leans on the page cache. Range reads are prefix-only. Compaction pauses commits for 11–14 ms. These are the next items on the roadmap.</p></div>
+    <div class="card"><span class="tag ok">Where it does well</span><p>Point reads while the key index pages are resident; lower peak memory than Pebble during a 10M-key load and YCSB run; durable single-client writes on the journal layout; branches, time travel and shred that the others do not have.</p></div>
+    <div class="card"><span class="tag bad">Where it loses</span><p>Steady memory (mapped index pages and the Go heap stay resident), open time (the checkpoint load is O(index)), full scans, bulk writes, and compaction work that is O(keys): value chunks are shared between bases, but the key run is rewritten whole.</p></div>
   </div>
   </div>
 </section>
@@ -152,9 +155,9 @@ db.Update(ctx, <span class="k">func</span>(tx *loget.Tx) error {
     <p class="sub">Pre-1.0 and unreleased. Please don't put real personal data in it yet.</p>
     <div class="split">
       <ul class="lim">
-        <li><b>KV gaps, by impact:</b> the key index is in RAM; prefix scans only (no bounded or reverse iterators); no bulk load; compaction pauses commits and rewrites live data; no TTL; no value compression.</li>
+        <li><b>KV gaps, by impact:</b> steady memory ~5–10× Pebble; open ~10× slower; full scans 3–5× slower; compaction rewrites the whole key run each time and pauses commits briefly; no value compression.</li>
         <li>One writer per database, no HA, no replicas.</li>
-        <li>Only MinIO is tested (with fault injection). Run <code>loget s3check</code> before trying AWS S3 or R2.</li>
+        <li>Only MinIO is tested (with fault injection); nothing on AWS S3, R2 or a real-world deployment yet. Run <code>loget s3check</code> first.</li>
       </ul>
       <ul class="lim">
         <li>Keys and values without a subject are plaintext and are not covered by shred. In dev-key mode the key lives next to the data. Backups taken before a shred can still decrypt it.</li>
@@ -167,22 +170,22 @@ db.Update(ctx, <span class="k">func</span>(tx *loget.Tx) error {
 </section>
 
 <section class="wrap" id="roadmap">
-  <h2>Next: perfect KV, one measured item at a time</h2>
-  <p class="sub">Each with a design note, tests, a before/after benchmark against Pebble, and docs.</p>
+  <h2>KV: done so far, and next</h2>
+  <p class="sub">Each item had a design note, tests, a before/after benchmark against Pebble, and docs.</p>
   <div class="road">
-    <div><b>1. Disk-backed key index</b><br>databases larger than RAM</div>
-    <div><b>2. Range scans</b><br>bounded, reverse, streaming iterators</div>
-    <div><b>3. Batch API</b><br>write-only batches, bulk load</div>
-    <div><b>4. TTL</b><br>expiry as a pure function of the log</div>
-    <div><b>5. Snapshots</b><br>pinned handles compaction respects</div>
-    <div><b>6. Compaction</b><br>incremental, without a commit pause</div>
+    <div><b>1. Key index on disk</b><br>done: mapped run files, open from checkpoints</div>
+    <div><b>2. Iterators</b><br>done: bounded, reverse, batched value reads</div>
+    <div><b>3. Batches, bulk ingest</b><br>done</div>
+    <div><b>4. TTL, snapshot handles</b><br>done: expiry as a pure function of the log</div>
+    <div><b>5. Shared value chunks</b><br>done: compaction no longer copies every value</div>
+    <div><b>Next</b><br>key-run compaction, steady memory, open time, scans, S3 tests</div>
   </div>
   <p class="note">Then the indexes on the <a href="https://github.com/raman20/loget/blob/main/docs/PIPELINE.md">pipeline</a>: topics, documents, cross-index transactions, vectors, full-text, lakehouse export.</p>
 </section>
 
 <footer class="foot">
   <div class="wrap foot-in">
-    <span>LogEt · Apache-2.0 · pre-1.0 · evolved from freshDB</span>
+    <span>LogEt · Apache-2.0 · pre-1.0 · LogEt succeeds freshDB</span>
     <span><a href="https://github.com/raman20/loget">GitHub</a> · <a href="https://github.com/raman20/loget/blob/main/docs/index.md">Docs</a> · <a href="https://github.com/raman20/loget/blob/main/CHANGELOG.md">Changelog</a> · <a href="https://pkg.go.dev/github.com/raman20/loget">Go docs</a> · <a href="https://github.com/raman20/loget/blob/main/SECURITY.md">Security</a></span>
   </div>
 </footer>

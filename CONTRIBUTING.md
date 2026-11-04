@@ -45,7 +45,8 @@ LogEt is a database, so changes to its core carry a higher bar:
 | an index | keep `index == fold(log)` and `DropSubject == fold(redacted)`; property tests in `index/` |
 | writer, recovery, fencing, branches, shred | run the simulator with more seeds: `go test ./sim -run TestSimulation -seeds=5000` |
 | the protocol (what is written to storage, and when) | update the TLA+ spec in `spec/`, run `spec/run_tlc.sh`, update `spec/RESULTS.md` |
-| the on-storage format | update `docs/formats.md`, bump the version, add a CHANGELOG entry |
+| the on-storage format | update `docs/formats.md`, bump the version, keep the previous golden data readable ([compatibility](docs/compatibility.md)), add a CHANGELOG entry |
+| the exported API | run `scripts/api-surface.sh` and commit `api/` |
 
 When the simulator finds a failure, it prints the seed. Reproduce it with
 `go test ./sim -run TestSimulation -seed=N`. Please put the seed in your issue or PR.

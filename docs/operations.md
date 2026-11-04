@@ -333,7 +333,8 @@ What you give up:
 - `log` and `verify` start at the base (the base records the hash-chain head,
   so the chain still verifies from there).
 
-There is no TTL (roadmap item 4). Values of a subject
+Keys written with `TTL(d)` / `ExpiresAt(t)` are dropped by the first
+compaction whose cut timestamp is past their expiry (design 27). Values of a subject
 shredded after the last compaction are dropped by the next one.
 
 Disk space: on the files layout and S3, replaced objects are deleted. In the
@@ -347,7 +348,11 @@ Measured (`loget-bench compact`, 10k keys × 1 KiB overwritten 50 times:
 [benchmarks](benchmarks.md)): journal 504 → 34 MiB allocated and open
 1.6 s → 30 ms; files layout 5,004 files → 9. Commits pause while the new
 manifest is installed (11–14 ms with ~2,700 deletes, `BenchmarkCompactSweepPause`);
-branch operations wait for the whole run. `compact` never deletes
+branch operations wait for the whole run. Since design 28 a compaction
+keeps value chunks of the previous base that are at least half live
+instead of copying them (10M × 100 B, 1% churn: 26–27 s → 6.7 s, 1,158 →
+213 MiB written); the key run is still rewritten whole, so work and peak
+memory (1.4–1.9 GiB at 10M keys) stay O(keys). `compact` never deletes
 manifests or retired logs; use `gc` for that.
 
 ## GC and retention
