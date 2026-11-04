@@ -111,6 +111,12 @@ func (tx *Tx) get(space, key string) ([]byte, error) {
 // the log when the index keeps only their position, and decrypts subject
 // data. Shredded data is indistinguishable from absent (ErrNotFound).
 func (tx *Tx) open(ver index.Version, space, key string) ([]byte, error) {
+	return tx.openWith(ver, space, key, nil)
+}
+
+// openWith is open with the stored bytes already read (by an iterator's
+// prefetch, checked against ver.Sum and owned), or nil to read them.
+func (tx *Tx) openWith(ver index.Version, space, key string, raw []byte) ([]byte, error) {
 	val, owned := ver.Val, false // ver.Val is shared index state
 	var logID string
 	if ver.Ref() || ver.Subject != "" {
@@ -119,7 +125,9 @@ func (tx *Tx) open(ver index.Version, space, key string) ([]byte, error) {
 			return nil, fmt.Errorf("%w: LSN %d of %s/%s not in the log", ErrCorrupt, ver.LSN, space, key)
 		}
 		logID = x.meta.ID
-		if ver.Ref() {
+		if ver.Ref() && raw != nil {
+			val, owned = raw, true
+		} else if ver.Ref() {
 			var err error
 			if val, err = tx.db.readValue(x, seq, ver); err != nil {
 				return nil, err

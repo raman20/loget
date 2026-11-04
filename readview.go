@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/raman20/loget/store"
 	"sync"
 	"time"
 )
@@ -52,6 +53,18 @@ type snapRegistry struct {
 
 // Snapshot creates a read view of the branch.
 func (b *Branch) Snapshot(ctx context.Context, o SnapshotOptions) (*Snapshot, error) {
+	for try := 0; ; try++ {
+		s, err := b.snapshot(ctx, o)
+		// The segment holding At's frame may have been replaced by a base
+		// (and deleted, with no grace) since the log state was read: look
+		// again at the current one.
+		if err == nil || try >= 3 || !errors.Is(err, store.ErrNotFound) {
+			return s, err
+		}
+	}
+}
+
+func (b *Branch) snapshot(ctx context.Context, o SnapshotOptions) (*Snapshot, error) {
 	w, err := b.db.branchWriter(b.name)
 	if err != nil {
 		return nil, err
@@ -142,21 +155,33 @@ func (s *Snapshot) check(l *logState) error {
 
 // View runs a read-only transaction on the snapshot. Iterators opened in
 // fn read the same view; fn may run concurrently with other View calls.
+// If fn fails while a compaction replaced the branch's view (objects the
+// old view pointed at may be gone after a zero grace period), fn is run
+// again on the new view, at the same LSN and read time: like Update's fn,
+// it must be free of side effects.
 func (s *Snapshot) View(ctx context.Context, fn func(*Tx) error) error {
-	w, err := s.db.branchWriter(s.branch)
-	if err != nil {
-		return err
+	for try := 0; ; try++ {
+		w, err := s.db.branchWriter(s.branch)
+		if err != nil {
+			return err
+		}
+		if err := s.check(w.l); err != nil {
+			return err
+		}
+		tx := &Tx{db: s.db, v: w.v, at: s.at, lazyCtx: ctx, lazyLog: w.l, now: s.now, nowOK: true}
+		ferr := fn(tx)
+		// A compaction that passed an aged snapshot during fn may have
+		// changed what fn read: report it rather than a silently mixed view.
+		if err := s.check(w.l); err != nil {
+			return err
+		}
+		if ferr == nil {
+			return nil
+		}
+		if w2, err := s.db.branchWriter(s.branch); try >= 3 || err != nil || w2.v == w.v {
+			return ferr
+		}
 	}
-	if err := s.check(w.l); err != nil {
-		return err
-	}
-	tx := &Tx{db: s.db, v: w.v, at: s.at, lazyCtx: ctx, lazyLog: w.l, now: s.now, nowOK: true}
-	if err := fn(tx); err != nil {
-		return err
-	}
-	// A compaction that passed an aged snapshot during fn may have
-	// changed what fn read: report it rather than a silently mixed view.
-	return s.check(w.l)
 }
 
 // plan records cut as the planned base LSN of log id unless a live,

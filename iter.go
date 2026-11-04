@@ -1,6 +1,7 @@
 package loget
 
 import (
+	"context"
 	"errors"
 	"iter"
 	"sort"
@@ -61,7 +62,8 @@ func (r *keyRange) has(k rkey) bool {
 // sees exactly the records committed at At(), plus this transaction's own
 // writes made before the iterator was created. It holds no lock between
 // calls and keeps at most one page of keys (up to 1024) in memory, so it
-// can walk a space far larger than RAM; values are read one at a time.
+// can walk a space far larger than RAM; the values of a page are read in
+// batches of nearby positions (prefetch.go).
 //
 // In an Update, the range the iterator has covered so far joins the read
 // set: from the start bound through the last key returned, or the whole
@@ -82,6 +84,7 @@ type Iterator struct {
 	resume       string // index position: next lo (forward) or hi (reverse)
 	started      bool   // resume is set
 	page         []index.Pair
+	vals         [][]byte // prefetched stored bytes of page values (nil: read on use)
 	pi, pageSize int
 	more         bool // the index may have keys beyond page
 	local        []localKV
@@ -165,8 +168,12 @@ func (it *Iterator) Next() bool {
 			}
 			it.key, it.val = l.key, l.val
 		} else {
+			var raw []byte
+			if it.pi < len(it.vals) {
+				raw, it.vals[it.pi] = it.vals[it.pi], nil
+			}
 			it.pi++
-			v, err := it.tx.open(p.Version, it.space, p.Key)
+			v, err := it.tx.openWith(p.Version, it.space, p.Key, raw)
 			if errors.Is(err, ErrNotFound) {
 				continue // shredded
 			}
@@ -233,6 +240,15 @@ func (it *Iterator) fetch() {
 	})
 	v.mu.RUnlock()
 	it.page, it.pi, it.more = page, 0, len(page) == n
+	it.vals = it.vals[:0]
+	if len(page) > 1 {
+		it.vals = append(it.vals, make([][]byte, len(page))...)
+		ctx := it.tx.lazyCtx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		it.tx.db.prefetch(ctx, v.log, page, it.vals)
+	}
 	if len(page) > 0 {
 		last := page[len(page)-1].Key
 		it.started = true
