@@ -87,6 +87,9 @@ func logetLayout(system string) store.Layout {
 // valueCacheBytes overrides LogEt's default value cache (0 = default).
 var valueCacheBytes int
 
+// indexResident sets LogEt's IndexResidentBytes (0 = unbounded).
+var indexResident int64
+
 // snapshotEvery is LogEt's WithSnapshotEvery (0 = the library default).
 var snapshotEvery int
 
@@ -118,6 +121,9 @@ func openLogEt(dir string, fsync bool, layout store.Layout) (*loget.DB, error) {
 	})
 	st.SetUnsafeNoSync(!fsync)
 	opts := []loget.Option{loget.WithLogf(func(string, ...any) {})}
+	if indexResident != 0 {
+		opts = append(opts, loget.WithIndexResidentBytes(indexResident))
+	}
 	if valueCacheBytes != 0 {
 		opts = append(opts, loget.WithValueCacheBytes(valueCacheBytes))
 	}

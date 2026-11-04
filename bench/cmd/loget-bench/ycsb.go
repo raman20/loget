@@ -92,6 +92,7 @@ func cmdYCSB(args []string) {
 	memprof := fs.String("memprofile", "", "write heap profiles to <prefix>-<phase>.pb.gz after load and after each workload")
 	fs.IntVar(&snapshotEvery, "snapshot-every", 0, "loget only: WithSnapshotEvery (commits per snapshot; 0 = the library default)")
 	fs.Int64Var(&checkpointBytes, "checkpoint-bytes", 0, "loget only: WithCheckpointBytes (segment bytes between background index checkpoints; 0 = the library default, -1 = none, not even at close)")
+	fs.Int64Var(&indexResident, "index-resident", 0, "loget only: IndexResidentBytes (0 = unbounded)")
 	fs.IntVar(&valueCacheBytes, "value-cache", 0, "loget only: value cache bytes (0 = the library default; -1 = off)")
 	fs.BoolVar(&indexInMemory, "index-in-memory", false, "loget only: keep the whole KV index on the Go heap (no run files)")
 	keep := fs.Bool("keep", false, "keep the data directory (for the open suite)")

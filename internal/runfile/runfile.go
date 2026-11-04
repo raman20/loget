@@ -131,6 +131,8 @@ func (f *File) Seal() error {
 	if err := seal(f.m); err != nil {
 		return err
 	}
+	f.mu.Lock() // DropAll reads f.f
+	defer f.mu.Unlock()
 	err := f.f.Close()
 	f.f = nil
 	return err

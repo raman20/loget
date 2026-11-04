@@ -162,3 +162,44 @@ func TestIndexDirOption(t *testing.T) {
 	db = mustOpen(t, store.NewMem(), WithIndexInMemory(true), WithIndexDir(filepath.Join(dir, "missing")))
 	db.Close()
 }
+
+// TestIndexResidentBytes: with a resident bound (design 25) the run pages
+// are dropped from the process while readers and writers run, and every
+// read still returns the same; Close stops the check.
+func TestIndexResidentBytes(t *testing.T) {
+	if !runfile.Supported {
+		t.Skip("run files need mmap")
+	}
+	d, err := runfile.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	st := store.NewMem()
+	const n = 6000
+	db := mustOpen(t, st, WithIndexFiles(runFiles{d}), WithIndexResidentBytes(1))
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() { // drop far more often than the 100 ms check would
+		defer close(done)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				d.DropAll()
+			}
+		}
+	}()
+	fillIndex(t, db, n)
+	checkIndex(t, db, n)
+	close(stop)
+	<-done
+	if d.DropAll() == 0 {
+		t.Fatal("no mapped run file to drop")
+	}
+	db.Close()
+	db = mustOpen(t, st, WithIndexFiles(runFiles{d}), WithIndexResidentBytes(1))
+	checkIndex(t, db, n)
+	db.Close()
+	db.Close() // stop is idempotent
+}

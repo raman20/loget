@@ -78,6 +78,14 @@ type Options struct {
 	// if that is unusable the index stays on the heap (logged). An
 	// explicit directory that is unusable fails Open. CLI: --index-dir.
 	IndexDir string
+	// IndexResidentBytes bounds the KV index's mapped run pages counted in
+	// this process's RSS (design 25). 0 = unbounded: pages a lookup
+	// touched stay mapped until the kernel reclaims them. > 0: a
+	// background check every 100 ms drops every run file's pages from the
+	// process when its file-backed RSS exceeds n; the data stays in the
+	// OS page cache and later lookups fault it back (minor faults, a cost
+	// on reads). Linux only (other systems ignore it).
+	IndexResidentBytes int64
 	// IndexInMemory keeps the whole KV index on the Go heap (no run
 	// files), as before design 21.
 	IndexInMemory bool
@@ -114,7 +122,10 @@ func WithValueCacheBytes(n int) Option       { return func(o *Options) { o.Value
 func WithRepairTail(on bool) Option          { return func(o *Options) { o.RepairTail = on } }
 func WithReadAhead(n int) Option             { return func(o *Options) { o.ReadAhead = n } }
 func WithIndexDir(dir string) Option         { return func(o *Options) { o.IndexDir = dir } }
-func WithIndexInMemory(on bool) Option       { return func(o *Options) { o.IndexInMemory = on } }
+func WithIndexResidentBytes(n int64) Option {
+	return func(o *Options) { o.IndexResidentBytes = n }
+}
+func WithIndexInMemory(on bool) Option { return func(o *Options) { o.IndexInMemory = on } }
 
 // WithIndexFiles supplies the KV index run files (Options.IndexFiles).
 func WithIndexFiles(f index.RunFiles) Option { return func(o *Options) { o.IndexFiles = f } }
@@ -154,8 +165,9 @@ type DB struct {
 	writers map[string]*writer // by log id
 	vcache  *valueCache
 	// runFiles holds the KV index's large runs (nil = Go heap; design 21).
-	runFiles index.RunFiles
-	met      metrics
+	runFiles  index.RunFiles
+	stopBound func() // stops the IndexResidentBytes check
+	met       metrics
 	// bw caches branch name -> writer for the read path; nil = rebuild.
 	// Reset (under db.mu held exclusively) whenever refs, writers or
 	// closed change, so readers never need db.mu on a hit.
@@ -270,6 +282,7 @@ func OpenStore(ctx context.Context, st store.Store, opts ...Option) (*DB, error)
 		return nil, err
 	}
 	db := &DB{runFiles: files, st: &holdStore{Store: st}, opts: o, reg: reg, vcache: newValueCache(o.ValueCacheBytes), logs: map[string]*logState{}, views: map[string]*view{}, writers: map[string]*writer{}}
+	db.stopBound = boundResident(files, o.IndexResidentBytes)
 	if err := db.start(ctx, st); err != nil {
 		// Writers of branches opened before the failure are running, and
 		// the value cache holds memory: stop both without further writes.
@@ -533,6 +546,9 @@ func (db *DB) Close() error {
 		ws[id].stop()
 	}
 	db.vcache.close()
+	if db.stopBound != nil {
+		db.stopBound()
+	}
 	if db.owned != nil {
 		return db.owned.Close()
 	}
@@ -553,6 +569,9 @@ func (db *DB) Crash() {
 		ws[id].crash()
 	}
 	db.vcache.close()
+	if db.stopBound != nil {
+		db.stopBound()
+	}
 }
 
 // Epoch returns this writer's fencing epoch.

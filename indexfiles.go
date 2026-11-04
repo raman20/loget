@@ -3,6 +3,10 @@ package loget
 import (
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
 
 	"github.com/raman20/loget/index"
 	"github.com/raman20/loget/internal/runfile"
@@ -58,4 +62,50 @@ func (db *DB) kvOptions() index.KVOptions {
 func (db *DB) kvFileError(err error) {
 	db.met.kvFileErrors.Add(1)
 	db.opts.Logf("loget: KV index run file failed, using memory for this index: %v", err)
+}
+
+// boundEvery is how often IndexResidentBytes is checked.
+const boundEvery = 100 * time.Millisecond
+
+// boundResident starts the Options.IndexResidentBytes check (design 25)
+// and returns an idempotent stop; a no-op where it does not apply.
+func boundResident(files index.RunFiles, budget int64) func() {
+	rf, ok := files.(runFiles)
+	if budget <= 0 || !ok || fileRSS() < 0 {
+		return func() {}
+	}
+	done := make(chan struct{})
+	go func() {
+		t := time.NewTicker(boundEvery)
+		defer t.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-t.C:
+				if fileRSS() > budget {
+					rf.d.DropAll()
+				}
+			}
+		}
+	}()
+	var once sync.Once
+	return func() { once.Do(func() { close(done) }) }
+}
+
+// fileRSS returns the process's file-backed resident bytes (RssFile in
+// /proc/self/status), or -1 where that is unavailable.
+func fileRSS() int64 {
+	b, err := os.ReadFile("/proc/self/status")
+	if err != nil {
+		return -1
+	}
+	for _, l := range strings.Split(string(b), "\n") {
+		if f := strings.Fields(l); len(f) >= 2 && f[0] == "RssFile:" {
+			if v, err := strconv.ParseInt(f[1], 10, 64); err == nil {
+				return v << 10
+			}
+		}
+	}
+	return -1
 }

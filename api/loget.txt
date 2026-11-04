@@ -195,6 +195,7 @@ func WithIndex(k index.Kind) Option
 func WithIndexDir(dir string) Option
 func WithIndexFiles(f index.RunFiles) Option
 func WithIndexInMemory(on bool) Option
+func WithIndexResidentBytes(n int64) Option
 func WithInlineMax(n int) Option
 func WithKEK(k []byte) Option
 func WithKeyProvider(p KeyProvider) Option
@@ -219,6 +220,7 @@ type Options struct {
 	InlineMax int
 	ValueCacheBytes int
 	IndexDir string
+	IndexResidentBytes int64
 	IndexInMemory bool
 	IndexFiles index.RunFiles
 	RepairTail bool
