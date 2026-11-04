@@ -103,13 +103,20 @@ type Options struct {
 	RepairTail bool
 	// Indexes are the index kinds registered with WithIndex.
 	Indexes []index.Kind
+	// SnapshotMaxAge bounds how long a Snapshot (readview.go) holds back
+	// compaction: older ones stop pinning and fail with
+	// ErrSnapshotTooOld. Measured with Clock. <= 0 = default (10 min).
+	SnapshotMaxAge time.Duration
 }
 
 type Option func(*Options)
 
 func WithClock(f func() int64) Option { return func(o *Options) { o.Clock = f } }
-func WithRand(r io.Reader) Option     { return func(o *Options) { o.Rand = r } }
-func WithKEK(k []byte) Option         { return func(o *Options) { o.KEK = k } }
+
+// WithSnapshotMaxAge sets Options.SnapshotMaxAge.
+func WithSnapshotMaxAge(d time.Duration) Option { return func(o *Options) { o.SnapshotMaxAge = d } }
+func WithRand(r io.Reader) Option               { return func(o *Options) { o.Rand = r } }
+func WithKEK(k []byte) Option                   { return func(o *Options) { o.KEK = k } }
 
 // WithCommitPolicy sets the group-commit budget (see CommitPolicy).
 func WithCommitPolicy(p CommitPolicy) Option { return func(o *Options) { o.Commit = p } }
@@ -148,6 +155,8 @@ type DB struct {
 	// fullScan: recovery ignores segment-index checkpoints (Verify reads
 	// every segment and cross-checks the checkpoints instead)
 	fullScan bool
+
+	snaps snapRegistry // live Snapshots (readview.go)
 
 	reg  *index.Registry // index kinds (WithIndex); fixed after Open
 	keys *keyring
@@ -248,6 +257,9 @@ func OpenStore(ctx context.Context, st store.Store, opts ...Option) (*DB, error)
 	}
 	if o.Rand == nil {
 		o.Rand = rand.Reader
+	}
+	if o.SnapshotMaxAge <= 0 {
+		o.SnapshotMaxAge = defaultSnapshotMaxAge
 	}
 	if o.MaxBatch <= 0 {
 		o.MaxBatch = 256

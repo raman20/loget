@@ -63,7 +63,16 @@ type Op struct {
 	// DecodePayload alone; 0 = unknown). It lets indexes keep a position
 	// instead of a copy of the value.
 	ValOff uint32
+	// Exp is an absolute expiry in the frame's TS unit (unix nanoseconds);
+	// 0 = never expires. Only OpPut may carry one. Encoded as the kind byte
+	// with KindExp set followed by Exp as a little-endian i64
+	// (docs/design/27-ttl-snapshots.md); a build older than design 27
+	// rejects such a frame as corrupt.
+	Exp int64
 }
+
+// KindExp flags an op kind byte whose op carries an expiry.
+const KindExp = 0x80
 
 // Frame is one committed transaction.
 type Frame struct {
@@ -146,6 +155,9 @@ func EncodePayload(f *Frame) []byte {
 func payloadSize(f *Frame) int {
 	n := 8 + 8 + 32 + uvarintLen(uint64(len(f.Ops)))
 	for _, op := range f.Ops {
+		if op.Exp != 0 {
+			n += 8
+		}
 		n += 1 + strLen(len(op.Subject)) + strLen(len(op.Space)) + strLen(len(op.Key)) + strLen(len(op.Value))
 	}
 	return n
@@ -162,7 +174,12 @@ func appendPayload(b []byte, f *Frame) []byte {
 	b = append(b, f.Prev[:]...)
 	b = binary.AppendUvarint(b, uint64(len(f.Ops)))
 	for i, op := range f.Ops {
-		b = append(b, byte(op.Kind))
+		if op.Exp != 0 {
+			b = append(b, byte(op.Kind)|KindExp)
+			b = binary.LittleEndian.AppendUint64(b, uint64(op.Exp))
+		} else {
+			b = append(b, byte(op.Kind))
+		}
 		b = appendStr(b, op.Subject)
 		b = appendStr(b, op.Space)
 		b = appendStr(b, op.Key)
@@ -301,6 +318,18 @@ func parsePayload(p []byte, in names, f *Frame, build bool) error {
 		}
 		k := Kind(r.b[0])
 		r.b = r.b[1:]
+		var exp int64
+		if k&KindExp != 0 {
+			k &^= KindExp
+			if k != OpPut || len(r.b) < 8 {
+				return ErrCorrupt
+			}
+			exp = int64(binary.LittleEndian.Uint64(r.b))
+			r.b = r.b[8:]
+			if exp == 0 {
+				return ErrCorrupt
+			}
+		}
 		if k < OpPut || k > OpIngest {
 			return ErrCorrupt
 		}
@@ -317,7 +346,7 @@ func parsePayload(p []byte, in names, f *Frame, build bool) error {
 		if val != nil {
 			v = append([]byte{}, val...)
 		}
-		f.Ops = append(f.Ops, Op{Kind: k, Subject: in.str(subj), Space: in.str(space), Key: string(key), Value: v, ValOff: uint32(valOff + uvarintLen(uint64(len(val))))})
+		f.Ops = append(f.Ops, Op{Kind: k, Subject: in.str(subj), Space: in.str(space), Key: string(key), Value: v, Exp: exp, ValOff: uint32(valOff + uvarintLen(uint64(len(val))))})
 	}
 	if len(r.b) != 0 {
 		return ErrCorrupt

@@ -1,0 +1,16 @@
+goos: linux
+goarch: amd64
+pkg: github.com/raman20/loget/index
+cpu: Intel(R) Xeon(R) Processor
+BenchmarkKVBuild-8          	       1	2001934051 ns/op	        65.20 heapB/key	      1907 ns/key
+BenchmarkKVBuild-8          	       1	1990562879 ns/op	        65.18 heapB/key	      1894 ns/key
+BenchmarkKVBuild-8          	       1	1973382427 ns/op	        65.18 heapB/key	      1879 ns/key
+BenchmarkKVBuild-8          	       1	1920579739 ns/op	        65.18 heapB/key	      1828 ns/key
+BenchmarkKVBuild-8          	       1	1864726343 ns/op	        65.18 heapB/key	      1776 ns/key
+BenchmarkKVSnapshotLoad-8   	       5	 221484443 ns/op	 426.09 MB/s	        37.51 heapB/key
+BenchmarkKVSnapshotLoad-8   	       5	 225747915 ns/op	 418.04 MB/s	        37.51 heapB/key
+BenchmarkKVSnapshotLoad-8   	       5	 228643883 ns/op	 412.75 MB/s	        37.51 heapB/key
+BenchmarkKVSnapshotLoad-8   	       5	 249373066 ns/op	 378.44 MB/s	        37.51 heapB/key
+BenchmarkKVSnapshotLoad-8   	       5	 218187734 ns/op	 432.53 MB/s	        37.51 heapB/key
+PASS
+ok  	github.com/raman20/loget/index	27.080s

@@ -24,6 +24,8 @@ var (
 	ErrBusy = errors.New("loget: compaction already running")
 	ErrBadName = errors.New("loget: invalid name")
 	ErrBadValue = errors.New("loget: invalid value")
+	ErrSnapshotTooOld = errors.New("loget: snapshot too old")
+	ErrSnapshotReleased = errors.New("loget: snapshot released")
 var ErrUnsorted = fmt.Errorf("loget: %w", index.ErrUnsorted)
 var LatencyBounds = []float64{0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10}
 func Formats() string
@@ -64,6 +66,7 @@ func (br *Branch) Apply(ctx context.Context, b *Batch) (uint64, error)
 func (b *Branch) Head() (uint64, error)
 func (b *Branch) Ingest(ctx context.Context, src IngestSource) (st IngestStats, err error)
 func (b *Branch) Name() string
+func (b *Branch) Snapshot(ctx context.Context, o SnapshotOptions) (*Snapshot, error)
 func (b *Branch) Update(ctx context.Context, fn func(*Tx) error) error
 func (b *Branch) UpdateLSN(ctx context.Context, fn func(*Tx) error) (uint64, error)
 func (b *Branch) View(ctx context.Context, fn func(*Tx) error) error
@@ -98,6 +101,8 @@ type CompactStats struct {
 	BaseBytes int64 `json:"base_bytes"`
 	Deleted   int   `json:"deleted"`
 	Pending   int   `json:"pending"`
+	Pinned    int   `json:"pinned,omitempty"`
+	Expired   int   `json:"expired,omitempty"`
 	LogsDropped      int `json:"logs_dropped,omitempty"`
 	ReflogPruned     int `json:"reflog_pruned,omitempty"`
 	ManifestsDeleted int `json:"manifests_deleted,omitempty"`
@@ -123,6 +128,7 @@ func (db *DB) Healthy() error
 func (db *DB) IndexDigests(branch string) (map[string][32]byte, uint64, error)
 func (db *DB) Ingest(ctx context.Context, src IngestSource) (IngestStats, error)
 func (db *DB) IsShredded(subject string) bool
+func (db *DB) LiveSnapshots() int
 func (db *DB) Manifest() *Manifest
 func (db *DB) Ping(ctx context.Context) error
 func (db *DB) Promote(ctx context.Context, src, dst string) error
@@ -131,6 +137,7 @@ func (db *DB) Put(ctx context.Context, key string, val []byte, opts ...WriteOpt)
 func (db *DB) RebuildDigests(branch string) (map[string][32]byte, error)
 func (db *DB) Rewind(ctx context.Context, name string, at uint64) error
 func (db *DB) Shred(ctx context.Context, subject string) (*Certificate, error)
+func (db *DB) Snapshot(ctx context.Context, o SnapshotOptions) (*Snapshot, error)
 func (db *DB) Stats() Stats
 func (db *DB) Update(ctx context.Context, fn func(*Tx) error) error
 func (db *DB) Verify(ctx context.Context) (*VerifyReport, error)
@@ -221,6 +228,7 @@ func WithRand(r io.Reader) Option
 func WithReadAhead(n int) Option
 func WithRepairTail(on bool) Option
 func WithSnapshotEvery(n int) Option
+func WithSnapshotMaxAge(d time.Duration) Option
 func WithValueCacheBytes(n int) Option
 type Options struct {
 	Clock func() int64
@@ -242,6 +250,7 @@ type Options struct {
 	IndexFiles index.RunFiles
 	RepairTail bool
 	Indexes []index.Kind
+	SnapshotMaxAge time.Duration
 type Record struct {
 	Key   string
 	Value []byte
@@ -257,6 +266,14 @@ type RestoreReport struct {
 	Objects int        `json:"objects"`
 	Bytes   int64      `json:"bytes"`
 func Restore(ctx context.Context, src, dst store.Store) (*RestoreReport, error)
+type Snapshot struct {
+func (s *Snapshot) LSN() uint64
+func (s *Snapshot) Now() int64
+func (s *Snapshot) Release()
+func (s *Snapshot) View(ctx context.Context, fn func(*Tx) error) error
+type SnapshotOptions struct {
+	At uint64
+	Now int64
 type Stats struct {
 	Commits      uint64 `json:"commits"`
 	CommitErrors uint64 `json:"commit_errors"`
@@ -288,6 +305,7 @@ func (tx *Tx) GetRecord(space, key string) ([]byte, error)
 func (tx *Tx) Index(name string, fn func(index.Index) error) error
 func (tx *Tx) Iter(o IterOptions) *Iterator
 func (tx *Tx) IterRecords(space string, o IterOptions) *Iterator
+func (tx *Tx) Now() (int64, error)
 func (tx *Tx) Put(key string, val []byte, opts ...WriteOpt) error
 func (tx *Tx) PutRecord(space, key string, val []byte, opts ...WriteOpt) error
 func (tx *Tx) Range(o IterOptions) ([]KV, error)
@@ -314,4 +332,6 @@ type VerifyReport struct {
 	Problems []string `json:"problems,omitempty"`
 	Warnings []string `json:"warnings,omitempty"`
 type WriteOpt func(*format.Op)
+func ExpiresAt(t time.Time) WriteOpt
 func Subject(s string) WriteOpt
+func TTL(d time.Duration) WriteOpt

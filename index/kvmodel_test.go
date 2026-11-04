@@ -21,7 +21,7 @@ func (l *mapKV) Apply(e *Entry, env Env) {
 	for i, op := range e.Ops {
 		switch op.Kind {
 		case format.OpPut:
-			v := Version{LSN: e.LSN, Op: uint32(i), Subject: op.Subject}
+			v := Version{LSN: e.LSN, Op: uint32(i), Subject: op.Subject, Exp: op.Exp}
 			if op.ValOff != 0 && len(op.Value) > l.inline {
 				v.Off, v.Len, v.Sum = op.ValOff, uint32(len(op.Value)), crc32.Checksum(op.Value, Castagnoli)
 			} else {

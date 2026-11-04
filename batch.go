@@ -49,6 +49,9 @@ func (b *Batch) Put(key string, val []byte, opts ...WriteOpt) error {
 	for _, o := range opts {
 		o(&op)
 	}
+	if err := checkExp(&op); err != nil {
+		return err
+	}
 	return b.add(op)
 }
 

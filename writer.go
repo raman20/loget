@@ -29,7 +29,10 @@ type commitReq struct {
 	// runIngest; ingestRun is the run its OpIngest frame installs.
 	ingest    *ingestJob
 	ingestRun *index.IngestRun
-	done      chan commitRes
+	// minExp: earliest expiry among versions the transaction read as live
+	// (0 = none). It conflicts once a commit timestamp reaches it (ttl.go).
+	minExp int64
+	done   chan commitRes
 }
 
 // size estimates the bytes r adds to a segment (an escalated transaction's
@@ -434,11 +437,17 @@ func (w *writer) runExec(r *commitReq) (ok bool) {
 		r.done <- commitRes{lsn: tx.at}
 		return false
 	}
-	r.at, r.ops, r.reads, r.ranges = tx.at, tx.ops, tx.reads, tx.ranges
+	r.at, r.ops, r.reads, r.ranges, r.minExp = tx.at, tx.ops, tx.reads, tx.ranges, tx.minExp
 	return true
 }
 
-func (w *writer) conflict(r *commitReq, pending []recentCommit) bool {
+func (w *writer) conflict(r *commitReq, pending []recentCommit, ts int64) bool {
+	// A key read as live has expired by the time of the newest commit
+	// before this one: the read is no longer what a read at the commit
+	// point would see (docs/design/27-ttl-snapshots.md).
+	if r.minExp != 0 && r.minExp <= ts {
+		return true
+	}
 	if len(r.reads) == 0 && len(r.ranges) == 0 {
 		return false // blind writes are always serializable
 	}
@@ -545,7 +554,7 @@ func (w *writer) process(batch []*commitReq) {
 	}
 	batch = kept
 	for _, r := range batch {
-		if w.conflict(r, pending) {
+		if w.conflict(r, pending, ts) {
 			if r.exec != nil {
 				w.carry = append(w.carry, r)
 				continue
@@ -562,6 +571,7 @@ func (w *writer) process(batch []*commitReq) {
 		if now := w.db.opts.Clock(); now > ts {
 			ts = now
 		}
+		resolveExp(ops, ts)
 		f := &format.Frame{LSN: lsn, TS: ts, Prev: chain, Ops: ops}
 		prev := len(seg)
 		seg2, payload := format.AppendFrame(seg, f)

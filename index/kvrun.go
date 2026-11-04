@@ -24,7 +24,8 @@ import (
 //
 //	[uvarint Off, uvarint Len, Sum u32le] if fPos,
 //	[uvarint Chunk] if fChunk,
-//	[uvarint len, Val] if fVal, [uvarint len, Subject] if fSubj
+//	[uvarint len, Val] if fVal, [uvarint len, Subject] if fSubj,
+//	[Exp i64le] if fExp (design 27)
 //
 // Versions carry absolute LSNs, so the bodies of one key in two runs merge
 // by concatenation.
@@ -36,6 +37,7 @@ type run struct {
 	n     int      // keys
 	vers  int      // versions
 	chunk bool     // some version has Chunk != 0
+	exp   bool     // some version has Exp != 0
 	subj  map[string]int
 	// key is the key a checkpoint stored the run under (kvimage.go).
 	// Written and read only by checkpoints, which are serialised.
@@ -57,6 +59,7 @@ const (
 	fChunk
 	fVal
 	fSubj
+	fExp
 )
 
 // subjects counts, per subject, the versions DropSubject would still change.
@@ -94,6 +97,9 @@ func appendVer(b []byte, v *Version) []byte {
 	if v.Subject != "" {
 		f |= fSubj
 	}
+	if v.Exp != 0 {
+		f |= fExp
+	}
 	b = binary.AppendUvarint(b, v.LSN)
 	b = binary.AppendUvarint(b, uint64(v.Op))
 	b = append(b, f)
@@ -112,6 +118,9 @@ func appendVer(b []byte, v *Version) []byte {
 	if f&fSubj != 0 {
 		b = binary.AppendUvarint(b, uint64(len(v.Subject)))
 		b = append(b, v.Subject...)
+	}
+	if f&fExp != 0 {
+		b = binary.LittleEndian.AppendUint64(b, uint64(v.Exp))
 	}
 	return b
 }
@@ -151,6 +160,9 @@ func decVer(b []byte) (Version, []byte) {
 		x, b = uv(b)
 		v.Subject, b = string(b[:x]), b[x:]
 	}
+	if f&fExp != 0 {
+		v.Exp, b = int64(binary.LittleEndian.Uint64(b)), b[8:]
+	}
 	return v, b
 }
 
@@ -176,6 +188,9 @@ func skipVer(b []byte) (uint64, []byte) {
 	if f&fSubj != 0 {
 		x, r := uv(b)
 		b = r[x:]
+	}
+	if f&fExp != 0 {
+		b = b[8:]
 	}
 	return lsn, b
 }
@@ -243,6 +258,7 @@ func (w *builder) ver(v *Version) {
 	w.scratch = appendVer(w.scratch, v)
 	w.nv++
 	w.r.chunk = w.r.chunk || v.Chunk != 0
+	w.r.exp = w.r.exp || v.Exp != 0
 	if liveSubject(v) {
 		w.r.subj[v.Subject]++
 	}
@@ -705,6 +721,7 @@ func dropBehind(f RunFile, freed, p int) int {
 func (m *merger) result() (*run, error) {
 	for _, r := range m.in {
 		m.w.r.chunk = m.w.r.chunk || r.chunk
+		m.w.r.exp = m.w.r.exp || r.exp
 		for s, k := range r.subj {
 			m.w.r.subj[s] += k
 		}

@@ -33,6 +33,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/raman20/loget"
 	"github.com/raman20/loget/examples/counter"
@@ -63,6 +64,8 @@ type Result struct {
 	GCs              int
 	Faults           int
 	IndexFileFaults  int // injected KV index run-file failures (every 4th seed keeps runs in files)
+	Expired          int // keys a check found expired (design 27)
+	Expiring         int // keys a check found live with an expiry still ahead
 	TraceHash        [32]byte
 }
 
@@ -77,6 +80,7 @@ type mop struct {
 	key     string
 	val     string
 	subject string
+	exp     int64 // 'p': absolute expiry (loget.ExpiresAt), 0 = none (design 27)
 }
 
 type sim struct {
@@ -99,6 +103,10 @@ type sim struct {
 	prefix map[string]txPrefix
 	nextID int
 	lsns   []uint64 // LSNs of the ids last returned by recovered
+	// TS of main's head frame as recovered saw it (headOK: there is one
+	// above the base)
+	headTS int64
+	headOK bool
 	res    Result
 	trace  []string
 	// files: the KV index run files (nil = heap), in indexDir
@@ -303,6 +311,10 @@ func (s *sim) txn() error {
 		switch r := s.rng.Intn(14); {
 		case r < 6:
 			m.kind = 'p'
+			if s.rng.Intn(3) == 0 {
+				// expires soon after now (the clock ticks once per call)
+				m.exp = max(1, s.clock.Load()+int64(s.rng.Intn(60))-5)
+			}
 		case r < 8:
 			m.kind, m.val, m.subject = 'd', "", ""
 		case r < 12:
@@ -321,7 +333,7 @@ func (s *sim) txn() error {
 	var err error
 	ingest := blind
 	for _, m := range ops {
-		ingest = ingest && m.kind == 'p' && m.subject == ""
+		ingest = ingest && m.kind == 'p' && m.subject == "" && m.exp == 0
 	}
 	if ingest && s.rng.Intn(3) == 0 { // puts only: a bulk ingest
 		last := map[string]string{"__tx": strconv.Itoa(id)}
@@ -351,6 +363,9 @@ func (s *sim) txn() error {
 			var o []loget.WriteOpt
 			if m.subject != "" {
 				o = append(o, loget.Subject(m.subject))
+			}
+			if m.exp != 0 {
+				o = append(o, loget.ExpiresAt(time.Unix(0, m.exp)))
 			}
 			if m.kind == 'p' {
 				b.Put(m.key, []byte(m.val), o...)
@@ -395,6 +410,9 @@ func (s *sim) update(ops []mop) (uint64, error) {
 			var o []loget.WriteOpt
 			if m.subject != "" {
 				o = append(o, loget.Subject(m.subject))
+			}
+			if m.exp != 0 {
+				o = append(o, loget.ExpiresAt(time.Unix(0, m.exp)))
 			}
 			var err error
 			switch m.kind {
@@ -513,6 +531,10 @@ func (s *sim) recovered() ([]int, error) {
 	}
 	var ids []int
 	var lsns []uint64
+	s.headOK = len(es) > 0
+	if s.headOK {
+		s.headTS = es[len(es)-1].TS
+	}
 	if key := s.floorKey(); key != "" {
 		p, ok := s.prefix[key]
 		if !ok {
@@ -655,6 +677,7 @@ func (s *sim) check() error {
 	}
 	// expected state = fold of model ops over recovered ids
 	kv := map[string]string{}
+	exp := map[string]int64{}    // kv key -> expiry of its live put
 	items := map[string]string{} // counter item -> value
 	for _, id := range ids {
 		kv["__tx"] = strconv.Itoa(id)
@@ -665,7 +688,7 @@ func (s *sim) check() error {
 				if gone {
 					delete(kv, m.key)
 				} else {
-					kv[m.key] = m.val
+					kv[m.key], exp[m.key] = m.val, m.exp
 				}
 			case 'd':
 				delete(kv, m.key)
@@ -688,7 +711,12 @@ func (s *sim) check() error {
 	got := map[string]string{}
 	gotItems := map[string]string{}
 	gotCounts := map[string]string{}
+	var now int64
 	err = s.db.View(s.ctx, func(tx *loget.Tx) error {
+		var err error
+		if now, err = tx.Now(); err != nil {
+			return err
+		}
 		kvs, err := tx.Scan("")
 		if err != nil {
 			return err
@@ -735,6 +763,21 @@ func (s *sim) check() error {
 	})
 	if err != nil {
 		return s.fail("view: %v", err)
+	}
+	// expiry is decided at the read time: the head frame's commit TS
+	if s.headOK && s.headTS != now {
+		return s.fail("read time %d != head frame TS %d", now, s.headTS)
+	}
+	for k, e := range exp {
+		if _, ok := kv[k]; !ok || e == 0 {
+			continue
+		}
+		if e <= now {
+			delete(kv, k)
+			s.res.Expired++
+		} else {
+			s.res.Expiring++
+		}
 	}
 	if !mapEq(kv, got) {
 		return s.fail("KV index != model fold\n  want %v\n  got  %v", sorted(kv), sorted(got))

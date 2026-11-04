@@ -28,7 +28,11 @@ type Version struct {
 	Chunk   uint32 // != 0: the value is in value chunk Chunk-1 of the log's compaction base, at Off
 	Subject string
 	Val     []byte // inline stored bytes (ciphertext if Subject != "")
+	Exp     int64  // absolute expiry (frame TS unit); 0 = never (design 27)
 }
+
+// Expired reports whether v has expired at read time now: Exp <= now.
+func (v Version) Expired(now int64) bool { return v.Exp != 0 && v.Exp <= now }
 
 // Ref reports whether the value lives in the log rather than in Val.
 func (v Version) Ref() bool { return v.Off != 0 }
@@ -61,6 +65,21 @@ type KV struct {
 	minFile   int
 	onFileErr func(error)
 	par       func([]func()) // KVOptions.Parallel
+	mayExp    bool           // some version ever applied or loaded had an expiry
+}
+
+// MayExpire reports whether some version may carry an expiry (it may
+// report true after such versions are gone).
+func (l *KV) MayExpire() bool {
+	if l.mayExp {
+		return true
+	}
+	for _, r := range l.runs {
+		if r.exp {
+			return true
+		}
+	}
+	return false
 }
 
 // KVOptions configures a KV index.
@@ -105,12 +124,13 @@ type ver struct {
 type verX struct {
 	subject string
 	val     []byte
+	exp     int64
 }
 
 func pack(v Version) ver {
 	w := ver{lsn: v.LSN, off: v.Off, len: v.Len, op: v.Op, sum: v.Sum, chunk: v.Chunk, del: v.Del}
-	if v.Subject != "" || v.Val != nil {
-		w.x = &verX{v.Subject, v.Val}
+	if v.Subject != "" || v.Val != nil || v.Exp != 0 {
+		w.x = &verX{v.Subject, v.Val, v.Exp}
 	}
 	return w
 }
@@ -118,7 +138,7 @@ func pack(v Version) ver {
 func (w ver) unpack() Version {
 	v := Version{LSN: w.lsn, Off: w.off, Len: w.len, Op: w.op, Sum: w.sum, Chunk: w.chunk, Del: w.del}
 	if w.x != nil {
-		v.Subject, v.Val = w.x.subject, w.x.val
+		v.Subject, v.Val, v.Exp = w.x.subject, w.x.val, w.x.exp
 	}
 	return v
 }
@@ -214,7 +234,9 @@ func (l *KV) FileStats() (runs int, bytes int64) {
 	return runs, bytes
 }
 
-func redact(v *Version) { v.Val, v.Del, v.Off, v.Len, v.Sum, v.Chunk = nil, true, 0, 0, 0, 0 }
+func redact(v *Version) {
+	v.Val, v.Del, v.Off, v.Len, v.Sum, v.Chunk, v.Exp = nil, true, 0, 0, 0, 0, 0
+}
 
 // redactVer is redact on the packed form (the subject is kept).
 func redactVer(w *ver) {
@@ -231,7 +253,7 @@ func (l *KV) Apply(e *Entry, env Env) {
 	for i, op := range e.Ops {
 		switch op.Kind {
 		case format.OpPut:
-			v := Version{LSN: e.LSN, Op: uint32(i), Subject: op.Subject}
+			v := Version{LSN: e.LSN, Op: uint32(i), Subject: op.Subject, Exp: op.Exp}
 			if op.ValOff != 0 && len(op.Value) > l.inline {
 				v.Off, v.Len, v.Sum = op.ValOff, uint32(len(op.Value)), crc32.Checksum(op.Value, Castagnoli)
 			} else {
@@ -259,6 +281,7 @@ func (l *KV) Apply(e *Entry, env Env) {
 // put appends a version; a key's first version gets a 1-element slice
 // (most keys never get a second one).
 func (l *KV) put(k string, v Version) {
+	l.mayExp = l.mayExp || v.Exp != 0
 	vs, ok := l.m[k]
 	if !ok {
 		l.m[k] = vers{one: pack(v)}
@@ -578,17 +601,24 @@ func (l *KV) encode() []byte {
 	// KV3 adds a chunk number per version; it is written only when some
 	// version lives in a compaction base, so KV2 bytes (and digests) of
 	// uncompacted state are unchanged.
-	v3 := false
+	// KV4 adds an expiry per version (design 27); written only when some
+	// version has one, so older encodings and digests are unchanged.
+	v3, v4 := false, false
 	for _, vs := range l.m {
 		for i := 0; i < vs.n(); i++ {
 			v3 = v3 || vs.at(i).chunk != 0
+			v4 = v4 || (vs.at(i).x != nil && vs.at(i).x.exp != 0)
 		}
 	}
 	for _, r := range l.runs {
 		v3 = v3 || r.chunk
+		v4 = v4 || r.exp
 	}
 	e := &enc{}
-	if v3 {
+	if v4 {
+		v3 = true
+		e.str("KV4")
+	} else if v3 {
 		e.str("KV3")
 	} else {
 		e.str("KV2")
@@ -608,6 +638,9 @@ func (l *KV) encode() []byte {
 			e.u64(uint64(v.Op)<<32 | uint64(v.Sum))
 			if v3 {
 				e.u64(uint64(v.Chunk))
+			}
+			if v4 {
+				e.u64(uint64(v.Exp))
 			}
 			e.bytes(v.Val)
 			e.str(v.Subject)
@@ -676,7 +709,7 @@ func (l *KV) dropRuns() {
 func (l *KV) load(b []byte, strict bool) (err error) {
 	d := &dec{b: b}
 	f := d.str()
-	if f != "KV2" && f != "KV3" {
+	if f != "KV2" && f != "KV3" && f != "KV4" {
 		return ErrBadSnapshot
 	}
 	if d.u64() != uint64(l.inline) && strict {
@@ -702,7 +735,7 @@ func (l *KV) load(b []byte, strict bool) (err error) {
 		}
 		return nil
 	}
-	chunked, prev := false, ""
+	chunked, expd, prev := false, false, ""
 	for i := uint64(0); i < n && !d.bad; i++ {
 		k := d.str()
 		// Keys are written sorted and unique as space+"\x00"+key. A key
@@ -724,14 +757,21 @@ func (l *KV) load(b []byte, strict bool) (err error) {
 			v := Version{LSN: d.u64()}
 			ol, os := d.u64(), d.u64()
 			v.Off, v.Len, v.Op, v.Sum = uint32(ol>>32), uint32(ol), uint32(os>>32), uint32(os)
-			if f == "KV3" {
+			if f != "KV2" {
 				ch := d.u64()
 				if ch > math.MaxUint32 {
 					return ErrBadSnapshot
 				}
 				v.Chunk, chunked = uint32(ch), chunked || ch != 0
 			}
+			if f == "KV4" {
+				v.Exp = int64(d.u64())
+				expd = expd || v.Exp != 0
+			}
 			v.Val, v.Subject, v.Del = d.bytes(), d.str(), d.bool()
+			if v.Exp != 0 && v.Del {
+				return ErrBadSnapshot
+			}
 			// Versions are written in (LSN, op) order (one entry may write
 			// a key twice); reads rely on it.
 			if j > 0 && (v.LSN < last || v.LSN == last && v.Op <= lastOp) {
@@ -752,7 +792,8 @@ func (l *KV) load(b []byte, strict bool) (err error) {
 		}
 	}
 	// KV3 is written only when some version carries a base chunk.
-	if d.bad || len(d.b) != 0 || (f == "KV3") != chunked {
+	// KV4 only when some version expires.
+	if d.bad || len(d.b) != 0 || (f == "KV3" && !chunked) || (f == "KV4") != expd {
 		return ErrBadSnapshot
 	}
 	return add()
@@ -790,6 +831,7 @@ func (l *KV) SetLatest(space, key string, v Version) {
 	if vs, ok := l.m[k]; ok { // replace in place: k stays in keys/recent
 		l.hot -= vs.n() - 1 // never grows, so no freeze is due
 		l.m[k] = vers{one: pack(v)}
+		l.mayExp = l.mayExp || v.Exp != 0
 	} else {
 		l.put(k, v)
 	}

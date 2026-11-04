@@ -1,0 +1,26 @@
+goos: linux
+goarch: amd64
+pkg: github.com/raman20/loget/index
+cpu: Intel(R) Xeon(R) Processor
+BenchmarkKVBuild-8          	       1	1784352979 ns/op	        49.22 heapB/key	      1700 ns/key
+BenchmarkKVBuild-8          	       1	1740260450 ns/op	        49.21 heapB/key	      1656 ns/key
+BenchmarkKVBuild-8          	       1	1731380260 ns/op	        49.21 heapB/key	      1648 ns/key
+BenchmarkKVBuild-8          	       1	1805859350 ns/op	        49.21 heapB/key	      1719 ns/key
+BenchmarkKVBuild-8          	       1	1821951533 ns/op	        49.21 heapB/key	      1735 ns/key
+BenchmarkKVGet-8            	 5259766	       235.3 ns/op	         3.000 runs
+BenchmarkKVGet-8            	 5485389	       228.1 ns/op	         3.000 runs
+BenchmarkKVGet-8            	 5096104	       220.6 ns/op	         3.000 runs
+BenchmarkKVGet-8            	 5583865	       221.6 ns/op	         3.000 runs
+BenchmarkKVGet-8            	 4741152	       225.5 ns/op	         3.000 runs
+BenchmarkKVScan100-8        	   46825	     25212 ns/op
+BenchmarkKVScan100-8        	   44103	     25734 ns/op
+BenchmarkKVScan100-8        	   46804	     24127 ns/op
+BenchmarkKVScan100-8        	   46788	     24200 ns/op
+BenchmarkKVScan100-8        	   47410	     25051 ns/op
+BenchmarkKVSnapshotLoad-8   	       5	 227888190 ns/op	 340.49 MB/s	        29.51 heapB/key
+BenchmarkKVSnapshotLoad-8   	       5	 219654990 ns/op	 353.26 MB/s	        29.51 heapB/key
+BenchmarkKVSnapshotLoad-8   	       5	 238493980 ns/op	 325.35 MB/s	        29.51 heapB/key
+BenchmarkKVSnapshotLoad-8   	       5	 229238116 ns/op	 338.49 MB/s	        29.51 heapB/key
+BenchmarkKVSnapshotLoad-8   	       5	 229676690 ns/op	 337.84 MB/s	        29.51 heapB/key
+PASS
+ok  	github.com/raman20/loget/index	39.865s

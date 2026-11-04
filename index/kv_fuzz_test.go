@@ -22,11 +22,21 @@ func kvSeed(chunk bool) *KV {
 	return l
 }
 
+// kvSeedExp is kvSeed with expiring versions (KV4, design 27).
+func kvSeedExp(chunk bool) *KV {
+	l := kvSeed(chunk)
+	l.put(ck("kv", "e"), Version{LSN: 7, Val: []byte("x"), Exp: 99})
+	l.put(ck("kv", "f"), Version{LSN: 8, Off: 5, Len: 10, Sum: 1, Exp: 1 << 62})
+	return l
+}
+
 // FuzzLoadKV: a snapshot or base either fails to load or loads into an index
 // that re-encodes to the same bytes and serves every read without a panic.
 func FuzzLoadKV(f *testing.F) {
 	f.Add(kvSeed(false).Snapshot())
 	f.Add(kvSeed(true).Snapshot())
+	f.Add(kvSeedExp(false).Snapshot())
+	f.Add(kvSeedExp(true).Snapshot())
 	f.Add(NewKVInline(4).Snapshot())
 	f.Fuzz(func(t *testing.T, b []byte) { fuzzLoadKV(t, b, KVOptions{Inline: 4}) })
 }
@@ -35,6 +45,8 @@ func FuzzLoadKV(f *testing.F) {
 func FuzzLoadKVFiles(f *testing.F) {
 	f.Add(kvSeed(false).Snapshot())
 	f.Add(kvSeed(true).Snapshot())
+	f.Add(kvSeedExp(false).Snapshot())
+	f.Add(kvSeedExp(true).Snapshot())
 	fs, _ := testFiles(f, nil)
 	f.Fuzz(func(t *testing.T, b []byte) {
 		fuzzLoadKV(t, b, KVOptions{Inline: 4, Files: fs, OnFileError: func(err error) { t.Fatal(err) }})
@@ -190,6 +202,8 @@ func FuzzKVRange(f *testing.F) {
 			op := format.Op{Kind: format.OpPut, Space: "kv", Key: key, Value: []byte{kind}}
 			if kind%4 == 0 {
 				op = format.Op{Kind: format.OpDel, Space: "kv", Key: key}
+			} else if kind%3 == 1 {
+				op.Exp = int64(head) + 2 // design 27
 			}
 			e := &Entry{LSN: head, Ops: []format.Op{op}}
 			l.Apply(e, testEnv{})
@@ -207,7 +221,7 @@ func FuzzKVRange(f *testing.F) {
 					t.Fatalf("Range(%q,%q,%d,%v): %d keys, want %d", lo, hi, at, rev, len(got), len(want))
 				}
 				for i := range got {
-					if got[i].Key != want[i].Key || got[i].LSN != want[i].LSN {
+					if got[i].Key != want[i].Key || got[i].LSN != want[i].LSN || got[i].Exp != want[i].Exp {
 						t.Fatalf("Range(%q,%q,%d,%v)[%d] = %q@%d, want %q@%d", lo, hi, at, rev, i, got[i].Key, got[i].LSN, want[i].Key, want[i].LSN)
 					}
 				}

@@ -138,7 +138,9 @@ func (it *Iterator) Next() bool {
 			break
 		}
 		if it.pi == len(it.page) && it.more {
-			it.fetch()
+			if it.fetch(); it.err != nil {
+				break
+			}
 		}
 		var p *index.Pair
 		if it.pi < len(it.page) {
@@ -206,8 +208,26 @@ func (it *Iterator) fetch() {
 	n = max(n, 1)
 	page := it.page[:0]
 	v := it.tx.v
+	// The read time is fixed before the read lock (it may read a segment);
+	// only a view that has seen an expiry needs it.
+	if !it.tx.nowOK {
+		v.mu.RLock()
+		may := v.kv.MayExpire() // read under the lock: the writer sets it
+		v.mu.RUnlock()
+		if may {
+			if _, err := it.tx.Now(); err != nil {
+				it.err, it.done, it.page, it.pi, it.more = err, true, page, 0, false
+				return
+			}
+		}
+	}
 	v.mu.RLock()
 	v.kv.Range(it.space, lo, hi, it.tx.at, it.rev, func(k string, ver index.Version) bool {
+		if ver.Exp != 0 {
+			if live, _ := it.tx.live(&ver); !live {
+				return true
+			}
+		}
 		page = append(page, index.Pair{Key: k, Version: ver})
 		return len(page) < n
 	})

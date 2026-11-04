@@ -39,6 +39,8 @@ func genLog(t *rapid.T) []*Entry {
 			op.Value = []byte(fmt.Sprint("v", lsn, ".", j))
 			if op.Kind == format.OpDel {
 				op.Value = nil
+			} else {
+				op.Exp = rapid.SampledFrom([]int64{0, 0, 0, int64(lsn) + 3}).Draw(t, "exp") // design 27
 			}
 			e.Ops = append(e.Ops, op)
 		}

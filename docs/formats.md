@@ -131,6 +131,8 @@ op × n:
   u8      kind   1=PUT 2=DEL 3=APPEND (reserved for the topics index; main never writes it) 4=SHRED
                  5=INGEST (alone in its frame; space "kv", key = the run's object key,
                  value = JSON {meta, sha256}: design 26)
+                 kind | 0x80 (design 27): PUT only, an i64le absolute expiry
+                 (unix nanos, nonzero) follows the value; older builds reject it
   uvarint+bytes  subject   ("" = not subject-scoped; else subjectHash)
   uvarint+bytes  space     "kv", or a space owned by a registered index (index.Kind.Spaces)
   uvarint+bytes  key
@@ -284,3 +286,9 @@ and that index is rebuilt from the log.
 The KV part starts with the tag `KV2` and records the inline limit it was
 written with. A `KV1` snapshot or one written with a different
 limit is ignored the same way, and the log is replayed.
+Since design 27 a snapshot in which some version has an expiry is tagged
+`KV4` and stores an i64 expiry after each version; without expiries it is `KV2` or
+`KV3` as before, byte-identical. Run records (checkpoints, bases) mark
+a version with an expiry by flag `fExp` followed by an i64le. Older builds
+reject both (snapshot ignored and the log replayed; a run with an unknown
+flag fails to load).

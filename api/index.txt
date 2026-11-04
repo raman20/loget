@@ -62,6 +62,7 @@ func (l *KV) Inline() int
 func (l *KV) LastWrite(space, key string) uint64
 func (l *KV) Latest(fn func(space, key string, v Version) error) error
 func (l *KV) LoadIngest(src RunSource, lsn uint64) (*IngestRun, error)
+func (l *KV) MayExpire() bool
 func (*KV) Name() string
 func (l *KV) Range(space, lo, hi string, at uint64, reverse bool, fn func(key string, v Version) bool)
 func (l *KV) Scan(space, prefix string, at uint64) []Pair
@@ -118,4 +119,6 @@ type Version struct {
 	Chunk   uint32
 	Subject string
 	Val     []byte
+	Exp     int64
+func (v Version) Expired(now int64) bool
 func (v Version) Ref() bool

@@ -7,6 +7,20 @@ break APIs and the on-storage format.
 
 ## [Unreleased]
 
+### Added (KV completion 3: TTL and snapshot handles, design 27, 2026-11-04)
+
+- `TTL(d)` and `ExpiresAt(t)` write options for KV puts (transactions and
+  batches). Expiry is stored in the log and compared with the commit
+  timestamp at the read LSN, never the wall clock at read time; `Tx.Now()`.
+  Compaction drops expired keys (`CompactStats.Expired`).
+- `DB.Snapshot` / `Branch.Snapshot` read handles with `View` and `Release`;
+  they hold back compaction for up to `Options.SnapshotMaxAge` (default
+  10 min), then fail with `ErrSnapshotTooOld`. `ErrSnapshotReleased`,
+  `CompactStats.Pinned`, `DB.LiveSnapshots`.
+- Format: op kind bit 0x80 (expiry), key-index snapshot tag `KV4`, run
+  flag `fExp`, written only when a key has an expiry. Older builds reject
+  them.
+
 ### Changed (KV item 5: open without full replay, design 24, 2026-11-01)
 
 - Open loads the newest index checkpoint: the record store's runs stored

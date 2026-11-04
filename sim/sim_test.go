@@ -71,9 +71,14 @@ func TestSimulation(t *testing.T) {
 		tot.CalmOpens += r.CalmOpens
 		tot.ReadFaultCorrupt += r.ReadFaultCorrupt
 		tot.IndexFileFaults += r.IndexFileFaults
+		tot.Expired += r.Expired
+		tot.Expiring += r.Expiring
 	}
-	t.Logf("%d seeds × %d steps OK: %d acked txns, %d ambiguous, %d crashes (%d clean closes), %d takeovers, %d shreds, %d rewinds, %d compactions (%d gc), %d injected store faults, %d calm opens, %d corrupt-under-read-faults, %d run-file faults",
-		n, steps, tot.Acked, tot.Ambiguous, tot.Crashes, tot.Closes, tot.Takeovers, tot.Shreds, tot.Rewinds, tot.Compacts, tot.GCs, tot.Faults, tot.CalmOpens, tot.ReadFaultCorrupt, tot.IndexFileFaults)
+	if n >= 50 && (tot.Expired == 0 || tot.Expiring == 0) {
+		t.Fatalf("expiry not exercised: %d expired, %d expiring keys checked", tot.Expired, tot.Expiring)
+	}
+	t.Logf("%d seeds × %d steps OK: %d acked txns, %d ambiguous, %d crashes (%d clean closes), %d takeovers, %d shreds, %d rewinds, %d compactions (%d gc), %d injected store faults, %d calm opens, %d corrupt-under-read-faults, %d run-file faults, %d expired / %d expiring keys checked",
+		n, steps, tot.Acked, tot.Ambiguous, tot.Crashes, tot.Closes, tot.Takeovers, tot.Shreds, tot.Rewinds, tot.Compacts, tot.GCs, tot.Faults, tot.CalmOpens, tot.ReadFaultCorrupt, tot.IndexFileFaults, tot.Expired, tot.Expiring)
 }
 
 // TestDeterminism: the same seed produces a bit-identical trace.

@@ -141,6 +141,7 @@ func FuzzDecodeSegment(f *testing.F) {
 
 func FuzzDecodePayload(f *testing.F) {
 	f.Add(EncodePayload(&Frame{LSN: 1, Ops: []Op{{Kind: OpPut, Key: "a", Value: []byte("b")}}}))
+	f.Add(EncodePayload(&Frame{LSN: 1, Ops: []Op{{Kind: OpPut, Key: "a", Value: []byte("b"), Exp: 77}}}))
 	f.Fuzz(func(t *testing.T, p []byte) {
 		fr, err := DecodePayload(p)
 		// Canonical: anything that decodes re-encodes to exactly the same bytes,
@@ -149,4 +150,24 @@ func FuzzDecodePayload(f *testing.F) {
 			t.Fatalf("non-canonical payload accepted: %x", p)
 		}
 	})
+}
+
+// TestOpExpiry: an expiring put round-trips; an expiry on another kind, or
+// a zero or truncated one, is corrupt (design 27).
+func TestOpExpiry(t *testing.T) {
+	f := &Frame{LSN: 3, TS: 9, Ops: []Op{{Kind: OpPut, Key: "a", Value: []byte("b"), Exp: 1 << 40}, {Kind: OpPut, Key: "c"}}}
+	p := EncodePayload(f)
+	g, err := DecodePayload(p)
+	if err != nil || g.Ops[0].Exp != 1<<40 || g.Ops[1].Exp != 0 || string(g.Ops[0].Value) != "b" {
+		t.Fatalf("round trip: %+v %v", g, err)
+	}
+	bad := func(name string, mut func([]byte) []byte) {
+		if _, err := DecodePayload(mut(bytes.Clone(p))); err == nil {
+			t.Errorf("%s accepted", name)
+		}
+	}
+	at := 8 + 8 + 32 + 1 // first op's kind byte
+	bad("del", func(b []byte) []byte { b[at] = byte(OpDel) | KindExp; return b })
+	bad("zero", func(b []byte) []byte { clear(b[at+1 : at+9]); return b })
+	bad("short", func(b []byte) []byte { return b[:at+5] })
 }

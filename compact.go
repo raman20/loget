@@ -46,11 +46,13 @@ type CompactOptions struct {
 
 // CompactStats reports what Compact did.
 type CompactStats struct {
-	Logs      int   `json:"logs"`       // logs given a new base
-	Keys      int   `json:"keys"`       // live keys written into bases
-	BaseBytes int64 `json:"base_bytes"` // bytes written (images + value chunks)
-	Deleted   int   `json:"deleted"`    // objects deleted by sweeps
-	Pending   int   `json:"pending"`    // garbage items still waiting for their grace period
+	Logs      int   `json:"logs"`              // logs given a new base
+	Keys      int   `json:"keys"`              // live keys written into bases
+	BaseBytes int64 `json:"base_bytes"`        // bytes written (images + value chunks)
+	Deleted   int   `json:"deleted"`           // objects deleted by sweeps
+	Pending   int   `json:"pending"`           // garbage items still waiting for their grace period
+	Pinned    int   `json:"pinned,omitempty"`  // logs held back by a live Snapshot
+	Expired   int   `json:"expired,omitempty"` // expired keys left out of bases
 
 	// GC only
 	LogsDropped      int `json:"logs_dropped,omitempty"`      // unreachable logs removed from the manifest
@@ -228,6 +230,18 @@ func (db *DB) compactLocked(ctx context.Context, o GCOptions, gc bool, stats *Co
 			return false, err
 		}
 		var bm *BaseMeta
+		cut := c.k
+		if c.head {
+			cut = l.head()
+		}
+		if l.meta.Base == nil || l.meta.Base.LSN < cut {
+			// A live snapshot below the cut holds this log back (bounded
+			// by SnapshotMaxAge; docs/design/27-ttl-snapshots.md).
+			if !db.snaps.plan(id, cut, db.opts.Clock, int64(db.opts.SnapshotMaxAge)) {
+				stats.Pinned++
+				continue
+			}
+		}
 		if c.head {
 			head := l.head()
 			v := db.views[id]
@@ -367,10 +381,27 @@ func (db *DB) writeBase(ctx context.Context, l *logState, v *view, head uint64, 
 		}
 	}()
 	cw := &chunkWriter{db: db, key: key}
+	// The base's TS is the cut frame's commit time; a key expired at it is
+	// invisible to every read at or after the cut, so the base drops it
+	// (expiry GC is part of the fold: docs/design/27-ttl-snapshots.md).
+	l.mu.RLock()
+	ts, seq := l.lastTS, l.nextSeq
+	l.mu.RUnlock()
+	if at != nil {
+		ts, seq = at.ts, at.seq
+	} else if ts, err = frameTS(ctx, l, head); err != nil {
+		// the same as lastTS for a log with frames of its own; a branch
+		// without any takes its parent's frame (or base) at the fork
+		return nil, err
+	}
 	v.mu.RLock()
 	defer v.mu.RUnlock()
 	err = v.kv.Latest(func(space, k string, ver index.Version) error {
 		if ver.Del {
+			return nil
+		}
+		if ver.Expired(ts) {
+			stats.Expired++
 			return nil
 		}
 		val := ver.Val
@@ -399,7 +430,7 @@ func (db *DB) writeBase(ctx context.Context, l *logState, v *view, head uint64, 
 				val = ct
 			}
 		}
-		nv := index.Version{LSN: ver.LSN, Op: ver.Op, Subject: ver.Subject}
+		nv := index.Version{LSN: ver.LSN, Op: ver.Op, Subject: ver.Subject, Exp: ver.Exp}
 		if len(val) > inline {
 			n, off, err := cw.add(ctx, val)
 			if err != nil {
@@ -422,12 +453,7 @@ func (db *DB) writeBase(ctx context.Context, l *logState, v *view, head uint64, 
 	if err != nil {
 		return nil, err
 	}
-	l.mu.RLock()
-	ts, seq := l.lastTS, l.nextSeq
-	l.mu.RUnlock()
-	if at != nil {
-		ts, seq = at.ts, at.seq
-	} else {
+	if at == nil {
 		// every segment that exists now is covered (a read-only load may
 		// stop before a torn tail)
 		keys, err := db.st.List(ctx, "log/"+id+"/")

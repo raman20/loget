@@ -39,6 +39,12 @@ type Tx struct {
 	lazyCtx context.Context
 	lazyLog *logState
 	eph     *view
+	// Read time for expiry (ttl.go): set lazily from the frame at `at`
+	// unless a Snapshot fixed it. minExp: earliest expiry a read-write
+	// transaction saw as live (0 = none), checked at commit.
+	now    int64
+	nowOK  bool
+	minExp int64
 }
 
 type localVal struct {
@@ -55,6 +61,9 @@ func (tx *Tx) write(op format.Op, opts []WriteOpt) error {
 	}
 	for _, o := range opts {
 		o(&op)
+	}
+	if err := checkExp(&op); err != nil {
+		return err
 	}
 	if n := max(len(op.Key), len(op.Space), len(op.Subject)); n > MaxKeyBytes {
 		return fmt.Errorf("%w: key or name of %d bytes (max %d)", ErrTooLarge, n, MaxKeyBytes)
@@ -88,6 +97,11 @@ func (tx *Tx) get(space, key string) ([]byte, error) {
 	ver, ok := tx.v.kv.Get(space, key, tx.at)
 	tx.v.mu.RUnlock()
 	if !ok {
+		return nil, ErrNotFound
+	}
+	if live, err := tx.live(&ver); err != nil {
+		return nil, err
+	} else if !live {
 		return nil, ErrNotFound
 	}
 	return tx.open(ver, space, key)
@@ -228,7 +242,7 @@ func (w *writer) attempt(ctx context.Context, fn func(*Tx) error, i int) (res co
 	if err := ctx.Err(); err != nil {
 		return commitRes{}, true, err
 	}
-	return w.submit(&commitReq{at: tx.at, ops: tx.ops, reads: tx.reads, ranges: tx.ranges, attempt: i}), false, nil
+	return w.submit(&commitReq{at: tx.at, ops: tx.ops, reads: tx.reads, ranges: tx.ranges, minExp: tx.minExp, attempt: i}), false, nil
 }
 
 // conflictBackoff waits a jittered, exponentially growing delay after the

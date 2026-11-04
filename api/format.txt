@@ -5,6 +5,7 @@ const (
 	FrameHdrSize  = 8
 	MaxFrameSize  = 64 << 20
 	MaxOps        = 1 << 20
+const KindExp = 0x80
 var (
 	ErrTorn    = errors.New("format: torn or corrupt tail")
 	ErrHeader  = errors.New("format: bad segment header")
@@ -41,6 +42,7 @@ type Op struct {
 	Key     string
 	Value   []byte
 	ValOff uint32
+	Exp int64
 type SegHeader struct {
 	Epoch uint64
 	Seq   uint64

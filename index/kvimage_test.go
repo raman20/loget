@@ -222,6 +222,11 @@ func FuzzLoadKVRuns(f *testing.F) {
 	c := l.Cut()
 	f.Add(bytes.Clone(c.Runs[0].Bytes()), c.Runs[0].r.n, c.Runs[0].r.vers)
 	c.Release()
+	le := kvSeedExp(true)
+	le.freeze()
+	ce := le.Cut()
+	f.Add(bytes.Clone(ce.Runs[0].Bytes()), ce.Runs[0].r.n, ce.Runs[0].r.vers)
+	ce.Release()
 	f.Fuzz(func(t *testing.T, b []byte, n, vers int) {
 		if len(b) == 0 {
 			return

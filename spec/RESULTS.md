@@ -48,6 +48,8 @@ the first run reported 32 with identical state counts.
 | LogEtShred | DEK per subject, marker → delete → audit entry + certificate; crash between steps; DEK create landing late; sweep; hash chain | 25,570 | 6,481 | 16 | no error (incl. liveness) |
 | LogEtCkpt | index checkpoints and the sharded base (design 24, 2026-11-01): runs as LSN intervals; freeze and merge, piece and descriptor uploads, conditional checkpoint commit, compaction dropping the checkpoint, garbage sweeps with grace, orphan sweep by epoch, 2 processes with crashes, ≤2 epochs, open from a checkpoint, a reader of an older manifest; MaxLSN=2, MaxMans=5, process symmetry. Run with `-workers 2` (3 min 14 s). Larger bounds did not finish and are partial only (below) | 33,127,486 | 6,621,739 | 36 | no error |
 | LogEtIngest | bulk ingest (design 26, 2026-11-04): pieces stored beside the segment, frame committed by segment PutIfAbsent, open-time fence, fenced/crashed writers of older epochs, abort, GC with the segment, orphan sweep by epoch; 2 processes, process symmetry. CI config MaxSeq=3, MaxEpoch=3 (14,318 / 2,677 states, depth 17); `LogEtIngest_big.cfg` MaxSeq=5, MaxEpoch=4 shown | 2,480,463 | 279,519 | 27 | no error |
+| LogEtSnapshot | snapshot retention (design 27, 2026-11-04): writers append, snapshot creation (check floor and planned cut, register) and compaction planning (skip a cut below a live snapshot, record the cut, monotone) under one mutex, then commit or fail; snapshots age out (stop pinning) and are released; 3 snapshots, MaxLSN=4 | 768,903 | 151,967 | 17 | no error |
+| LogEtTTL | per-key expiry in the fold (design 27): frames with non-decreasing commit timestamps, puts with absolute expiries, reads at LSN L using TS(L), compaction to a base at any cut dropping keys expired at TS(cut); checks base+tail = full replay at every L ≥ cut and that OCC validation with the expiry rule implies the read is unchanged at commit; 2 keys, 4 frames, timestamps 0..3 | 5,085,081 | 1,833,081 | 6 | no error |
 
 ## Properties checked
 
@@ -144,6 +146,10 @@ the first run reported 32 with identical state counts.
 | LogEtGrow with the grower writing at a size read before releasing the lock (`LogEtGrow_unlocked.cfg`) | `NoLostRecord` violated in 4 steps |
 | LogEtCkpt without the base-LSN (floor) check at checkpoint commit and open (`LogEtCkpt_nobase.cfg`, MaxLSN=3) | `CkptEqReplay` violated (1,244 states generated, depth 7; the count varies a little with worker interleaving) |
 | LogEtCkpt with the orphan sweep ignoring the epoch rule (`LogEtCkpt_noepoch.cfg`, MaxLSN=3) | `CkptIntact` violated (1,751 states generated, depth 8) |
+| LogEtSnapshot with creation checking and registering in two steps (`LogEtSnapshot_unlocked.cfg`) | `SnapshotReadable` violated (564 distinct states, depth 7) |
+| LogEtSnapshot with creation ignoring the planned cut (`LogEtSnapshot_nocut.cfg`) | `SnapshotReadable` violated (175 distinct states, depth 6) |
+| LogEtTTL with compaction dropping keys expired at a later (wall-clock) time than TS(cut) (`LogEtTTL_wallclock.cfg`) | `BaseEqReplay` violated in 2 steps |
+| LogEtTTL with OCC validation ignoring expiries (`LogEtTTL_noexpcheck.cfg`) | `OCCSound` violated in 2 steps |
 | LogEtShred with `Sweep` disabled | `KeyEventuallyGone` violated |
 | LogEtShred with reads ignoring the shred marker | `ShreddedNeverRevealed` violated |
 
@@ -156,7 +162,8 @@ the first run reported 32 with identical state counts.
   tests (see README) check the code itself against reference models.
 - Torn writes are over-approximated as any subset of a batch's frames (the
   real format keeps a prefix).
-- Snapshots, derived indexes (the index framework) and the HTTP layer are not modelled.
+- Snapshot handles are modelled (LogEtSnapshot) for one log; lineage (a
+  snapshot pinning parent logs) is not. Derived indexes (the index framework) and the HTTP layer are not modelled.
 - LogEtCkpt at larger bounds was stopped, not completed: `LogEtCkpt_big.cfg`
   (MaxLSN=3, MaxMans=7) after 25 min, 58,595,423 distinct states, 29.9M
   still queued; `LogEtCkpt_e3.cfg` (MaxLSN=2, 3 epochs) after 13.2M distinct.

@@ -249,7 +249,7 @@ func (l *KV) loadRun(src RunSource) (*run, error) {
 func (r *run) check(m RunMeta) error {
 	bad := func(p int, why string) error { return badRun("entry at " + strconv.Itoa(p) + ": " + why) }
 	b := r.b
-	r.bofs, r.subj, r.n, r.vers, r.chunk = nil, map[string]int{}, 0, 0, false
+	r.bofs, r.subj, r.n, r.vers, r.chunk, r.exp = nil, map[string]int{}, 0, 0, false, false
 	var first, key, prev []byte
 	for p := 0; p < len(b); {
 		if r.n%runBlock == 0 {
@@ -333,7 +333,7 @@ func (r *run) checkBody(b []byte) (int, error) {
 		}
 		f := b[0]
 		b = b[1:]
-		if f&^(fDel|fPos|fChunk|fVal|fSubj) != 0 {
+		if f&^(fDel|fPos|fChunk|fVal|fSubj|fExp) != 0 {
 			return 0, errors.New("unknown flags")
 		}
 		if f&fPos != 0 {
@@ -368,6 +368,13 @@ func (r *run) checkBody(b []byte) (int, error) {
 				return 0, errShort
 			}
 			subj, b = string(b[:x]), b[x:]
+		}
+		if f&fExp != 0 {
+			if len(b) < 8 || binary.LittleEndian.Uint64(b) == 0 || f&fDel != 0 {
+				return 0, errors.New("bad expiry")
+			}
+			r.exp = true
+			b = b[8:]
 		}
 		if subj != "" && !(f&fDel != 0 && f&(fVal|fPos|fChunk) == 0) {
 			r.subj[subj]++

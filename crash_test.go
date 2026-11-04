@@ -23,6 +23,9 @@ const crashG = 4
 
 const crashIngestN = 3000 // keys per ingest (LOGET_CRASH_INGEST)
 
+// crashTTL is the TTL of the ttl<g>/<i> keys (LOGET_CRASH_TTL).
+const crashTTL = 20 * time.Millisecond
+
 // crashChild is run in a subprocess: 4 goroutines commit forever, printing
 // "ACK g i" only after Update returned nil (i.e. after fsync+rename).
 func crashChild(loc string) {
@@ -85,6 +88,7 @@ func crashChild(loc string) {
 			}
 		}()
 	}
+	ttl := os.Getenv("LOGET_CRASH_TTL") != ""
 	for g := 0; g < crashG; g++ {
 		wg.Add(1)
 		go func(g int) {
@@ -97,6 +101,9 @@ func crashChild(loc string) {
 			})
 			for i := start + 1; ; i++ {
 				err := db.Update(ctx, func(tx *Tx) error {
+					if ttl {
+						tx.Put(fmt.Sprintf("ttl%d/%08d", g, i), []byte("x"), TTL(crashTTL))
+					}
 					tx.Put(fmt.Sprintf("g%d/%08d", g, i), []byte("x"))
 					tx.Put(fmt.Sprint("cnt", g), []byte(strconv.Itoa(i)))
 					return tx.PutRecord("t:c", fmt.Sprintf("%d:%d", g, i), []byte(fmt.Sprint("g", g)))
@@ -156,6 +163,12 @@ func TestCrashKill9Ingest(t *testing.T) {
 	crashKill9(t, "fs://"+t.TempDir(), "LOGET_CRASH_COMPACT=1", "LOGET_CRASH_CKPT=1", "LOGET_CRASH_INGEST=1")
 }
 
+// TestCrashKill9TTL: expiring puts (design 27) under kill -9 with
+// compaction and index checkpoints racing.
+func TestCrashKill9TTL(t *testing.T) {
+	crashKill9(t, "fs://"+t.TempDir(), "LOGET_CRASH_COMPACT=1", "LOGET_CRASH_CKPT=1", "LOGET_CRASH_TTL=1")
+}
+
 func TestCrashKill9IndexFiles(t *testing.T) {
 	if !runfile.Supported {
 		t.Skip("run files need mmap")
@@ -178,6 +191,9 @@ func crashKill9(t *testing.T, dir string, env ...string) {
 	sawIngest := 0
 	based := 0  // recoveries that started from a compaction base
 	ckpted := 0 // recoveries with an index checkpoint in the manifest
+	ttlOn := slices.Contains(env, "LOGET_CRASH_TTL=1")
+	ttlLive := make([]int, crashG)
+	ttlExpired, ttlSeen := 0, 0
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	for it := 0; it < iters; it++ {
 		cmd := exec.Command(os.Args[0], "-test.run=^$")
@@ -266,6 +282,23 @@ func crashKill9(t *testing.T, dir string, env ...string) {
 					t.Fatalf("iter %d g%d: tally index counts %d (%v), counter %d", it, g, c, err, n)
 				}
 				acked[g] = n // unacked-but-durable commits count from now on
+				if ttlOn {
+					// one TTL and monotone commit times: the live TTL keys
+					// are exactly a suffix of 1..n
+					ks, _ := tx.Scan(fmt.Sprintf("ttl%d/", g))
+					for j, kv := range ks {
+						if want := fmt.Sprintf("ttl%d/%08d", g, n-len(ks)+1+j); kv.Key != want {
+							t.Fatalf("iter %d g%d: live TTL keys not a suffix: %q at %d, want %q", it, g, kv.Key, j, want)
+						}
+					}
+					ttlLive[g] = len(ks)
+					if len(ks) < n {
+						ttlExpired++
+					}
+					if len(ks) > 0 {
+						ttlSeen++
+					}
+				}
 			}
 			kvs, _ := tx.Scan("ing/")
 			per := map[string]int{}
@@ -291,6 +324,20 @@ func crashKill9(t *testing.T, dir string, env ...string) {
 		if err != nil || !r.OK {
 			t.Fatalf("iter %d verify: %+v %v", it, r, err)
 		}
+		if ttlOn { // a second open (replay or checkpoint) reads the same
+			db.Close()
+			if db, err = OpenStore(ctx, st, append([]Option{quiet(), WithIndex(tallyKind())}, recOpts...)...); err != nil {
+				t.Fatalf("iter %d: reopen: %v", it, err)
+			}
+			for g := 0; g < crashG; g++ {
+				db.View(ctx, func(tx *Tx) error {
+					if ks, _ := tx.Scan(fmt.Sprintf("ttl%d/", g)); len(ks) != ttlLive[g] {
+						t.Fatalf("iter %d g%d: %d live TTL keys after a second open, %d before", it, g, len(ks), ttlLive[g])
+					}
+					return nil
+				})
+			}
+		}
 		for _, lm := range db.Manifest().Logs {
 			if lm.Base != nil {
 				based++
@@ -311,6 +358,9 @@ func crashKill9(t *testing.T, dir string, env ...string) {
 	}
 	if slices.Contains(env, "LOGET_CRASH_INGEST=1") && sawIngest == 0 {
 		t.Fatal("no ingest recovered")
+	}
+	if ttlOn && (ttlExpired == 0 || ttlSeen == 0) {
+		t.Fatalf("TTL keys not exercised: %d recoveries saw expired ones, %d live ones", ttlExpired, ttlSeen)
 	}
 	if slices.Contains(env, "LOGET_CRASH_CKPT=1") && ckpted == 0 {
 		t.Fatal("no recovery started from an index checkpoint")

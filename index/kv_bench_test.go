@@ -15,7 +15,12 @@ import (
 // kvLoad builds a KV of n keys ("user%010d", shuffled), one put each, as
 // the engine folds them: 1 KiB values kept as log positions (inline 64),
 // 8 puts per entry. The value buffer is shared: only the index is measured.
+// LOGET_KV_EXP=1 gives every put an expiry (design 27: memory per TTL key).
 func kvLoad(n int, seed int64) *KV {
+	var exp int64
+	if os.Getenv("LOGET_KV_EXP") == "1" {
+		exp = 1 << 50
+	}
 	val := make([]byte, 1024)
 	l := NewKVInline(64)
 	perm := rand.New(rand.NewSource(seed)).Perm(n)
@@ -24,7 +29,7 @@ func kvLoad(n int, seed int64) *KV {
 		e.LSN++
 		e.Ops = e.Ops[:0]
 		for j := i; j < i+8 && j < n; j++ {
-			e.Ops = append(e.Ops, format.Op{Kind: format.OpPut, Space: "kv", Key: fmt.Sprintf("user%010d", perm[j]), Value: val, ValOff: 100})
+			e.Ops = append(e.Ops, format.Op{Kind: format.OpPut, Space: "kv", Key: fmt.Sprintf("user%010d", perm[j]), Value: val, ValOff: 100, Exp: exp})
 		}
 		l.Apply(e, noEnv{})
 	}

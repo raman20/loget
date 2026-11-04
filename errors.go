@@ -51,6 +51,12 @@ var (
 	// space no registered index owns, or an index whose spaces are invalid.
 	// HTTP 400.
 	ErrBadValue = errors.New("loget: invalid value")
+
+	// ErrSnapshotTooOld: a Snapshot outlived Options.SnapshotMaxAge, or
+	// its LSN is below the compaction base (or a compaction in progress).
+	ErrSnapshotTooOld = errors.New("loget: snapshot too old")
+	// ErrSnapshotReleased: the Snapshot was released.
+	ErrSnapshotReleased = errors.New("loget: snapshot released")
 )
 
 // Size limits of one transaction, checked at commit (after encryption).

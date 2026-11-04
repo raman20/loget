@@ -1,0 +1,31 @@
+goos: linux
+goarch: amd64
+pkg: github.com/raman20/loget
+cpu: Intel(R) Xeon(R) Processor
+BenchmarkPutSerial/mem-8 	  238292	      6728 ns/op
+BenchmarkPutSerial/mem-8 	  196753	      6720 ns/op
+BenchmarkPutSerial/mem-8 	  238399	      6895 ns/op
+BenchmarkPutSerial/mem-8 	  247999	      6720 ns/op
+BenchmarkPutSerial/mem-8 	  205366	      6884 ns/op
+BenchmarkPutSerial/fs-8  	    4255	    274924 ns/op
+BenchmarkPutSerial/fs-8  	    3678	    285898 ns/op
+BenchmarkPutSerial/fs-8  	    4549	    272187 ns/op
+BenchmarkPutSerial/fs-8  	    4174	    274798 ns/op
+BenchmarkPutSerial/fs-8  	    4158	    281022 ns/op
+BenchmarkPutParallel/mem-8         	  333823	      3443 ns/op
+BenchmarkPutParallel/mem-8         	  329679	      3447 ns/op
+BenchmarkPutParallel/mem-8         	  335444	      3175 ns/op
+BenchmarkPutParallel/mem-8         	  340443	      3487 ns/op
+BenchmarkPutParallel/mem-8         	  350464	      3339 ns/op
+BenchmarkPutParallel/fs-8          	  137200	      9341 ns/op
+BenchmarkPutParallel/fs-8          	  160735	      9980 ns/op
+BenchmarkPutParallel/fs-8          	  174601	      8703 ns/op
+BenchmarkPutParallel/fs-8          	  155194	      8210 ns/op
+BenchmarkPutParallel/fs-8          	  133104	      9666 ns/op
+BenchmarkGet-8                     	 1959955	       655.3 ns/op
+BenchmarkGet-8                     	 1812133	       672.1 ns/op
+BenchmarkGet-8                     	 1849646	       644.7 ns/op
+BenchmarkGet-8                     	 1495299	       687.9 ns/op
+BenchmarkGet-8                     	 1896338	       638.2 ns/op
+PASS
+ok  	github.com/raman20/loget	38.296s

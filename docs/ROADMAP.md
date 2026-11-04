@@ -25,8 +25,8 @@ runs, not performance claims.
 | 3 | **Batches and bulk load** | every write is an OCC transaction (`Update`, auto-retry); one segment and one `fdatasync` per group commit; index ingest 2.0–2.9 µs/key | Pebble `Batch`/`IndexedBatch`, SST ingestion; RocksDB `WriteBatch`, `IngestExternalFile`; LMDB `MDB_APPEND` | no write-only fast path; no bulk import; no per-write durability choice |
 | 4 | **Compaction** | whole-log: writes a base image of live data per log, then deletes garbage after a grace period. Commits pause 11–14 ms; branch operations wait for the whole run; journal file shrinks only offline | Pebble/RocksDB: leveled, incremental, in the background without commit pauses. LMDB: copy-on-write with a free list, no compaction | pauses and O(live data) rewrites per run |
 | 5 | **Open / recovery time** | loads the newest index checkpoint (stored runs, written in the background every 512 MiB of segments and at close; design 24) and replays the tail: 10M keys 3.4 s / 580 MiB peak (full replay 26–28 s); still O(index size): pieces are copied and hash slots rebuilt | replay the WAL into a memtable only | open time grows with the index; after a crash, the tail since the last checkpoint is replayed |
-| 6 | **Snapshot lifetime** | time travel to any LSN and zero-copy branches (stronger than all three); but compaction drops history below each branch head (`410`), (checkpoints and bases are stored in ≤ 64 MiB pieces since design 24) | Pebble/RocksDB: in-memory snapshot handles pin versions until released; LMDB: a read txn pins pages | long readers can lose history to compaction |
-| 7 | **TTL** | none | RocksDB: TTL DB / compaction filters; Pebble and LMDB: none built in | expiry must be done by the app |
+| 6 | **Snapshot lifetime** | time travel to any LSN and zero-copy branches (stronger than all three); snapshot handles pin compaction for up to `SnapshotMaxAge` (design 27), else history below each branch head is dropped (`410`) (checkpoints and bases are stored in ≤ 64 MiB pieces since design 24) | Pebble/RocksDB: in-memory snapshot handles pin versions until released; LMDB: a read txn pins pages | readers longer than `SnapshotMaxAge` get `ErrSnapshotTooOld` |
+| 7 | **TTL** | per-key TTL, deterministic (design 27) | RocksDB: TTL DB / compaction filters; Pebble and LMDB: none built in | expired data is freed only by compaction; no HTTP TTL |
 | 8 | **Compression** | key runs are front-coded; values are not compressed | per-block Snappy/Zstd/LZ4 (Pebble, RocksDB); LMDB none | larger disk and object-store footprint |
 | 9 | **Point reads** | faster than Pebble in YCSB C while the index fits in RAM (1.83M vs 197k ops/s, 8 clients); the runs made the index `Get` 1.1–1.3× slower than the old map | block cache plus bloom filters | small today; will matter once item 1 moves the index to disk |
 
@@ -55,13 +55,15 @@ Nothing else is added to `main` meanwhile.
    `Ingest` as one commit (10M keys: 1.45M keys/s, 172 MiB peak vs Pebble
    3.96M/s, 46 MiB). Left: stream pieces while building, let commits run
    during an ingest, batch throughput (335k vs Pebble 2.09M keys/s).
-4. **TTL**: per-key expiry that is still a pure function of the log
-   (expiry by entry timestamp, never by wall clock at read time).
+4. **TTL**: done (design 27): per-key expiry stored in the log, read
+   time = commit timestamp at the read LSN, expiry as an OCC write,
+   collected by compaction. Left: HTTP, ingest, expiry on an idle DB.
 5. **Open and snapshots**: open without full replay: done (design 24):
    incremental index checkpoints of stored runs, base stored as run
    pieces (no 1 GiB / ~15M-key cap); 10M-key open 7.9 s (snapshot) / 5.5 s
-   (base) → 3.4 / 3.3 s, peak RSS 3.2 / 2.2 GiB → 0.58 / 0.39 GiB. Left:
-   pinned snapshot handles that compaction respects; checkpoints naming
+   (base) → 3.4 / 3.3 s, peak RSS 3.2 / 2.2 GiB → 0.58 / 0.39 GiB. Pinned
+   snapshot handles that compaction respects: done (design 27, bounded by
+   `SnapshotMaxAge`). Left: checkpoints naming
    base pieces; incremental derived-index sections.
 6. **Compaction**: incremental compaction without a commit pause. The
    three problems measured in design 21 (design 23): `writeBase` peaking
