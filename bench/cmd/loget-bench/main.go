@@ -16,6 +16,7 @@ suites:
   txn      contended OCC transactions (loget vs badger)
   s3       commit latency, batching, requests/commit and cold open on S3/MinIO
   compact  storage, open time and heap before/after compaction (overwrite-heavy)
+  recompact repeated compactions with light churn: time, bytes written, peak RSS (design 28)
   commit   commit latency tails on the journal (8 MiB file growth steps)
   gc       disk size per cycle under overwrite + branch + rewind churn: compact vs gc vs gc+shrink
   open     open time and memory of an existing database (ycsb -keep), then random reads
@@ -40,6 +41,8 @@ func main() {
 		cmdS3(args)
 	case "compact":
 		cmdCompact(args)
+	case "recompact":
+		cmdRecompact(args)
 	case "gc":
 		cmdGC(args)
 	case "commit":

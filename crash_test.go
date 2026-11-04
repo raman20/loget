@@ -148,6 +148,7 @@ func TestCrashKill9Journal(t *testing.T) { crashKill9(t, "journal://"+t.TempDir(
 func TestCrashKill9Compact(t *testing.T) {
 	crashKill9(t, "fs://"+t.TempDir(), "LOGET_CRASH_COMPACT=1")
 }
+
 // Design 28: kills while compactions share value chunks of the previous
 // base, copy the rest and list the dead ones as garbage.
 func TestCrashKill9CompactShared(t *testing.T) {

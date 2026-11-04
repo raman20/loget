@@ -7,6 +7,20 @@ break APIs and the on-storage format.
 
 ## [Unreleased]
 
+### Changed (KV item 6 part: shared value chunks, faster scans, design 28, 2026-11-04)
+
+- Compaction keeps value chunks of the previous base that are at least
+  half live instead of copying every value; dead chunks are listed as
+  garbage kind `vals`. 10M x 100 B with 1% churn: 26-27 s -> 6.7 s and
+  1,158 -> 213 MiB written per compaction. The key run is still rewritten
+  whole; peak RSS unchanged. Opt-out: `WithCompactCopyAll()`. `CompactStats.SharedChunks`, `SharedBytes`.
+- Format: bases record `chunk_sizes`; a base with `refs` makes the
+  manifest format 4, refused by older builds.
+- Iterators read a page's values in coalesced, parallel ranged reads:
+  10M x 100 B full iterator scan 606k -> 1.54M keys/s (Pebble 7.28M).
+- `Snapshot` creation and `Snapshot.View` retry across a compaction swap.
+- `loget-bench recompact`.
+
 ### Added (KV completion 3: TTL and snapshot handles, design 27, 2026-11-04)
 
 - `TTL(d)` and `ExpiresAt(t)` write options for KV puts (transactions and

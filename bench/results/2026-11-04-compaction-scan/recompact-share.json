@@ -1,0 +1,57 @@
+{
+  "suite": "recompact",
+  "env": {
+    "time": "2026-11-04T15:35:13+05:30",
+    "go_version": "go1.27.3",
+    "os": "linux/amd64",
+    "kernel": "6.12.94+",
+    "cpu": "Intel(R) Xeon(R) Processor",
+    "cpus": 8,
+    "mem_total": "16386368 kB",
+    "disk": "/dev/vdb ext4 128G",
+    "loget_commit": "",
+    "command": "/workspace/loget-tools/lb-item4a recompact -keys 10000000 -value 100 -cycles 3 -dir /tmp/rc-share -out rc-share",
+    "loadavg_at_start": "0.92 1.41 1.75"
+  },
+  "params": {
+    "churn": 0.01,
+    "copyall": false,
+    "cycles": 3,
+    "keys": 10000000,
+    "value": 100
+  },
+  "runs": [
+    {
+      "cycle": 0,
+      "ms": 25726.552,
+      "peak_rss": "1537532 kB",
+      "shared_bytes": 0,
+      "shared_chunks": 0,
+      "written_bytes": 1213916050
+    },
+    {
+      "cycle": 1,
+      "ms": 6719.4,
+      "peak_rss": "1454756 kB",
+      "shared_bytes": 990052100,
+      "shared_chunks": 15,
+      "written_bytes": 223846893
+    },
+    {
+      "cycle": 2,
+      "ms": 6748.992,
+      "peak_rss": "1860172 kB",
+      "shared_bytes": 990050500,
+      "shared_chunks": 16,
+      "written_bytes": 223831978
+    },
+    {
+      "cycle": 3,
+      "ms": 6780.67,
+      "peak_rss": "1943912 kB",
+      "shared_bytes": 990050800,
+      "shared_chunks": 17,
+      "written_bytes": 223815229
+    }
+  ]
+}

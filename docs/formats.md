@@ -190,6 +190,14 @@ read. A log's newest index checkpoint is `"ckpt": {"lsn", "floor", "key",
 garbage kinds `"ckpt"` (a descriptor) and `"run"` (a run's `chunks` pieces)
 are added. See [design/24-open-checkpoints.md](design/24-open-checkpoints.md).
 
+Since design 28 a base records `"chunk_sizes"` (bytes of each chunk it
+wrote; older binaries ignore it). A base that shares value chunks of an
+earlier base has `"refs": [{"key", "n", "size"}]`: chunk number c in a
+version means object `<refs[c-1].key>.<refs[c-1].n:%06d>.val`; the
+manifest is then `"format": 4`. Garbage kind `"vals"` has `"objs"`, the
+chunk object names to delete. See
+[design/28-incremental-compaction.md](design/28-incremental-compaction.md).
+
 The manifest with the highest id is current. Creating `id+1` is how a writer
 takes the lease and how branch operations commit; `ErrExists` means another
 writer got there first, and this one is fenced.

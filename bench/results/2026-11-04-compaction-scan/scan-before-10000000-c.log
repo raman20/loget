@@ -1,0 +1,6 @@
+15:25:36 scan loget: loading 10000000 x 100B
+15:26:29 compacted in 23.7s
+15:26:29 mem after load: rss 377 anon 169 file 207 MiB | go-resident 140 heap-live 18 goal 101 | off-heap anon 29 MiB
+15:26:48 loget full-iter: 10000000 keys in 18.94s (527940 keys/s) RSS 305 -> peak 522 MiB, heap peak 37 MiB
+15:26:48 mem end: rss 522 anon 104 file 418 MiB | go-resident 73 heap-live 18 goal 37 | off-heap anon 31 MiB
+wrote /workspace/loget-tools/item4/scan-before/10000000-c/scan-loget.json

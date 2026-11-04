@@ -1,0 +1,6 @@
+15:35:13 recompact: loaded 10000000 keys x 100 B in 32.1s
+15:35:38 recompact 0:    25727 ms  written  1157.7 MiB  shared 0 chunks (0.0 MiB live)  peak RSS 1537532 kB
+15:35:45 recompact 1:     6719 ms  written   213.5 MiB  shared 15 chunks (944.2 MiB live)  peak RSS 1454756 kB
+15:35:52 recompact 2:     6749 ms  written   213.5 MiB  shared 16 chunks (944.2 MiB live)  peak RSS 1860172 kB
+15:35:59 recompact 3:     6781 ms  written   213.4 MiB  shared 17 chunks (944.2 MiB live)  peak RSS 1943912 kB
+wrote rc-share/recompact.json

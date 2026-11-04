@@ -21,7 +21,7 @@ runs, not performance claims.
 | # | gap | LogEt today | Pebble / RocksDB / LMDB | impact |
 |---|---|---|---|---|
 | 1 | **Key index mostly in RAM → mapped run files (design 21)** | runs of ≥ 1 MiB live in unlinked, memory-mapped files (file-backed, reclaimable pages); the hot set, small runs and block offsets stay on the heap. 10M × 100 B YCSB: peak RSS 3,546 → 1,916 MiB, end 920 MiB of which 319 MiB file-backed; 1M × 1 KiB: 958 → 640 MiB peak. Open loads the newest index checkpoint (design 24): 3.4 s at 10M keys, 26–28 s replaying | Pebble 740 MiB peak, 53 MiB end at 10M; opens in under 0.2 s | design 25 (2026-11-04): OCC window bounded (item 6), 32 MiB value cache on local stores, merges drop consumed pages, open 3.4 → 2.0 s; 10M peak 557 MiB (Pebble 737), end 512 MiB mapped / 274 MiB with opt-in `IndexResidentBytes` (Pebble 52). Remaining: no hard bound (pread + block cache not built), ~150 MiB Go heap, open ~10× Pebble |
-| 2 | **Range reads → iterators (design 22)** | `Tx.Iter` with prefix and `[start, end)` bounds, reverse, limit, `After` pagination (HTTP `after=` / `Loget-Next-After`), paged under the read lock so memory stays bounded; OCC conflicts cover only the returned range. Full iterator scan at 10M × 100 B: 498k keys/s, no growth over the resident index (before: 207k keys/s via the slice API, heap peak 4.8 GiB); 100-key prefix scan 6.2k/s at c=1 | Pebble 7.2M keys/s full scan, 39k/s prefix100 at c=1, flat 163 MiB RSS; a live iterator can `SeekGE`/`SeekLT` | one value open per key (no readahead), so scans are 4–15× slower than Pebble; no seek on a live iterator (open a new one with `Start`/`After`) |
+| 2 | **Range reads → iterators (design 22)** | `Tx.Iter` with prefix and `[start, end)` bounds, reverse, limit, `After` pagination (HTTP `after=` / `Loget-Next-After`), paged under the read lock so memory stays bounded; OCC conflicts cover only the returned range. Full iterator scan at 10M × 100 B: 498k keys/s, no growth over the resident index (before: 207k keys/s via the slice API, heap peak 4.8 GiB); 100-key prefix scan 6.2k/s at c=1 | Pebble 7.2M keys/s full scan, 39k/s prefix100 at c=1, flat 163 MiB RSS; a live iterator can `SeekGE`/`SeekLT` | values read in coalesced batches per page since design 28 (10M full scan 1.54M keys/s), still 3–5× slower than Pebble; no seek on a live iterator (open a new one with `Start`/`After`) |
 | 3 | **Batches and bulk load** | every write is an OCC transaction (`Update`, auto-retry); one segment and one `fdatasync` per group commit; index ingest 2.0–2.9 µs/key | Pebble `Batch`/`IndexedBatch`, SST ingestion; RocksDB `WriteBatch`, `IngestExternalFile`; LMDB `MDB_APPEND` | no write-only fast path; no bulk import; no per-write durability choice |
 | 4 | **Compaction** | whole-log: writes a base image of live data per log, then deletes garbage after a grace period. Commits pause 11–14 ms; branch operations wait for the whole run; journal file shrinks only offline | Pebble/RocksDB: leveled, incremental, in the background without commit pauses. LMDB: copy-on-write with a free list, no compaction | pauses and O(live data) rewrites per run |
 | 5 | **Open / recovery time** | loads the newest index checkpoint (stored runs, written in the background every 512 MiB of segments and at close; design 24) and replays the tail: 10M keys 3.4 s / 580 MiB peak (full replay 26–28 s); still O(index size): pieces are copied and hash slots rebuilt | replay the WAL into a memtable only | open time grows with the index; after a crash, the tail since the last checkpoint is replayed |
@@ -74,8 +74,12 @@ Nothing else is added to `main` meanwhile.
    largest heap user in bulk writes: fixed, the writer keeps only commits
    an open attempt can conflict with (heap after a 10M load 561 → 19 MiB).
    Final run (design 23 summary): 10M compaction peak 6.4 → 2.5 GiB RSS,
-   1M compaction with ~455k deletes 62 → 6.9 s. Still open: incremental compaction (whole-log rewrite; the base is
-   stored in pieces since design 24, so the 1 GiB object limit is gone).
+   1M compaction with ~455k deletes 62 → 6.9 s. Design 28: value chunks at
+   least half live are shared between bases instead of copied (10M × 100 B,
+   1% churn: 26–27 s → 6.7 s, 1,158 → 213 MiB written per compaction).
+   Still open: the key run is rewritten whole (O(keys) per compaction),
+   peak RSS not bounded per step (1.4–1.9 GiB at 10M), no merge of small
+   chunks, short commit pause.
 
 Also open for KV, no order yet: tests on AWS S3 and Cloudflare R2 (only
 MinIO is tested), online journal shrink, value compression.
