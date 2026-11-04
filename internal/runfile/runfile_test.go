@@ -161,3 +161,41 @@ func TestFileRef(t *testing.T) {
 	}
 	f.Release() // idempotent
 }
+
+// TestDropKeepsData: dropping pages (design 25) never changes what a
+// later read of the mapping returns, for any range including unaligned
+// and out-of-bounds ones.
+func TestDropKeepsData(t *testing.T) {
+	if !Supported {
+		t.Skip("no mmap")
+	}
+	d, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := d.Create()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Release()
+	want := make([]byte, 5<<20+123)
+	for i := range want {
+		want[i] = byte(i * 7)
+	}
+	if err := f.Write(want); err != nil {
+		t.Fatal(err)
+	}
+	b, _, err := f.Map(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Seal(); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range [][2]int{{0, 1 << 20}, {17, 3<<20 + 5}, {0, len(want)}, {len(want) - 10, 1 << 30}, {5, 0}} {
+		f.Drop(r[0], r[1])
+		if !bytes.Equal(b, want) {
+			t.Fatalf("data changed after Drop(%d, %d)", r[0], r[1])
+		}
+	}
+}

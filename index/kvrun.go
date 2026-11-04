@@ -320,15 +320,18 @@ func (w *builder) finish() (*run, error) {
 	}
 	w.buf = nil
 	r.slots = make([]uint64, nslots(r.n))
-	r.fillSlots()
+	r.fillSlots(nil)
 	return r, nil
 }
 
 // fillSlots builds the hash table from the entries, in key order (so the
 // table is the same wherever the run lives).
-func (r *run) fillSlots() {
+// f, if set, is the run's file: entry pages read are dropped behind.
+func (r *run) fillSlots(f RunFile) {
 	var key []byte
+	freed := 0
 	for bi := 0; bi < r.blocks(); bi++ {
+		freed = dropBehind(f, freed, r.bofs[bi])
 		start := r.bofs[bi]
 		first := r.keyAt(start)
 		for p := start; p < r.bofs[bi+1]; {
@@ -496,13 +499,14 @@ func (r *run) rebuildInto(w *builder, fn func(key []byte, vs []Version) []Versio
 // merger merges adjacent runs (newest first) into one, a bounded number of
 // keys per step, so no single write pays for a whole merge.
 type merger struct {
-	in  []*run
-	cur []*cursor // nil once exhausted
-	w   *builder  // nil: only the cursors are used (KV.each)
+	in    []*run
+	cur   []*cursor // nil once exhausted
+	freed []int     // per input: bytes already dropped (dropBehind)
+	w     *builder  // nil: only the cursors are used (KV.each)
 }
 
 func newMerger(in []*run, w *builder) *merger {
-	m := &merger{in: in, w: w}
+	m := &merger{in: in, w: w, freed: make([]int, len(in))}
 	for _, r := range in {
 		c := r.cursor()
 		c.next() // runs are never empty
@@ -540,12 +544,34 @@ func (m *merger) step(n int) bool {
 		}
 		m.w.entry(key, nv, parts...)
 	}
-	for _, c := range m.cur {
+	done := true
+	for i, c := range m.cur {
+		p := len(m.in[i].b)
 		if c != nil {
-			return false
+			p, done = c.p, false
 		}
+		m.freed[i] = dropBehind(m.in[i].mp, m.freed[i], p)
 	}
-	return true
+	return done
+}
+
+// dropStride is how much consumed input a merge accumulates before it
+// drops those pages from the process (design 25).
+const dropStride = 4 << 20
+
+// pageDropper is implemented by run files that can drop resident pages
+// (internal/runfile).
+type pageDropper interface{ Drop(off, n int) }
+
+// dropBehind drops bytes [freed, p) of a file run once they reach
+// dropStride and returns the new freed offset.
+func dropBehind(f RunFile, freed, p int) int {
+	d, ok := f.(pageDropper)
+	if !ok || p-freed < dropStride {
+		return freed
+	}
+	d.Drop(freed, p-freed)
+	return p
 }
 
 // result returns the merged run (nil if empty).

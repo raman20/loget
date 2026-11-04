@@ -230,7 +230,7 @@ func (l *KV) loadRun(src RunSource) (*run, error) {
 		r.release()
 		return nil, err
 	}
-	r.fillSlots()
+	r.fillSlots(r.mp)
 	if r.mp != nil {
 		if err := r.mp.Seal(); err != nil {
 			r.release()

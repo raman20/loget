@@ -18,6 +18,9 @@ type Dir struct {
 	// ("create", "write", "map", "seal") and fails it by returning an
 	// error.
 	Fault func(op string) error
+
+	mu   sync.Mutex
+	live map[*File]struct{} // mapped files (DropAll)
 }
 
 // ErrUnsupported is returned where files cannot be mapped.
@@ -105,6 +108,12 @@ func (f *File) Map(slots int) ([]byte, []uint64, error) {
 		return nil, nil, err
 	}
 	f.m = m
+	f.d.mu.Lock()
+	if f.d.live == nil {
+		f.d.live = map[*File]struct{}{}
+	}
+	f.d.live[f] = struct{}{}
+	f.d.mu.Unlock()
 	var s []uint64
 	if slots > 0 {
 		s = unsafe.Slice((*uint64)(unsafe.Pointer(&m[so])), slots)
@@ -125,6 +134,43 @@ func (f *File) Seal() error {
 	err := f.f.Close()
 	f.f = nil
 	return err
+}
+
+// Drop releases the resident pages of bytes [off, off+n) of the mapping
+// (rounded inward to whole pages) from the process; the data stays in the
+// page cache and a later read faults it back. Merges call it on the input
+// they have consumed so a merge does not hold every input page mapped
+// (design 25). Safe while readers use the mapping.
+func (f *File) Drop(off, n int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	ps := os.Getpagesize()
+	lo, hi := (off+ps-1)/ps*ps, (off+n)/ps*ps
+	if f.m == nil || lo >= hi || hi > len(f.m) {
+		return
+	}
+	_ = drop(f.m[lo:hi])
+}
+
+// DropAll drops the resident pages of every mapped file (Drop of the
+// whole mapping) and returns how many bytes of mappings it covered.
+func (d *Dir) DropAll() int64 {
+	d.mu.Lock()
+	fs := make([]*File, 0, len(d.live))
+	for f := range d.live {
+		fs = append(fs, f)
+	}
+	d.mu.Unlock()
+	var n int64
+	for _, f := range fs {
+		f.mu.Lock()
+		if f.m != nil && f.f == nil { // sealed: no builder writes through it
+			_ = drop(f.m)
+			n += int64(len(f.m))
+		}
+		f.mu.Unlock()
+	}
+	return n
 }
 
 // Ref adds a reference: the file stays mapped until Release has been
@@ -149,6 +195,9 @@ func (f *File) Release() {
 	}
 	defer f.mu.Unlock()
 	if f.m != nil {
+		f.d.mu.Lock()
+		delete(f.d.live, f)
+		f.d.mu.Unlock()
 		unmap(f.m)
 		f.m = nil
 	}

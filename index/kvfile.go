@@ -43,7 +43,7 @@ func (w *builder) finishFile(r *run) (*run, error) {
 		r.b, r.slots, err = f.Map(nslots(r.n))
 	}
 	if err == nil {
-		r.fillSlots()
+		r.fillSlots(f)
 		err = f.Seal()
 	}
 	if err != nil {

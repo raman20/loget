@@ -28,4 +28,8 @@ func seal(b []byte) error {
 	return unix.Madvise(b, unix.MADV_DONTNEED)
 }
 
+// drop removes b's pages from this process's page tables; a later read
+// faults them back from the page cache.
+func drop(b []byte) error { return unix.Madvise(b, unix.MADV_DONTNEED) }
+
 func unmap(b []byte) { _ = unix.Munmap(b) }
