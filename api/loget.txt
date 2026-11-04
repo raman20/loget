@@ -52,7 +52,14 @@ type BaseMeta struct {
 	Chain  string         `json:"chain"`
 	TS     int64          `json:"ts"`
 	Run    *index.RunMeta `json:"run,omitempty"`
+type Batch struct {
+func (b *Batch) Delete(key string) error
+func (b *Batch) Len() int
+func (b *Batch) Put(key string, val []byte, opts ...WriteOpt) error
+func (b *Batch) Reset()
+func (b *Batch) Size() int
 type Branch struct {
+func (br *Branch) Apply(ctx context.Context, b *Batch) (uint64, error)
 func (b *Branch) Head() (uint64, error)
 func (b *Branch) Name() string
 func (b *Branch) Update(ctx context.Context, fn func(*Tx) error) error
@@ -95,6 +102,7 @@ type CompactStats struct {
 type DB struct {
 func Open(ctx context.Context, url string, opts ...Option) (*DB, error)
 func OpenStore(ctx context.Context, st store.Store, opts ...Option) (*DB, error)
+func (db *DB) Apply(ctx context.Context, b *Batch) (uint64, error)
 func (db *DB) Backup(ctx context.Context, dst store.Store) (*BackupReport, error)
 func (db *DB) Branch(name string) *Branch
 func (db *DB) Branches() map[string]uint64

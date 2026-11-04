@@ -3,7 +3,7 @@
 // Every endpoint takes ?branch= (default main). Writes accept ?subject= to
 // encrypt the value under that subject's key (crypto-shreddable).
 //
-//	GET    /v1/kv?prefix=&at=           scan            POST /v1/tx            atomic batch
+//	GET    /v1/kv?prefix=&at=           scan            POST /v1/tx (= /v1/batch) atomic batch
 //	       &start=&end=&reverse=1&limit=&after=   range / page (Loget-Next-After header)
 //	GET    /v1/kv/{key}?at=             read (time travel with at=LSN)
 //	PUT    /v1/kv/{key}                 write (body = value)
@@ -133,6 +133,7 @@ func (s *Server) routes() http.Handler {
 	h("PUT /v1/kv/{key...}", W, "kv", path("key"), s.put)
 	h("DELETE /v1/kv/{key...}", W, "kv", path("key"), s.del)
 	h("POST /v1/tx", W, "tx", nil, s.tx)
+	h("POST /v1/batch", W, "tx", nil, s.tx) // same handler: /v1/tx is an atomic batch
 	h("GET /v1/branches", R, "", nil, s.branches)
 	h("POST /v1/branches", W, "", nil, s.branchCreate)
 	h("POST /v1/branches/{b}/rewind", A, "", nil, s.rewind)
@@ -359,27 +360,29 @@ func (s *Server) tx(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	lsn, err := update(r, func(tx *loget.Tx) error {
-		for _, o := range ops {
-			var wo []loget.WriteOpt
-			if o.Subject != "" {
-				wo = append(wo, loget.Subject(o.Subject))
-			}
-			var err error
-			switch o.Op {
-			case "put":
-				err = tx.Put(o.Key, asBytes(o.Value), wo...)
-			case "del":
-				err = tx.Delete(o.Key)
-			default:
-				err = fmt.Errorf("%w: unknown op %q", errBad, o.Op)
-			}
-			if err != nil {
-				return err
-			}
+	// One atomic batch of blind writes (loget.Batch, design 26): one log
+	// frame, never an OCC conflict, never retried.
+	var b loget.Batch
+	for _, o := range ops {
+		var wo []loget.WriteOpt
+		if o.Subject != "" {
+			wo = append(wo, loget.Subject(o.Subject))
 		}
-		return nil
-	})
+		var err error
+		switch o.Op {
+		case "put":
+			err = b.Put(o.Key, asBytes(o.Value), wo...)
+		case "del":
+			err = b.Delete(o.Key)
+		default:
+			err = fmt.Errorf("%w: unknown op %q", errBad, o.Op)
+		}
+		if err != nil {
+			fail(w, err)
+			return
+		}
+	}
+	lsn, err := br(r).Apply(r.Context(), &b)
 	if err != nil {
 		fail(w, err)
 		return

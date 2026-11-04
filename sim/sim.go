@@ -313,7 +313,58 @@ func (s *sim) txn() error {
 		ops = append(ops, m)
 	}
 	s.txs[id] = ops
-	lsn, err := s.db.Branch("main").UpdateLSN(s.ctx, func(tx *loget.Tx) error {
+	blind := true // only puts and deletes: may go as a loget.Batch
+	for _, m := range ops {
+		blind = blind && (m.kind == 'p' || m.kind == 'd')
+	}
+	var lsn uint64
+	var err error
+	if blind && s.rng.Intn(2) == 0 {
+		var b loget.Batch
+		b.Put("__tx", []byte(strconv.Itoa(id)))
+		for _, m := range ops {
+			var o []loget.WriteOpt
+			if m.subject != "" {
+				o = append(o, loget.Subject(m.subject))
+			}
+			if m.kind == 'p' {
+				b.Put(m.key, []byte(m.val), o...)
+			} else {
+				b.Delete(m.key)
+			}
+		}
+		lsn, err = s.db.Branch("main").Apply(s.ctx, &b)
+		s.log("batch")
+	} else {
+		lsn, err = s.update(ops)
+	}
+	s.log("tx%d%v=%v", id, ops, err)
+	switch {
+	case err == nil:
+		s.acked[id] = lsn
+		return nil
+	case errors.Is(err, loget.ErrShredded):
+		for _, m := range ops {
+			if m.subject != "" && (s.shred[m.subject] || s.shredQ[m.subject]) {
+				return nil
+			}
+		}
+		return s.fail("tx%d: ErrShredded but no shredded subject", id)
+	case errors.Is(err, loget.ErrConflict):
+		return s.fail("tx%d: conflict with a single client", id)
+	default:
+		s.amb[id] = true
+		if errors.Is(err, loget.ErrUnknownOutcome) || errors.Is(err, loget.ErrFenced) {
+			return s.crash(true) // writer is poisoned; recover
+		}
+		return nil
+	}
+}
+
+// update commits ops (and the __tx marker) in a transaction.
+func (s *sim) update(ops []mop) (uint64, error) {
+	id := s.nextID - 1
+	return s.db.Branch("main").UpdateLSN(s.ctx, func(tx *loget.Tx) error {
 		tx.Put("__tx", []byte(strconv.Itoa(id)))
 		for _, m := range ops {
 			var o []loget.WriteOpt
@@ -337,27 +388,6 @@ func (s *sim) txn() error {
 		}
 		return nil
 	})
-	s.log("tx%d%v=%v", id, ops, err)
-	switch {
-	case err == nil:
-		s.acked[id] = lsn
-		return nil
-	case errors.Is(err, loget.ErrShredded):
-		for _, m := range ops {
-			if m.subject != "" && (s.shred[m.subject] || s.shredQ[m.subject]) {
-				return nil
-			}
-		}
-		return s.fail("tx%d: ErrShredded but no shredded subject", id)
-	case errors.Is(err, loget.ErrConflict):
-		return s.fail("tx%d: conflict with a single client", id)
-	default:
-		s.amb[id] = true
-		if errors.Is(err, loget.ErrUnknownOutcome) || errors.Is(err, loget.ErrFenced) {
-			return s.crash(true) // writer is poisoned; recover
-		}
-		return nil
-	}
 }
 
 // crash kills the process (no clean close) and recovers.
