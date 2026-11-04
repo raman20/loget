@@ -16,6 +16,7 @@ func ChainNext(prev [32]byte, payload []byte) [32]byte
 func DecodeSegment(b []byte) (SegHeader, []Decoded, int, error)
 func EncodeHeader(h SegHeader) []byte
 func EncodePayload(f *Frame) []byte
+func ScanSegment(b []byte) (SegHeader, SegScan, int, error)
 type Decoded struct {
 	Frame   *Frame
 	Payload []byte
@@ -43,3 +44,6 @@ type SegHeader struct {
 	Epoch uint64
 	Seq   uint64
 func DecodeHeader(b []byte) (SegHeader, error)
+type SegScan struct {
+	Frames   int
+	FirstLSN uint64

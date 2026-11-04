@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/raman20/loget/format"
@@ -315,6 +316,63 @@ func TestKVRunOddVersions(t *testing.T) {
 		m.DropSubject("s")
 		if !bytes.Equal(l.encode(), m.encode()) {
 			t.Fatalf("%+v: encoding differs after DropSubject", v)
+		}
+	}
+}
+
+// TestKVRunsRefineMapParallelFill is TestKVRunsRefineMap with every run's
+// table filled by the parallel path (design 25), tiny batches and tiny
+// regions, so set-aside entries and wraparound are common.
+func TestKVRunsRefineMapParallelFill(t *testing.T) {
+	defer func(a, b int) { parFillMin, fillBatch = a, b }(parFillMin, fillBatch)
+	parFillMin = 1
+	rapid.Check(t, func(t *rapid.T) {
+		fillBatch = rapid.IntRange(1, 7).Draw(t, "fillBatch")
+		refineMap(t, KVOptions{Inline: 3})
+	})
+}
+
+// TestParallelFillSameTable: the parallel fill of a large run gives the
+// same table every time and every key is found.
+func TestParallelFillSameTable(t *testing.T) {
+	l := NewKVOptions(KVOptions{})
+	env := testEnv{}
+	const n = 300000
+	for i := 0; i < n; i++ {
+		l.Apply(&Entry{LSN: uint64(i + 1), Ops: []format.Op{{Kind: format.OpPut, Space: "kv", Key: fmt.Sprint("key", i), Value: []byte("v")}}}, env)
+	}
+	l.work(-1)
+	var big *run
+	for _, r := range l.runs {
+		if big == nil || r.n > big.n {
+			big = r
+		}
+	}
+	if big == nil || big.n < parFillMin {
+		t.Skipf("largest run too small for the parallel path")
+	}
+	want := append([]uint64(nil), big.slots...)
+	conc := func(tasks []func()) {
+		done := make(chan bool)
+		for _, f := range tasks {
+			go func() { f(); done <- true }()
+		}
+		for range tasks {
+			<-done
+		}
+	}
+	for i := 0; i < 3; i++ {
+		for _, par := range []func([]func()){nil, conc} {
+			clear(big.slots)
+			big.fillSlots(nil, par)
+			if !slices.Equal(big.slots, want) {
+				t.Fatal("parallel fill is not deterministic")
+			}
+		}
+	}
+	for i := 0; i < n; i += 997 {
+		if _, ok := l.Get("kv", fmt.Sprint("key", i), ^uint64(0)); !ok {
+			t.Fatalf("key%d not found", i)
 		}
 	}
 }

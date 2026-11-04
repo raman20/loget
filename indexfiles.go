@@ -50,7 +50,7 @@ func openRunFiles(o Options) (index.RunFiles, error) {
 
 // kvOptions are the options of every KV index of the database.
 func (db *DB) kvOptions() index.KVOptions {
-	o := index.KVOptions{Inline: db.opts.InlineMax, Files: db.runFiles, OnFileError: db.kvFileError}
+	o := index.KVOptions{Inline: db.opts.InlineMax, Files: db.runFiles, OnFileError: db.kvFileError, Parallel: runParallel}
 	if db.opts.IndexFiles != nil {
 		o.MinFileRun = 1
 	}
@@ -108,4 +108,13 @@ func fileRSS() int64 {
 		}
 	}
 	return -1
+}
+
+// runParallel runs tasks concurrently (index.KVOptions.Parallel).
+func runParallel(tasks []func()) {
+	var wg sync.WaitGroup
+	for _, t := range tasks {
+		wg.Go(t)
+	}
+	wg.Wait()
 }

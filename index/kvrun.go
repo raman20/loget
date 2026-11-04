@@ -223,6 +223,7 @@ type builder struct {
 	prev    []byte  // first key of the current block
 	scratch []byte  // the versions of the current key
 	nv      int
+	par     func([]func()) // KVOptions.Parallel
 }
 
 func newBuilder() *builder { return &builder{r: &run{subj: map[string]int{}}} }
@@ -320,14 +321,140 @@ func (w *builder) finish() (*run, error) {
 	}
 	w.buf = nil
 	r.slots = make([]uint64, nslots(r.n))
-	r.fillSlots(nil)
+	r.fillSlots(nil, w.par)
 	return r, nil
 }
 
 // fillSlots builds the hash table from the entries, in key order (so the
-// table is the same wherever the run lives).
+// table is the same wherever the run lives and whatever the machine).
 // f, if set, is the run's file: entry pages read are dropped behind.
-func (r *run) fillSlots(f RunFile) {
+//
+// Large runs (design 25) can insert in parallel (KVOptions.Parallel): the table is split into
+// fillParts regions; each batch of entries is bucketed by its home
+// region and every region inserted by its own goroutine, probing only
+// inside the region. An entry that would probe past its region's end is
+// set aside and inserted, in key order, after all others. The result is a
+// valid linear-probing table (every slot between an entry's home and its
+// place is full) and depends only on the entries.
+func (r *run) fillSlots(f RunFile, par func([]func())) {
+	if r.n < parFillMin {
+		r.fillSlotsSeq(f)
+		return
+	}
+	parts := fillParts
+	L := len(r.slots)
+	bound := func(w int) int { return int(uint64(w) * uint64(L) / uint64(parts)) }
+	region := func(j int) int { // inverse of bound
+		w := int(uint64(j) * uint64(parts) / uint64(L))
+		for w+1 < parts && bound(w+1) <= j {
+			w++
+		}
+		for bound(w) > j {
+			w--
+		}
+		return w
+	}
+	type ent struct {
+		v uint64 // slot value
+		j int    // home slot
+	}
+	buckets := make([][]ent, parts)
+	var over []ent
+	overs := make([][]ent, parts)
+	flush := func() {
+		var tasks []func()
+		for w := range parts {
+			if len(buckets[w]) == 0 {
+				continue
+			}
+			tasks = append(tasks, func() {
+				end := bound(w + 1)
+				for _, e := range buckets[w] {
+					j := e.j
+					for j < end && r.slots[j] != 0 {
+						j++
+					}
+					if j == end {
+						overs[w] = append(overs[w], e)
+						continue
+					}
+					r.slots[j] = e.v
+				}
+			})
+		}
+		runTasks(par, tasks)
+		for w := range parts {
+			buckets[w] = buckets[w][:0]
+		}
+	}
+	var key []byte
+	freed, pending := 0, 0
+	for bi := 0; bi < r.blocks(); bi++ {
+		freed = dropBehind(f, freed, r.bofs[bi])
+		start := r.bofs[bi]
+		first := r.keyAt(start)
+		for p := start; p < r.bofs[bi+1]; {
+			b := r.b[p:]
+			n := len(b)
+			sh, b := uv(b)
+			sl, b := uv(b)
+			key = append(append(key[:0], first[:sh]...), b[:sl]...)
+			bl, b := uv(b[sl:])
+			at := min(p-start, maxInOff)
+			h := khash(key)
+			j := r.slot(h)
+			w := region(j)
+			buckets[w] = append(buckets[w], ent{h>>fpShift<<fpShift | uint64(start+1)<<16 | uint64(at), j})
+			p += n - len(b) + int(bl)
+			if pending++; pending == fillBatch {
+				flush()
+				pending = 0
+			}
+		}
+	}
+	flush()
+	// Set-aside entries, region by region (each region's in key order):
+	// deterministic, and correctness does not depend on the order.
+	for w := range parts {
+		over = append(over, overs[w]...)
+	}
+	for _, e := range over {
+		j := e.j
+		for r.slots[j] != 0 {
+			if j++; j == L {
+				j = 0
+			}
+		}
+		r.slots[j] = e.v
+	}
+}
+
+// fillParts is how many regions a large run's table is filled in at once
+// (fixed, not the CPU count, so the table does not depend on the machine);
+// parFillMin and fillBatch: the smallest run filled in parallel and the
+// entries bucketed per round (bounds the extra memory to 16 B each).
+const fillParts = 8
+
+// vars so tests can take the parallel path with small runs
+var (
+	parFillMin = 1 << 17
+	fillBatch  = 1 << 20
+)
+
+// runTasks runs tasks with par, or one after another if par is nil. The
+// tasks touch disjoint memory, so the result does not depend on which.
+func runTasks(par func([]func()), tasks []func()) {
+	if par != nil {
+		par(tasks)
+		return
+	}
+	for _, t := range tasks {
+		t()
+	}
+}
+
+// fillSlotsSeq is fillSlots one entry at a time.
+func (r *run) fillSlotsSeq(f RunFile) {
 	var key []byte
 	freed := 0
 	for bi := 0; bi < r.blocks(); bi++ {

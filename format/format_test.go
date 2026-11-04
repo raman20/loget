@@ -2,6 +2,7 @@ package format
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 )
 
@@ -118,6 +119,12 @@ func FuzzDecodeSegment(f *testing.F) {
 		h, fr, n, err := DecodeSegment(b)
 		if n > len(b) {
 			t.Fatal("over-read")
+		}
+		// ScanSegment (design 25) must agree exactly.
+		sh, sc, sn, serr := ScanSegment(b)
+		if sh != h || sn != n || !errors.Is(serr, err) || !errors.Is(err, serr) || sc.Frames != len(fr) ||
+			len(fr) > 0 && sc.FirstLSN != fr[0].Frame.LSN {
+			t.Fatalf("ScanSegment %v %+v %d %v, DecodeSegment %v %d frames %d %v", sh, sc, sn, serr, h, len(fr), n, err)
 		}
 		if err == nil {
 			// re-encoding the decoded frames must reproduce the exact bytes

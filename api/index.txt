@@ -57,6 +57,7 @@ type KVOptions struct {
 	Files RunFiles
 	MinFileRun int
 	OnFileError func(error)
+	Parallel func(tasks []func())
 type Kind struct {
 	Name string
 	Version uint32

@@ -142,7 +142,11 @@ func (db *DB) buildView(ctx context.Context, l *logState, upto uint64, snap *sna
 			return nil, err
 		}
 	}
-	err := l.each(ctx, upto, func(e *index.Entry) error {
+	after := from // replay only what some index lacks
+	for _, f := range froms {
+		after = min(after, f)
+	}
+	err := l.eachAfter(ctx, after, upto, func(e *index.Entry) error {
 		if e.LSN > from {
 			v.kv.Apply(e, env)
 		}

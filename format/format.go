@@ -261,34 +261,50 @@ func (m names) str(b []byte) string {
 }
 
 func decodePayload(p []byte, in names) (*Frame, error) {
-	r := &reader{b: p}
 	f := &Frame{}
+	if err := parsePayload(p, in, f, true); err != nil {
+		return nil, err
+	}
+	return f, nil
+}
+
+// parsePayload checks a frame body and, if build, decodes it. Without
+// build it allocates nothing and returns a Frame holding only LSN and TS
+// (ScanSegment); it accepts and rejects exactly the same bodies. It fills
+// f (without build: only LSN, TS and Prev).
+func parsePayload(p []byte, in names, f *Frame, build bool) error {
+	r := &reader{b: p}
 	f.LSN = r.u64()
 	f.TS = int64(r.u64())
 	if r.err || len(r.b) < 32 {
-		return nil, ErrCorrupt
+		return ErrCorrupt
 	}
 	copy(f.Prev[:], r.b[:32])
 	r.b = r.b[32:]
 	n := r.uv()
 	if r.err || n > MaxOps || n > uint64(len(r.b)) {
-		return nil, ErrCorrupt
+		return ErrCorrupt
 	}
-	f.Ops = make([]Op, 0, n)
+	if build {
+		f.Ops = make([]Op, 0, n)
+	}
 	for i := uint64(0); i < n; i++ {
 		if len(r.b) < 1 {
-			return nil, ErrCorrupt
+			return ErrCorrupt
 		}
 		k := Kind(r.b[0])
 		r.b = r.b[1:]
 		if k < OpPut || k > OpShred {
-			return nil, ErrCorrupt
+			return ErrCorrupt
 		}
 		subj, space, key := r.bytes(), r.bytes(), r.bytes()
 		valOff := len(p) - len(r.b)
 		val := r.bytes()
 		if r.err {
-			return nil, ErrCorrupt
+			return ErrCorrupt
+		}
+		if !build {
+			continue
 		}
 		var v []byte
 		if val != nil {
@@ -297,9 +313,9 @@ func decodePayload(p []byte, in names) (*Frame, error) {
 		f.Ops = append(f.Ops, Op{Kind: k, Subject: in.str(subj), Space: in.str(space), Key: string(key), Value: v, ValOff: uint32(valOff + uvarintLen(uint64(len(val))))})
 	}
 	if len(r.b) != 0 {
-		return nil, ErrCorrupt
+		return ErrCorrupt
 	}
-	return f, nil
+	return nil
 }
 
 // Decoded is one frame plus its raw payload (for chain verification).
@@ -312,35 +328,70 @@ type Decoded struct {
 // first damaged one, the number of valid bytes, and ErrTorn if anything after
 // that is not a valid frame (a torn or corrupt tail). It never panics.
 func DecodeSegment(b []byte) (SegHeader, []Decoded, int, error) {
+	var out []Decoded
+	h, off, err := walkSegment(b, true, func(f *Frame, p []byte) { out = append(out, Decoded{Frame: f, Payload: p}) })
+	return h, out, off, err
+}
+
+// SegScan summarises a segment checked by ScanSegment.
+type SegScan struct {
+	Frames   int    // valid frames
+	FirstLSN uint64 // LSN of the first one (0 if none)
+}
+
+// ScanSegment checks a segment exactly as DecodeSegment does (same header,
+// same frames accepted, same valid-byte count and error) without
+// decoding the frames' operations, so it allocates almost nothing. Opens
+// use it for segments a checkpoint already covers (design 25).
+func ScanSegment(b []byte) (SegHeader, SegScan, int, error) {
+	var sc SegScan
+	h, off, err := walkSegment(b, false, func(f *Frame, _ []byte) {
+		if sc.Frames == 0 {
+			sc.FirstLSN = f.LSN
+		}
+		sc.Frames++
+	})
+	return h, sc, off, err
+}
+
+// walkSegment checks b's header and frames, calling fn for each valid
+// frame (with build, a fully decoded fresh Frame; without, a reused one
+// holding LSN, TS and Prev).
+func walkSegment(b []byte, build bool, fn func(*Frame, []byte)) (SegHeader, int, error) {
 	h, err := DecodeHeader(b)
 	if err != nil {
-		return h, nil, 0, err
+		return h, 0, err
 	}
 	off := SegHeaderSize
-	var out []Decoded
 	in := names{}
+	var tmp Frame
 	for off < len(b) {
 		if len(b)-off < FrameHdrSize {
-			return h, out, off, ErrTorn
+			return h, off, ErrTorn
 		}
 		n := int(binary.LittleEndian.Uint32(b[off:]))
 		c := binary.LittleEndian.Uint32(b[off+4:])
 		if n > MaxFrameSize || n > len(b)-off-FrameHdrSize {
-			return h, out, off, ErrTorn
+			return h, off, ErrTorn
 		}
 		p := b[off+FrameHdrSize : off+FrameHdrSize+n]
 		if CRC(p) != c {
-			return h, out, off, ErrTorn
+			return h, off, ErrTorn
 		}
-		f, err := decodePayload(p, in)
-		if err != nil {
-			return h, out, off, ErrTorn
+		f := &tmp
+		if build {
+			f = &Frame{}
 		}
-		rebase(f.Ops, off+FrameHdrSize)
-		out = append(out, Decoded{Frame: f, Payload: p})
+		if err := parsePayload(p, in, f, build); err != nil {
+			return h, off, ErrTorn
+		}
+		if build {
+			rebase(f.Ops, off+FrameHdrSize)
+		}
+		fn(f, p)
 		off += FrameHdrSize + n
 	}
-	return h, out, off, nil
+	return h, off, nil
 }
 
 // ChainNext computes the next hash-chain head: H(prev || H(payload)).

@@ -60,6 +60,7 @@ type KV struct {
 	files     RunFiles  // runs of at least minFile bytes go here (nil = heap)
 	minFile   int
 	onFileErr func(error)
+	par       func([]func()) // KVOptions.Parallel
 }
 
 // KVOptions configures a KV index.
@@ -76,6 +77,11 @@ type KVOptions struct {
 	// OnFileError is called when a run file cannot be created, written or
 	// mapped; the KV then keeps its runs on the heap from that point on.
 	OnFileError func(error)
+	// Parallel, if set, runs independent tasks (filling regions of a large
+	// run's hash table, design 25), possibly concurrently, and returns when
+	// all are done. The index itself starts no goroutines; the result is
+	// the same with or without it.
+	Parallel func(tasks []func())
 }
 
 const (
@@ -142,7 +148,7 @@ func NewKVInline(max int) *KV { return NewKVOptions(KVOptions{Inline: max}) }
 
 // NewKVOptions returns a KV index configured by o.
 func NewKVOptions(o KVOptions) *KV {
-	l := &KV{m: map[string]vers{}, inline: max(o.Inline, 0), hotMax: hotMax, recentMax: recentMax, files: o.Files, minFile: o.MinFileRun, onFileErr: o.OnFileError}
+	l := &KV{m: map[string]vers{}, inline: max(o.Inline, 0), hotMax: hotMax, recentMax: recentMax, files: o.Files, minFile: o.MinFileRun, onFileErr: o.OnFileError, par: o.Parallel}
 	if l.minFile <= 0 {
 		l.minFile = minFileRun
 	}
@@ -155,12 +161,14 @@ func (l *KV) builder(est int) *builder {
 	if l.files != nil && est >= l.minFile {
 		w, err := newFileBuilder(l.files)
 		if err == nil {
+			w.par = l.par
 			return w
 		}
 		l.fileFailed(err)
 	}
 	w := newBuilder()
 	w.grow(est)
+	w.par = l.par
 	return w
 }
 

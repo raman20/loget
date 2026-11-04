@@ -147,6 +147,35 @@ func (l *logState) readSeg(ctx context.Context, s segIdx) ([]format.Decoded, err
 	return frames, nil
 }
 
+// checkSeg reads segment s and checks it exactly as readSeg does,
+// without decoding its frames (design 25).
+func (l *logState) checkSeg(ctx context.Context, s segIdx) error {
+	var sc format.SegScan
+	var derr error
+	_, err := getStable(ctx, l.st, segKey(l.meta.ID, s.seq), func(b []byte) readVerdict {
+		var h format.SegHeader
+		h, sc, _, derr = format.ScanSegment(b)
+		switch {
+		case !errors.Is(derr, format.ErrHeader) && h.Seq != s.seq,
+			sc.Frames > 0 && sc.FirstLSN != s.first:
+			return readMisread
+		case uint64(sc.Frames) >= s.n:
+			return readOK
+		}
+		return readDamaged
+	})
+	if err != nil {
+		return err
+	}
+	if uint64(sc.Frames) < s.n {
+		return fmt.Errorf("%w: log %s segment %d: %d of %d frames readable: %v", ErrCorrupt, l.meta.ID, s.seq, sc.Frames, s.n, derr)
+	}
+	if sc.FirstLSN != s.first {
+		return fmt.Errorf("%w: log %s segment %d starts at LSN %d, indexed %d", ErrCorrupt, l.meta.ID, s.seq, sc.FirstLSN, s.first)
+	}
+	return nil
+}
+
 func (l *logState) entry(d format.Decoded) *index.Entry {
 	return &index.Entry{Log: l.meta.ID, LSN: d.Frame.LSN, TS: d.Frame.TS, Ops: d.Frame.Ops}
 }
@@ -194,22 +223,39 @@ func (l *logState) chainAt(ctx context.Context, lsn uint64) ([32]byte, error) {
 // each calls fn with every entry visible on this log up to LSN upto, oldest
 // first (parent's entries up to ParentLSN, then our own), reading segments.
 func (l *logState) each(ctx context.Context, upto uint64, fn func(*index.Entry) error) error {
-	if l.parent != nil && l.meta.ParentLSN > 0 {
-		if err := l.parent.each(ctx, min(upto, l.meta.ParentLSN), fn); err != nil {
+	return l.eachAfter(ctx, 0, upto, fn)
+}
+
+// eachAfter is each without the segments that hold only LSNs ≤ after
+// (the caller already has them: an open from a checkpoint replays only
+// what follows it, design 24/25). fn may still see some entries ≤ after
+// from the first segment read.
+func (l *logState) eachAfter(ctx context.Context, after, upto uint64, fn func(*index.Entry) error) error {
+	if l.parent != nil && l.meta.ParentLSN > 0 && after < l.meta.ParentLSN {
+		if err := l.parent.eachAfter(ctx, after, min(upto, l.meta.ParentLSN), fn); err != nil {
 			return err
 		}
 	}
-	return l.eachOwn(ctx, upto, fn)
+	return l.eachOwnAfter(ctx, after, upto, fn)
 }
 
 // eachOwn is each restricted to this log's own frames. Up to readAhead
 // segments are read concurrently; fn still sees entries in LSN order.
 func (l *logState) eachOwn(ctx context.Context, upto uint64, fn func(*index.Entry) error) error {
+	return l.eachOwnAfter(ctx, 0, upto, fn)
+}
+
+func (l *logState) eachOwnAfter(ctx context.Context, after, upto uint64, fn func(*index.Entry) error) error {
 	l.mu.RLock()
 	segs := l.segs
 	l.mu.RUnlock()
 	n := sort.Search(len(segs), func(i int) bool { return segs[i].first > upto })
 	segs = segs[:n]
+	// segment i holds LSNs [segs[i].first, segs[i+1].first): those before
+	// segs[skip] hold only LSNs ≤ after. They are still read and checked
+	// (a damaged one refuses the open, as a full replay would) but not
+	// decoded (ScanSegment).
+	skip := max(sort.Search(len(segs), func(i int) bool { return segs[i].first > after })-1, 0)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel() // stops reads still in flight after an error
 	type result struct {
@@ -220,8 +266,12 @@ func (l *logState) eachOwn(ctx context.Context, upto uint64, fn func(*index.Entr
 	next := 0
 	fill := func() {
 		for next < len(segs) && len(inflight) < cap(inflight) {
-			c, s := make(chan result, 1), segs[next]
+			c, s, only := make(chan result, 1), segs[next], next < skip
 			go func() {
+				if only {
+					c <- result{nil, l.checkSeg(ctx, s)}
+					return
+				}
 				frames, err := l.readSeg(ctx, s)
 				c <- result{frames, err}
 			}()

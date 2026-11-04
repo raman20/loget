@@ -4,6 +4,8 @@ import (
 	"flag"
 	"fmt"
 	"math/rand/v2"
+	"os"
+	"runtime/pprof"
 	"time"
 )
 
@@ -32,18 +34,31 @@ func cmdOpen(args []string) {
 	reads := fs.Int("reads", 200_000, "uniform random reads after open")
 	out := fs.String("out", "results", "output directory")
 	fs.BoolVar(&indexInMemory, "index-in-memory", false, "loget only: keep the whole KV index on the Go heap")
+	cpuprof := fs.String("cpuprofile", "", "write a CPU profile of the open to this file")
 	fs.Parse(args)
 	if *dir == "" {
 		fatal(fmt.Errorf("open: -dir is required"))
 	}
 	memS = startMem("")
 	memS.setPhase("open")
+	if *cpuprof != "" {
+		f, err := os.Create(*cpuprof)
+		if err != nil {
+			fatal(err)
+		}
+		if err := pprof.StartCPUProfile(f); err != nil {
+			fatal(err)
+		}
+	}
 	t0 := time.Now()
 	kv, err := openSystem(*system, *dir, true)
 	if err != nil {
 		fatal(err)
 	}
 	openSecs := time.Since(t0).Seconds()
+	if *cpuprof != "" {
+		pprof.StopCPUProfile()
+	}
 	memS.mark("after open")
 	memS.setPhase("reads")
 	r := rand.New(rand.NewPCG(42, 9))
