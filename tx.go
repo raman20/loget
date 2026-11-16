@@ -117,6 +117,9 @@ func (tx *Tx) open(ver index.Version, space, key string) ([]byte, error) {
 // openWith is open with the stored bytes already read (by an iterator's
 // prefetch, checked against ver.Sum and owned), or nil to read them.
 func (tx *Tx) openWith(ver index.Version, space, key string, raw []byte) ([]byte, error) {
+	if raw != nil && ver.Ref() && ver.Subject == "" {
+		return raw, nil // prefetched (and checked) by the caller, owned
+	}
 	val, owned := ver.Val, false // ver.Val is shared index state
 	var logID string
 	if ver.Ref() || ver.Subject != "" {

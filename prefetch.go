@@ -27,9 +27,58 @@ const (
 
 type pfReq struct {
 	i      int // page index
-	obj    string
+	obj    pfObj
 	off, n int64
 	sum    uint32
+}
+
+// pfObj names the object holding a value without building its key: a
+// segment (seq != 0) of log x, or a compaction-base value chunk (seq 0).
+// The key string is made once per range read, not once per value.
+type pfObj struct {
+	x     *logState
+	seq   uint64
+	chunk uint32
+}
+
+func (o pfObj) less(p pfObj) bool {
+	if o.x != p.x {
+		return o.x.meta.ID < p.x.meta.ID
+	}
+	if o.seq != p.seq {
+		return o.seq < p.seq
+	}
+	return o.chunk < p.chunk
+}
+
+// srcCache resolves the log and segment of many nearby versions (a page of
+// keys loaded together shares a few segments): logState.source with the
+// last segment's LSN span remembered, so most lookups take no lock and no
+// binary search.
+type srcCache struct {
+	l      *logState
+	based  *logState // l.based(), resolved once
+	x      *logState // last segment located, valid for LSNs in [lo, hi]
+	seq    uint64
+	lo, hi uint64
+	ok     bool
+}
+
+func newSrcCache(l *logState) srcCache { return srcCache{l: l, based: l.based()} }
+
+// source is l.source(ver).
+func (c *srcCache) source(ver index.Version) (*logState, uint64, bool) {
+	if b := c.based; b != nil && (ver.Chunk != 0 || ver.LSN <= b.meta.Base.LSN) {
+		return b, 0, true
+	}
+	if !c.ok || ver.LSN < c.lo || ver.LSN > c.hi {
+		x, s, lo, hi, ok := c.l.locateSpan(ver.LSN)
+		if !ok {
+			return nil, 0, false
+		}
+		c.x, c.seq, c.lo, c.hi, c.ok = x, s.seq, lo, hi, true
+	}
+	return c.x, c.seq, true
 }
 
 // valuePos returns where a referenced value is stored.
@@ -47,31 +96,53 @@ func (db *DB) valuePos(x *logState, seq uint64, ver index.Version) (vcKey, strin
 	return vcKey{x.meta.ID, seq, ver.Off}, segKey(x.meta.ID, seq)
 }
 
+// pfObjOf is where ver is stored (see valuePos), given its source log x
+// and segment seq.
+func pfObjOf(x *logState, seq uint64, ver index.Version) pfObj {
+	if ver.Chunk != 0 {
+		return pfObj{x: x, chunk: ver.Chunk}
+	}
+	return pfObj{x: x, seq: seq}
+}
+
+// key is the object's store key: the same as valuePos returns.
+func (db *DB) pfKey(o pfObj, ver index.Version) string {
+	_, k := db.valuePos(o.x, o.seq, ver)
+	return k
+}
+
 // prefetch fills vals[i] with the stored bytes of page[i] where that is
 // cheap to batch; vals[i] stays nil otherwise. vals has len(page).
 func (db *DB) prefetch(ctx context.Context, l *logState, page []index.Pair, vals [][]byte) {
 	var rs []pfReq
+	sc := newSrcCache(l)
 	for i := range page {
 		v := &page[i].Version
 		if !v.Ref() || v.Len > prefetchMax {
 			continue
 		}
-		x, seq, ok := l.source(*v)
+		x, seq, ok := sc.source(*v)
 		if !ok {
 			continue
 		}
-		_, obj := db.valuePos(x, seq, *v)
-		rs = append(rs, pfReq{i: i, obj: obj, off: int64(v.Off), n: int64(v.Len), sum: v.Sum})
+		rs = append(rs, pfReq{i: i, obj: pfObjOf(x, seq, *v), off: int64(v.Off), n: int64(v.Len), sum: v.Sum})
 	}
 	if len(rs) < 2 {
 		return
 	}
-	sort.Slice(rs, func(a, b int) bool {
-		if rs[a].obj != rs[b].obj {
-			return rs[a].obj < rs[b].obj
-		}
-		return rs[a].off < rs[b].off
-	})
+	sorted := true // pages loaded in log order are already sorted
+	for j := 1; j < len(rs) && sorted; j++ {
+		a, b := &rs[j-1], &rs[j]
+		sorted = a.obj == b.obj && a.off <= b.off || a.obj != b.obj && a.obj.less(b.obj)
+	}
+	if !sorted {
+		sort.Slice(rs, func(a, b int) bool {
+			if rs[a].obj != rs[b].obj {
+				return rs[a].obj.less(rs[b].obj)
+			}
+			return rs[a].off < rs[b].off
+		})
+	}
 	var groups [][]pfReq
 	start := 0
 	for j := 1; j <= len(rs); j++ {
@@ -91,7 +162,7 @@ func (db *DB) prefetch(ctx context.Context, l *logState, page []index.Pair, vals
 		for _, r := range g {
 			hi = max(hi, r.off+r.n)
 		}
-		b, err := store.GetRange(ctx, db.st, g[0].obj, lo, hi-lo)
+		b, err := store.GetRange(ctx, db.st, db.pfKey(g[0].obj, page[g[0].i].Version), lo, hi-lo)
 		if err != nil || int64(len(b)) != hi-lo {
 			return
 		}

@@ -66,8 +66,15 @@ type CompactStats struct {
 	ManifestsDeleted int `json:"manifests_deleted,omitempty"` // old manifests deleted
 }
 
-func baseObj(key string) string         { return key + ".base" }
-func chunkKey(key string, n int) string { return fmt.Sprintf("%s.%06d.val", key, n) }
+func baseObj(key string) string { return key + ".base" }
+func chunkKey(key string, n int) string {
+	if n < 0 { // never for a real chunk; keep fmt's rendering of a sign
+		return fmt.Sprintf("%s.%06d.val", key, n)
+	}
+	b := make([]byte, 0, len(key)+1+6+len(".val"))
+	b = appendPadded(append(append(b, key...), '.'), uint64(n), 6)
+	return string(append(b, ".val"...))
+}
 
 // Compact compacts every log (see above). Commits wait while it runs;
 // reads continue. It is a no-op for logs unchanged since their base.

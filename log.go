@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"sync"
 
@@ -44,7 +45,32 @@ type segIdx struct {
 	n     uint64 // frame count
 }
 
-func segKey(log string, seq uint64) string { return fmt.Sprintf("log/%s/%020d.seg", log, seq) }
+func segKey(log string, seq uint64) string {
+	// log/<id>/<seq, 20 digits zero-padded>.seg, as fmt "%020d" would write
+	// it; built by hand because value reads name a segment per value
+	b := make([]byte, 0, len("log/")+len(log)+1+20+len(".seg"))
+	b = append(append(append(b, "log/"...), log...), '/')
+	b = appendPadded(b, seq, 20)
+	return string(append(b, ".seg"...))
+}
+
+// appendPadded appends n in decimal, zero-padded on the left to width
+// digits (wider numbers are written in full, as with fmt's %0*d).
+func appendPadded(b []byte, n uint64, width int) []byte {
+	var d [20]byte
+	i := len(d)
+	for {
+		i--
+		d[i] = byte('0' + n%10)
+		if n /= 10; n == 0 {
+			break
+		}
+	}
+	for k := len(d) - i; k < width; k++ {
+		b = append(b, '0')
+	}
+	return append(b, d[i:]...)
+}
 
 func (l *logState) head() uint64 {
 	l.mu.RLock()
@@ -101,21 +127,36 @@ func (l *logState) addSeg(seq, first, n uint64, ts int64, chain [32]byte) {
 
 // locate returns the log (in this lineage) and segment holding lsn.
 func (l *logState) locate(lsn uint64) (*logState, segIdx, bool) {
-	for x := l; x != nil; x = x.parent {
+	x, s, _, _, ok := l.locateSpan(lsn)
+	return x, s, ok
+}
+
+// locateSpan is locate that also returns [lo, hi], the LSNs that resolve to
+// the same log and segment from l: the segment's frames, cut below by the
+// log's fork point and above by the fork point of the nearest descendant
+// on the path from l (a branch owns everything after its fork). Callers
+// that resolve many nearby LSNs reuse the answer within the span.
+func (l *logState) locateSpan(lsn uint64) (x *logState, s segIdx, lo, hi uint64, ok bool) {
+	hi = math.MaxUint64
+	for x = l; x != nil; x = x.parent {
 		if lsn > x.meta.ParentLSN {
 			x.mu.RLock()
-			defer x.mu.RUnlock()
 			i := sort.Search(len(x.segs), func(i int) bool { return x.segs[i].first+x.segs[i].n > lsn })
-			if i == len(x.segs) || x.segs[i].first > lsn {
-				return nil, segIdx{}, false
+			if i < len(x.segs) && x.segs[i].first <= lsn {
+				s, ok = x.segs[i], true
 			}
-			return x, x.segs[i], true
+			x.mu.RUnlock()
+			if !ok {
+				return nil, segIdx{}, 0, 0, false
+			}
+			return x, s, max(s.first, x.meta.ParentLSN+1), min(s.first+s.n-1, hi), true
 		}
+		hi = min(hi, x.meta.ParentLSN) // x owns everything above its fork point
 		if lsn == 0 {
 			break
 		}
 	}
-	return nil, segIdx{}, false
+	return nil, segIdx{}, 0, 0, false
 }
 
 // readSeg reads and decodes one indexed segment of this log.

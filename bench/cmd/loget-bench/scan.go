@@ -4,7 +4,10 @@ import (
 	"flag"
 	"fmt"
 	"math/rand/v2"
+	"os"
+	"path/filepath"
 	"runtime"
+	"runtime/pprof"
 	"strings"
 	"sync"
 	"time"
@@ -133,6 +136,7 @@ func cmdScan(args []string) {
 	out := fs.String("out", "results", "output directory")
 	fs.Int64Var(&indexResident, "index-resident", 0, "loget only: IndexResidentBytes (0 = unbounded)")
 	fs.BoolVar(&indexInMemory, "index-in-memory", false, "loget only: keep the whole KV index on the Go heap")
+	profDir := fs.String("profile", "", "write CPU and allocation profiles of each full* phase into this directory (cpu-<phase>.pprof, allocs-<phase>-{before,after}.pprof; diff with pprof -base)")
 	fs.Parse(args)
 	clients := parseInts(*clientsF)
 
@@ -236,6 +240,7 @@ func cmdScan(args []string) {
 					}
 				}
 			}()
+			stopProf := startPhaseProfile(*profDir, ph)
 			t := time.Now()
 			var cnt int
 			switch ph {
@@ -247,6 +252,7 @@ func cmdScan(args []string) {
 				cnt, err = rs.ScanRange("user", "user~", 0, true, visit)
 			}
 			el := time.Since(t).Seconds()
+			stopProf()
 			close(stop)
 			<-done
 			if err != nil {
@@ -292,4 +298,40 @@ func cmdScan(args []string) {
 	res.Params = scanParams{System: *system, Keys: *keys, ValueBytes: *vsize, Clients: clients, Duration: dur.String(), Seed: *seed,
 		Compact: *compact, LoadSecs: round(loadSecs, 2), PeakRSS: peakRSS(), Memory: memS.result(), IndexInMemory: indexInMemory}
 	writeResult(*out, fmt.Sprintf("scan-%s", *system), res)
+}
+
+// startPhaseProfile starts a CPU profile of one phase and snapshots the
+// allocation profile before it; the returned func stops the CPU profile and
+// writes the allocation snapshot after it. dir "" = no profiling.
+func startPhaseProfile(dir, phase string) func() {
+	if dir == "" {
+		return func() {}
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		fatal(err)
+	}
+	writeAllocs := func(name string) {
+		f, err := os.Create(filepath.Join(dir, name))
+		if err != nil {
+			fatal(err)
+		}
+		defer f.Close()
+		runtime.GC() // the allocs profile is as of the last GC
+		if err := pprof.Lookup("allocs").WriteTo(f, 0); err != nil {
+			fatal(err)
+		}
+	}
+	writeAllocs("allocs-" + phase + "-before.pprof")
+	cf, err := os.Create(filepath.Join(dir, "cpu-"+phase+".pprof"))
+	if err != nil {
+		fatal(err)
+	}
+	if err := pprof.StartCPUProfile(cf); err != nil {
+		fatal(err)
+	}
+	return func() {
+		pprof.StopCPUProfile()
+		cf.Close()
+		writeAllocs("allocs-" + phase + "-after.pprof")
+	}
 }
