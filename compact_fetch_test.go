@@ -3,6 +3,7 @@ package loget
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -97,5 +98,66 @@ func TestCompactBatchesValueReads(t *testing.T) {
 				return nil
 			})
 		})
+	}
+}
+
+// ctxStore honours the context on value reads (as S3 does) and cancels
+// cancel after the first one.
+type ctxStore struct {
+	store.Store
+	cancel context.CancelFunc
+	ranges atomic.Int64
+}
+
+func (c *ctxStore) GetRange(ctx context.Context, k string, off, n int64) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if c.ranges.Add(1) == 1 && c.cancel != nil {
+		c.cancel()
+	}
+	return store.GetRange(ctx, c.Store, k, off, n)
+}
+
+// A cancelled (or timed-out) compaction stops: it used to fall back to one
+// read per value under a background context, so with the caller long gone
+// it went on for many minutes on S3 while commits waited (found with the
+// s3sim hostile profile: a 2-minute compaction deadline, 20+ minutes of
+// GETs). After the cancel the database still works.
+func TestCompactCancelStops(t *testing.T) {
+	st := &ctxStore{Store: store.NewMem()}
+	db, err := OpenStore(ctx, st, quiet())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for s := 0; s < 3000; s += 3 { // many segments: many value reads
+		b := &Batch{}
+		for i := s; i < s+3; i++ {
+			b.Put(fmt.Sprintf("k%06d", (i*7919)%3000), bytes.Repeat([]byte{'v'}, 100))
+		}
+		if _, err := db.Apply(ctx, b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cctx, cancel := context.WithCancel(ctx)
+	st.ranges.Store(0)
+	st.cancel = cancel
+	_, err = db.Compact(cctx, CompactOptions{})
+	st.cancel = nil
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("compaction under a cancelled context: %v (%d value reads)", err, st.ranges.Load())
+	}
+	if n := st.ranges.Load(); n > 2*compactPar {
+		t.Fatalf("%d value reads after the cancel", n)
+	}
+	if err := db.Put(ctx, "after", []byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Compact(ctx, CompactOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if v, err := db.Get(ctx, "k000001"); err != nil || len(v) != 100 {
+		t.Fatalf("after: %q %v", v, err)
 	}
 }

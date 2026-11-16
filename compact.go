@@ -461,7 +461,7 @@ func (db *DB) writeBase(ctx context.Context, l *logState, v *view, head uint64, 
 			if ver.Ref() && pre != nil {
 				val = pre // read with its neighbours, CRC checked
 			} else if ver.Ref() {
-				if val, err = db.readValue(x, seq, ver); err != nil {
+				if val, err = db.readValue(ctx, x, seq, ver); err != nil {
 					return err
 				}
 			}
@@ -500,6 +500,9 @@ func (db *DB) writeBase(ctx context.Context, l *logState, v *view, head uint64, 
 	var page []compactKey
 	pageBytes := 0
 	flush := func() error {
+		if err := ctx.Err(); err != nil {
+			return err // cancelled: stop, do not fall back to one read per value
+		}
 		vals := db.compactFetch(ctx, l, page)
 		for i, p := range page {
 			if err := process(p.space, p.k, p.ver, vals[i]); err != nil {

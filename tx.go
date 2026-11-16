@@ -114,6 +114,15 @@ func (tx *Tx) open(ver index.Version, space, key string) ([]byte, error) {
 	return tx.openWith(ver, space, key, nil)
 }
 
+// ctx is the context reads of stored values run under: the View's (a
+// cancelled or timed-out read stops waiting on the store), else none.
+func (tx *Tx) ctx() context.Context {
+	if tx.lazyCtx != nil {
+		return tx.lazyCtx
+	}
+	return context.Background()
+}
+
 // openWith is open with the stored bytes already read (by an iterator's
 // prefetch, checked against ver.Sum and owned), or nil to read them.
 func (tx *Tx) openWith(ver index.Version, space, key string, raw []byte) ([]byte, error) {
@@ -132,7 +141,7 @@ func (tx *Tx) openWith(ver index.Version, space, key string, raw []byte) ([]byte
 			val, owned = raw, true
 		} else if ver.Ref() {
 			var err error
-			if val, err = tx.db.readValue(x, seq, ver); err != nil {
+			if val, err = tx.db.readValue(tx.ctx(), x, seq, ver); err != nil {
 				return nil, err
 			}
 			owned = true // readValue returns a private copy

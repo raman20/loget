@@ -209,7 +209,7 @@ func (c *valueCache) close() {
 // readValue returns the stored bytes of a version kept as a position in
 // segment seq of log x, via the cache, verifying the index' checksum. The
 // result is a private copy the caller may modify.
-func (db *DB) readValue(x *logState, seq uint64, ver index.Version) ([]byte, error) {
+func (db *DB) readValue(ctx context.Context, x *logState, seq uint64, ver index.Version) ([]byte, error) {
 	k, obj := db.valuePos(x, seq, ver)
 	if b, ok := db.vcache.get(k); ok {
 		return b, nil
@@ -218,7 +218,7 @@ func (db *DB) readValue(x *logState, seq uint64, ver index.Version) ([]byte, err
 	ok := false
 	for try := 0; try < 2 && !ok; try++ { // a second read rules out a transient read fault
 		var err error
-		if b, err = store.GetRange(context.Background(), db.st, obj, int64(ver.Off), int64(ver.Len)); err != nil {
+		if b, err = store.GetRange(ctx, db.st, obj, int64(ver.Off), int64(ver.Len)); err != nil {
 			return nil, fmt.Errorf("loget: reading value at LSN %d: %w", ver.LSN, err)
 		}
 		ok = crc32.Checksum(b, index.Castagnoli) == ver.Sum

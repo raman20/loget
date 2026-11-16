@@ -199,7 +199,7 @@ func (db *DB) eachBase(ctx context.Context, img *baseImage, keep func(space stri
 			val := it.ver.Val
 			if it.ver.Ref() {
 				var err error
-				if val, err = db.readValue(img.log, 0, it.ver); err != nil {
+				if val, err = db.readValue(ctx, img.log, 0, it.ver); err != nil {
 					return err
 				}
 			}
