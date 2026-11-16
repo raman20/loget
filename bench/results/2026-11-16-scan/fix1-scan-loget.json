@@ -1,0 +1,139 @@
+{
+  "suite": "scan",
+  "env": {
+    "time": "2026-11-16T20:05:14+05:30",
+    "go_version": "go1.27.4",
+    "os": "linux/amd64",
+    "kernel": "6.12.113+",
+    "cpu": "Intel(R) Xeon(R) Processor",
+    "cpus": 8,
+    "mem_total": "16386416 kB",
+    "disk": "/dev/vdb ext4 128G",
+    "loget_commit": "22de0f0-dirty",
+    "command": "/workspace/loget-tools/perf/fix1/loget-bench scan -system loget -keys 10000000 -value 100 -phases full-iter,full-reverse -dir /tmp/loget-perf-bench -out /workspace/loget-tools/perf/fix1 -profile /workspace/loget-tools/perf/fix1/prof",
+    "loadavg_at_start": "2.86 2.03 1.17"
+  },
+  "params": {
+    "system": "loget",
+    "keys": 10000000,
+    "value_bytes": 100,
+    "clients": [
+      1,
+      8
+    ],
+    "duration": "5s",
+    "seed": 42,
+    "load_seconds": 31.34,
+    "peak_rss": "267652 kB",
+    "memory": {
+      "marks": [
+        {
+          "phase": "after load",
+          "rss_mib": 119,
+          "anon_mib": 51,
+          "file_mib": 68,
+          "go_resident_mib": 55,
+          "heap_objects_mib": 23,
+          "heap_free_mib": 21,
+          "gc_goal_mib": 44,
+          "anon_minus_go_mib": -4
+        },
+        {
+          "phase": "after load (after GC)",
+          "rss_mib": 119,
+          "anon_mib": 51,
+          "file_mib": 68,
+          "go_resident_mib": 55,
+          "heap_objects_mib": 18,
+          "heap_free_mib": 25,
+          "gc_goal_mib": 37,
+          "anon_minus_go_mib": -4
+        },
+        {
+          "phase": "end",
+          "rss_mib": 259,
+          "anon_mib": 50,
+          "file_mib": 208,
+          "go_resident_mib": 54,
+          "heap_objects_mib": 19,
+          "heap_free_mib": 24,
+          "gc_goal_mib": 37,
+          "anon_minus_go_mib": -4
+        },
+        {
+          "phase": "end (after GC)",
+          "rss_mib": 254,
+          "anon_mib": 46,
+          "file_mib": 208,
+          "go_resident_mib": 50,
+          "heap_objects_mib": 18,
+          "heap_free_mib": 20,
+          "gc_goal_mib": 37,
+          "anon_minus_go_mib": -4
+        }
+      ],
+      "note": "sampled every 200 ms; anon_minus_go ≈ LogEt's off-heap value-cache arena + cgo; page cache for pread'd data files is not in RSS for any engine",
+      "peak_by_rss": {
+        "phase": "load",
+        "rss_mib": 260,
+        "anon_mib": 51,
+        "file_mib": 208,
+        "go_resident_mib": 55,
+        "heap_objects_mib": 27,
+        "heap_free_mib": 17,
+        "gc_goal_mib": 42,
+        "anon_minus_go_mib": -4
+      }
+    }
+  },
+  "runs": [
+    {
+      "phase": "full-iter",
+      "desc": "one scan of every key, one client; RSS and heap sampled every 20 ms",
+      "clients": 1,
+      "closed_loop": {
+        "mode": "single",
+        "seconds": 3.815,
+        "ops": 1,
+        "ops_per_sec": 0,
+        "errors": 0,
+        "latency": {
+          "count": 0,
+          "mean_us": 0,
+          "p50_us": 0,
+          "p99_us": 0,
+          "p999_us": 0,
+          "max_us": 0
+        }
+      },
+      "keys_per_sec": 2621016,
+      "rss_start_mib": 107,
+      "rss_peak_mib": 260,
+      "heap_objects_peak_mib": 40
+    },
+    {
+      "phase": "full-reverse",
+      "desc": "one scan of every key, one client; RSS and heap sampled every 20 ms",
+      "clients": 1,
+      "closed_loop": {
+        "mode": "single",
+        "seconds": 3.084,
+        "ops": 1,
+        "ops_per_sec": 0,
+        "errors": 0,
+        "latency": {
+          "count": 0,
+          "mean_us": 0,
+          "p50_us": 0,
+          "p99_us": 0,
+          "p999_us": 0,
+          "max_us": 0
+        }
+      },
+      "keys_per_sec": 3242842,
+      "rss_start_mib": 255,
+      "rss_peak_mib": 261,
+      "heap_objects_peak_mib": 40
+    }
+  ]
+}
