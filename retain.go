@@ -2,6 +2,7 @@ package loget
 
 import (
 	"fmt"
+	"math"
 	"sort"
 
 	"github.com/raman20/loget/index"
@@ -52,13 +53,39 @@ func (l *logState) historyFloor() uint64 {
 	if l.completePrefix() {
 		return 0
 	}
+	// Lowest pointer base in the inherited range from which the head
+	// is still continuously foldable. An earlier ancestor cut does
+	// not lower the floor when mid-history was dropped (Rewind/ViewAt
+	// in the hole must be ErrCompacted, not a dangling ref).
+	head := l.head()
+	var floor uint64
+	found := false
+	limit := head
+	if limit == 0 {
+		limit = math.MaxUint64
+	}
+	for x := l; x != nil; x = x.parent {
+		if x.meta.Base != nil {
+			if b := x.meta.Base.LSN; b > 0 && b <= limit && l.coveredFrom(b, head) {
+				if !found || b < floor {
+					floor, found = b, true
+				}
+			}
+		}
+		if x.meta.ParentLSN == 0 {
+			break
+		}
+		limit = min(limit, x.meta.ParentLSN)
+	}
+	if found {
+		return floor
+	}
 	if b := l.baseLSN(); b != 0 {
 		return b
 	}
 	return 0
 }
 
-// floor is the user-facing bound for time travel, branches and snapshots.
 func (l *logState) floor() uint64 { return l.historyFloor() }
 
 // completePrefix reports whether retained history plus the tail cover
@@ -84,10 +111,78 @@ func (l *logState) canFold(upto uint64) bool {
 	if upto == 0 {
 		return true
 	}
-	if b := l.baseLSN(); b != 0 && upto >= b {
+	if l.foldStart(upto) != nil {
 		return true
 	}
 	return l.coveredThrough(upto)
+}
+
+// foldStart is the log whose pointer base should start a view at upto:
+// the newest pointer base in the lineage with Base.LSN <= upto that
+// sits in this log's inherited range, and whose following segments
+// through upto are still present. A child's own later base is ignored
+// for a cut below it: the parent's cut base is the fold at that LSN
+// (inlined or as refs) even if the cut's own segment was collected.
+func (l *logState) foldStart(upto uint64) *logState {
+	if upto == 0 {
+		return nil
+	}
+	var best *logState
+	var bestLSN uint64
+	limit := upto
+	for x := l; x != nil; x = x.parent {
+		if x.meta.Base != nil {
+			b := x.meta.Base.LSN
+			if b > 0 && b <= limit && l.coveredFrom(b, upto) && (best == nil || b >= bestLSN) {
+				best, bestLSN = x, b
+			}
+		}
+		if x.meta.ParentLSN == 0 {
+			break
+		}
+		limit = min(limit, x.meta.ParentLSN)
+	}
+	return best
+}
+
+// coveredFrom reports whether every LSN in (after, upto] still exists
+// in this lineage (after itself is a pointer base and need not be a
+// live segment).
+func (l *logState) coveredFrom(after, upto uint64) bool {
+	if upto <= after {
+		return true
+	}
+	if l.meta.ParentLSN > 0 && after < l.meta.ParentLSN {
+		if l.parent == nil || !l.parent.coveredFrom(after, min(upto, l.meta.ParentLSN)) {
+			return false
+		}
+		after = min(upto, l.meta.ParentLSN)
+		if upto <= after {
+			return true
+		}
+	}
+	want := after + 1
+	if want <= l.meta.ParentLSN {
+		want = l.meta.ParentLSN + 1
+	}
+	for _, s := range l.foldSegs() {
+		if s.n == 0 {
+			continue
+		}
+		if s.first+s.n-1 <= after {
+			continue
+		}
+		if s.first > want {
+			return false
+		}
+		if end := s.first + s.n; end > want {
+			want = end
+		}
+		if want > upto {
+			return true
+		}
+	}
+	return want > upto
 }
 
 func (l *logState) coveredThrough(upto uint64) bool {
@@ -182,18 +277,31 @@ func filterLiveSegs(all []segIdx, live map[string]struct{}, logID string) (keep 
 }
 
 func (db *DB) objectOf(l *logState, ver index.Version) string {
-	if !ver.Ref() {
+	if ver.Ref() {
+		x, seq, ok := l.source(ver)
+		if !ok {
+			return ""
+		}
+		if ver.Chunk != 0 {
+			_, obj := db.valuePos(x, 0, ver)
+			return obj
+		}
+		return segKey(x.meta.ID, seq)
+	}
+	// Inherited inlined subject values still were sealed in their
+	// original segment: source() / env.Open must name that log's AAD.
+	// Plain inlined values are copies in the pointer image and do not
+	// pin the source (or compact could never drop a retired parent).
+	// A log's own inlined values live in its pointer base and must
+	// not pin the cut segment either.
+	if ver.LSN == 0 || ver.Subject == "" {
 		return ""
 	}
-	x, seq, ok := l.source(ver)
-	if !ok {
+	x, s, ok := l.locate(ver.LSN)
+	if !ok || x == l {
 		return ""
 	}
-	if ver.Chunk != 0 {
-		_, obj := db.valuePos(x, 0, ver)
-		return obj
-	}
-	return segKey(x.meta.ID, seq)
+	return segKey(x.meta.ID, s.seq)
 }
 
 func (db *DB) addLiveFromIndex(live map[string]struct{}, l *logState, idx index.Index) {

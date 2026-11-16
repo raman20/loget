@@ -364,3 +364,161 @@ func TestLogOnlyBranchViewAtAfterParentGC(t *testing.T) {
 		t.Fatalf("side@3 after GC:\\nwant:\\n%s\\ngot:\\n%s", want, got)
 	}
 }
+
+// A retention cut must store the fold at the cut, not the head image
+// (LogEtLogGCFork mutant BaseFromHead). Records deleted between the
+// cut and the head stay visible at the cut.
+func TestLogOnlyCutKeepsDeletedRecords(t *testing.T) {
+	st := store.NewMem()
+	db := mustOpen(t, st, WithInlineMax(0))
+	defer db.Close()
+	if err := db.Update(ctx, func(tx *Tx) error {
+		if err := tx.Put("k0", []byte("v1")); err != nil {
+			return err
+		}
+		return tx.PutRecord("t:d", "d0", []byte("f0"))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Put(ctx, "k0", []byte("v2")); err != nil {
+		t.Fatal(err)
+	}
+	h, _ := db.Branch("main").Head()
+	if err := db.Update(ctx, func(tx *Tx) error {
+		return tx.DeleteRecord("t:d", "d0")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	want := dump(t, db, "main", h)
+	if !strings.Contains(want, `t:d d0=`) {
+		t.Fatalf("pre-GC view at %d missing record:\n%s", h, want)
+	}
+	if _, err := db.GC(ctx, GCOptions{KeepCommits: 1}); err != nil {
+		t.Fatal(err)
+	}
+	got := dump(t, db, "main", h)
+	if got != want {
+		t.Fatalf("ViewAt(%d) after GC keep 1 changed (records should still be live at the cut):\nwant:\n%s\ngot:\n%s", h, want, got)
+	}
+}
+
+// After Rewind, a child's inherited record lives in a parent segment.
+// GC must not delete that parent segment (LogEtLogGCFork mutant
+// SweepIgnoresChild / sim seed 12). WithInlineMax(-1) keeps values as
+// refs so the pin, not an inlined copy, is what retains the segment.
+func TestLogOnlyRewindGCKeepsParentRecord(t *testing.T) {
+	st := store.NewMem()
+	db := mustOpen(t, st, WithInlineMax(-1))
+	defer db.Close()
+	if err := db.Update(ctx, func(tx *Tx) error {
+		if err := tx.Put("k0", []byte("v0")); err != nil {
+			return err
+		}
+		return tx.PutRecord("t:d", "d0", []byte("f0"))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Put(ctx, "k0", []byte("later")); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Rewind(ctx, "main", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Put(ctx, "k1", []byte("after")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.GC(ctx, GCOptions{KeepCommits: 0}); err != nil {
+		t.Fatal(err)
+	}
+	var d0, k0 []byte
+	err := db.View(ctx, func(tx *Tx) error {
+		var e error
+		k0, e = tx.Get("k0")
+		if e != nil {
+			return e
+		}
+		recs, e := tx.ScanRecords("t:d", "")
+		if e != nil {
+			return e
+		}
+		for _, r := range recs {
+			if r.Key == "d0" {
+				d0 = r.Value
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("view after rewind+GC: %v", err)
+	}
+	if string(k0) != "v0" || string(d0) != "f0" {
+		t.Fatalf("inherited state after rewind+GC: k0=%q d0=%q", k0, d0)
+	}
+	db.Close()
+	db2, err := OpenStore(ctx, st, quiet(), WithInlineMax(-1), WithIndex(tallyKind()))
+	if err != nil {
+		t.Fatalf("reopen after rewind+GC: %v", err)
+	}
+	defer db2.Close()
+	got, err := db2.Get(ctx, "k0")
+	if err != nil || string(got) != "v0" {
+		t.Fatalf("reopen k0: %q %v", got, err)
+	}
+}
+
+// After pointer compact, GC with KeepCommits=1 writes a cut below the
+// existing base. Inlined values at the cut do not pin the cut segment,
+// but a branch forked at the parent's head must still fold the cut via
+// the parent's pointer base (LogEtLogGCFork / TestPropCompactEqualsUncompacted).
+func TestLogOnlyPropShrinkBranchAtHead(t *testing.T) {
+	st := store.NewMem()
+	db := mustOpen(t, st, WithInlineMax(0), WithSnapshotEvery(1))
+	defer db.Close()
+	if err := db.Put(ctx, "k0", []byte("0x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Put(ctx, "k0", []byte("1x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CreateBranch(ctx, "b2", "main", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Compact(ctx, CompactOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	want := dump(t, db, "b2", 1)
+	if _, err := db.GC(ctx, GCOptions{KeepCommits: 1, KeepReflog: 1, KeepManifests: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if got := dump(t, db, "b2", 1); got != want {
+		t.Fatalf("b2@1 after compact+GC keep 1 changed:\nwant:\n%s\ngot:\n%s", want, got)
+	}
+	if got := dump(t, db, "main", 1); got != want {
+		t.Fatalf("main@1 after GC disagrees with b2@1:\n%s\nvs\n%s", got, want)
+	}
+}
+
+// A branch forked at the parent's head inherits inlined subject values
+// sealed under the parent log. GC with KeepCommits=0 must pin the
+// parent's sealing segment: source() uses that log's AAD, and dropping
+// it makes the child's pointer base unreadable (TestPropCompactEqualsUncompacted).
+func TestLogOnlyBranchHeadAfterGCKeepZero(t *testing.T) {
+	st := store.NewMem()
+	db := mustOpen(t, st, WithInlineMax(0), WithSnapshotEvery(1))
+	defer db.Close()
+	if err := db.Branch("main").Update(ctx, func(tx *Tx) error {
+		return tx.Put("k0", []byte("0x"), Subject("s1"))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CreateBranch(ctx, "b1", "main", 0); err != nil {
+		t.Fatal(err)
+	}
+	want := dump(t, db, "b1", 1)
+	if _, err := db.GC(ctx, GCOptions{KeepCommits: 0, KeepReflog: 1, KeepManifests: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if got := dump(t, db, "b1", 1); got != want {
+		t.Fatalf("b1@1 after GC keep 0 changed:\nwant:\n%s\ngot:\n%s", want, got)
+	}
+}

@@ -1,0 +1,140 @@
+# 2026/11/16 21:50:24.115357 [TestPropCompactEqualsUncompacted] [rapid] draw seed: 0
+# 2026/11/16 21:50:24.115363 [TestPropCompactEqualsUncompacted] [rapid] draw inline: 0
+# 2026/11/16 21:50:24.115373 [TestPropCompactEqualsUncompacted] [rapid] draw snapEvery: 1
+# 2026/11/16 21:50:24.115475 [TestPropCompactEqualsUncompacted] [rapid] draw snapEvery: 1
+# 2026/11/16 21:50:24.115525 [TestPropCompactEqualsUncompacted] [rapid] draw n: 50
+# 2026/11/16 21:50:24.115526 [TestPropCompactEqualsUncompacted] [rapid] draw branch: "main"
+# 2026/11/16 21:50:24.115527 [TestPropCompactEqualsUncompacted] [rapid] draw subj: ""
+# 2026/11/16 21:50:24.115528 [TestPropCompactEqualsUncompacted] [rapid] draw k: 0
+# 2026/11/16 21:50:24.115529 [TestPropCompactEqualsUncompacted] [rapid] draw size: 1
+# 2026/11/16 21:50:24.115529 [TestPropCompactEqualsUncompacted] [rapid] draw op: 0
+# 2026/11/16 21:50:24.115652 [TestPropCompactEqualsUncompacted] [rapid] draw branch: "main"
+# 2026/11/16 21:50:24.115657 [TestPropCompactEqualsUncompacted] [rapid] draw subj: ""
+# 2026/11/16 21:50:24.115659 [TestPropCompactEqualsUncompacted] [rapid] draw k: 0
+# 2026/11/16 21:50:24.115659 [TestPropCompactEqualsUncompacted] [rapid] draw size: 1
+# 2026/11/16 21:50:24.115660 [TestPropCompactEqualsUncompacted] [rapid] draw op: 0
+# 2026/11/16 21:50:24.115708 [TestPropCompactEqualsUncompacted] [rapid] draw branch: "main"
+# 2026/11/16 21:50:24.115708 [TestPropCompactEqualsUncompacted] [rapid] draw subj: ""
+# 2026/11/16 21:50:24.115709 [TestPropCompactEqualsUncompacted] [rapid] draw k: 0
+# 2026/11/16 21:50:24.115709 [TestPropCompactEqualsUncompacted] [rapid] draw size: 1
+# 2026/11/16 21:50:24.115715 [TestPropCompactEqualsUncompacted] [rapid] draw op: 0
+# 2026/11/16 21:50:24.115761 [TestPropCompactEqualsUncompacted] [rapid] draw branch: "main"
+# 2026/11/16 21:50:24.115762 [TestPropCompactEqualsUncompacted] [rapid] draw subj: ""
+# 2026/11/16 21:50:24.115762 [TestPropCompactEqualsUncompacted] [rapid] draw k: 0
+# 2026/11/16 21:50:24.115762 [TestPropCompactEqualsUncompacted] [rapid] draw size: 1
+# 2026/11/16 21:50:24.115763 [TestPropCompactEqualsUncompacted] [rapid] draw op: 7
+# 2026/11/16 21:50:24.115764 [TestPropCompactEqualsUncompacted] [rapid] draw bat: 2
+# 2026/11/16 21:50:24.115933 [TestPropCompactEqualsUncompacted] [rapid] draw branch: "main"
+# 2026/11/16 21:50:24.115935 [TestPropCompactEqualsUncompacted] [rapid] draw subj: ""
+# 2026/11/16 21:50:24.115935 [TestPropCompactEqualsUncompacted] [rapid] draw k: 0
+# 2026/11/16 21:50:24.115936 [TestPropCompactEqualsUncompacted] [rapid] draw size: 1
+# 2026/11/16 21:50:24.115937 [TestPropCompactEqualsUncompacted] [rapid] draw op: 10
+# 2026/11/16 21:50:24.116134 [TestPropCompactEqualsUncompacted] [rapid] draw branch: "main"
+# 2026/11/16 21:50:24.116138 [TestPropCompactEqualsUncompacted] [rapid] draw subj: ""
+# 2026/11/16 21:50:24.116140 [TestPropCompactEqualsUncompacted] [rapid] draw k: 0
+# 2026/11/16 21:50:24.116140 [TestPropCompactEqualsUncompacted] [rapid] draw size: 1
+# 2026/11/16 21:50:24.116141 [TestPropCompactEqualsUncompacted] [rapid] draw op: 12
+# 2026/11/16 21:50:24.116142 [TestPropCompactEqualsUncompacted] [rapid] draw keep: 1
+# 2026/11/16 21:50:24.116145 [TestPropCompactEqualsUncompacted] [rapid] draw keepReflog: 1
+# 2026/11/16 21:50:24.116145 [TestPropCompactEqualsUncompacted] [rapid] draw keepMans: 1
+# 2026/11/16 21:50:24.116311 [TestPropCompactEqualsUncompacted] dump b3@1: loget: the requested history was deleted by log GC: LSN 1
+# 
+v0.4.8#9964188859791950934
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x1f2b5a0e61c3a6
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x6b74f03291620
+0x7
+0x0
+0x38e38e38e38e4
+0x2
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x9867f1f40f739
+0xa
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x1f2b5a0e61c3a6
+0x0
+0x0
+0x0
+0x1
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0

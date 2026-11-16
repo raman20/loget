@@ -59,15 +59,21 @@ func (db *DB) buildView(ctx context.Context, l *logState, upto uint64, snap *sna
 	env := db.env
 	kinds := db.reg.Derived()
 	v := &view{log: l, env: env, kv: index.NewKVOptions(db.kvOptions()), derived: make([]index.Index, len(kinds))}
-	b := l.based()
-	if b != nil && upto < b.meta.Base.LSN {
-		// Below the pointer base: fold retained history from scratch
-		// (design 30). The pointer base is latest-only at a later LSN
-		// and must not be used as the starting image.
-		if !l.canFold(upto) {
-			return nil, fmt.Errorf("%w: LSN %d: history was deleted by log GC", ErrCompacted, upto)
+	b := l.foldStart(upto)
+	if b == nil && upto != 0 && !l.coveredThrough(upto) {
+		return nil, fmt.Errorf("%w: LSN %d: history was deleted by log GC", ErrCompacted, upto)
+	}
+	// foldStart may be an ancestor's cut below this log's own later
+	// pointer base. A snapshot of a later image must not be used.
+	if snap != nil && b != nil && snap.lsn < b.meta.Base.LSN {
+		snap = nil
+	}
+	if snap != nil && b == nil {
+		// Folding from scratch: a later pointer-image snapshot is
+		// not a valid prefix of this view.
+		if own := l.based(); own != nil && snap.lsn >= own.meta.Base.LSN && upto < own.meta.Base.LSN {
+			snap = nil
 		}
-		b, snap = nil, nil
 	}
 	if snap != nil && (snap.lsn > upto || b != nil && snap.lsn < b.meta.Base.LSN) {
 		snap = nil

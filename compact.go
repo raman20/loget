@@ -350,6 +350,90 @@ func (db *DB) compactLocked(ctx context.Context, o GCOptions, gc bool, stats *Co
 		}
 		v.mu.RUnlock()
 	}
+	// A retired parent may have fallen out of the reflog while a
+	// reachable child still names its segments (rewind + KeepReflog=1,
+	// sim seed 12). Do not drop those logs; the sweep below still
+	// collects unreferenced history against globalLive.
+	if len(drop) > 0 {
+		gone := map[string]bool{}
+		for _, id := range drop {
+			gone[id] = true
+		}
+		for _, id := range drop {
+			pref := "log/" + id + "/"
+			for k := range globalLive {
+				if strings.HasPrefix(k, pref) {
+					delete(gone, id)
+					break
+				}
+			}
+		}
+		// An unbased leftover log still walks its parent chain
+		// (manifest validate, loadLog). Keep those ancestors even
+		// if no live ref names them. Logs in bs get a base in this
+		// same commit: they no longer need the chain (db.man is
+		// still the pre-commit image).
+		newBase := map[string]bool{}
+		for _, b := range bs {
+			newBase[b.id] = true
+		}
+		based := func(id string, lm *LogMeta) bool {
+			return lm.Base != nil || newBase[id]
+		}
+		for changed := true; changed; {
+			changed = false
+			for id, lm := range db.man.Logs {
+				if gone[id] || lm == nil {
+					continue
+				}
+				cur, cid := lm, id
+				for !based(cid, cur) && cur.Parent != "" {
+					if gone[cur.Parent] {
+						delete(gone, cur.Parent)
+						changed = true
+					}
+					cid, cur = cur.Parent, db.man.Logs[cur.Parent]
+					if cur == nil {
+						break
+					}
+				}
+			}
+		}
+		kept := drop[:0]
+		for _, id := range drop {
+			if gone[id] {
+				kept = append(kept, id)
+			}
+		}
+		drop = kept
+	}
+	// Pointer bases of logs we are keeping still name values in
+	// segments the head live set may no longer pin (a later keep-0
+	// cut of the tip vs a retired ancestor base). Dropping those
+	// segments makes foldStart on the old base return dangling refs
+	// (sim seed 16).
+	dropped := map[string]bool{}
+	for _, id := range drop {
+		dropped[id] = true
+	}
+	replaced := map[string]bool{}
+	for _, b := range bs {
+		replaced[b.id] = true
+	}
+	for _, id := range sortedMapKeys(db.man.Logs) {
+		if dropped[id] || replaced[id] {
+			continue
+		}
+		l, err := db.loadLog(ctx, id, false)
+		if err != nil || l == nil || l.meta.Base == nil {
+			continue
+		}
+		img, err := db.loadBase(ctx, l)
+		if err != nil || img == nil || img.kv == nil {
+			continue
+		}
+		db.addLiveFromLatest(globalLive, l, img.kv)
+	}
 	err = db.commitManifest(ctx, func(m *Manifest) error {
 		m.Format = max(m.Format, manifestFormatLogOnly)
 		// A checkpoint's runs point into segments a new base replaces
@@ -550,14 +634,12 @@ func (db *DB) writeBase(ctx context.Context, l *logState, v *view, head uint64, 
 			return nil
 		}
 		if ver.Ref() {
-			x, _, ok := l.source(ver)
-			if !ok {
+			if _, _, ok := l.source(ver); !ok {
 				return fmt.Errorf("%w: LSN %d of %s/%s not in the log", ErrCorrupt, ver.LSN, space, k)
 			}
-			_ = x
-			if obj := db.objectOf(l, ver); obj != "" {
-				live[obj] = struct{}{}
-			}
+		}
+		if obj := db.objectOf(l, ver); obj != "" {
+			live[obj] = struct{}{}
 		}
 		nv := index.Version{LSN: ver.LSN, Op: ver.Op, Subject: ver.Subject, Exp: ver.Exp, Val: ver.Val,
 			Chunk: ver.Chunk, Off: ver.Off, Len: ver.Len, Sum: ver.Sum}
