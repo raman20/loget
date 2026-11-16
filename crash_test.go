@@ -26,6 +26,13 @@ const crashIngestN = 3000 // keys per ingest (LOGET_CRASH_INGEST)
 // crashTTL is the TTL of the ttl<g>/<i> keys (LOGET_CRASH_TTL).
 const crashTTL = 20 * time.Millisecond
 
+// crashDelay is an optional per-op pause for local slow-runner tests
+// (LOGET_CRASH_DELAY, e.g. "20ms"). CI does not set it.
+func crashDelay() time.Duration {
+	d, _ := time.ParseDuration(os.Getenv("LOGET_CRASH_DELAY"))
+	return d
+}
+
 // crashChild is run in a subprocess: 4 goroutines commit forever, printing
 // "ACK g i" only after Update returned nil (i.e. after fsync+rename).
 func crashChild(loc string) {
@@ -45,7 +52,10 @@ func crashChild(loc string) {
 		// background index checkpoints every few KiB in small pieces:
 		// SIGKILL lands mid-checkpoint too (design 24)
 		index.PieceBytes = 512
-		opts = append(opts, WithSnapshotEvery(0), WithCheckpointBytes(4<<10))
+		// 256 bytes: a few commits, not 4 KiB. A higher threshold lost
+		// to the compact loop on a slow runner (sinceCk resets when a
+		// compact replaces the writer).
+		opts = append(opts, WithSnapshotEvery(0), WithCheckpointBytes(256))
 	}
 	db, err := OpenStore(ctx, st, opts...)
 	if err != nil {
@@ -57,13 +67,53 @@ func crashChild(loc string) {
 	if os.Getenv("LOGET_CRASH_SMALLCHUNKS") != "" {
 		chunkMax = 2 << 10 // many value chunks: compactions share and copy some
 	}
+	slow := crashDelay()
 	if os.Getenv("LOGET_CRASH_COMPACT") != "" {
 		go func() { // compaction racing the commits: SIGKILL lands mid-compaction too
 			for {
-				time.Sleep(5 * time.Millisecond)
+				time.Sleep(5*time.Millisecond + slow)
 				if _, err := db.Compact(ctx, CompactOptions{}); err != nil && !errors.Is(err, ErrBusy) { // busy: an ingest
 					fmt.Println("ERR compact", err)
 					os.Exit(5)
+				} else if err == nil {
+					mu.Lock()
+					os.Stdout.WriteString("BASE\n")
+					mu.Unlock()
+					if os.Getenv("LOGET_CRASH_CKPT") != "" {
+						// Compact drops the index checkpoint with the old
+						// base; wait until a new one is committed so a
+						// recovery can start from it. The parent may kill
+						// during this wait or during the next compact.
+						for {
+							ok := false
+							for _, lm := range db.Manifest().Logs {
+								if lm.Ckpt != nil {
+									ok = true
+									break
+								}
+							}
+							if ok {
+								break
+							}
+							time.Sleep(2 * time.Millisecond)
+						}
+					}
+				}
+			}
+		}()
+	}
+	if os.Getenv("LOGET_CRASH_CKPT") != "" {
+		go func() { // tell the parent when a checkpoint is in the manifest
+			var last uint64
+			for {
+				time.Sleep(2 * time.Millisecond)
+				for _, lm := range db.Manifest().Logs {
+					if lm.Ckpt != nil && lm.Ckpt.LSN != last {
+						last = lm.Ckpt.LSN
+						mu.Lock()
+						os.Stdout.WriteString("CKPT\n")
+						mu.Unlock()
+					}
 				}
 			}
 		}()
@@ -71,7 +121,7 @@ func crashChild(loc string) {
 	if os.Getenv("LOGET_CRASH_INGEST") != "" {
 		go func() { // bulk ingests racing the commits: all or nothing
 			for {
-				time.Sleep(10 * time.Millisecond) // leave compaction a turn
+				time.Sleep(10*time.Millisecond + slow) // leave compaction a turn
 				id := time.Now().UnixNano()
 				_, err := db.Ingest(ctx, func(add func(string, []byte) error) error {
 					for j := 0; j < crashIngestN; j++ {
@@ -103,6 +153,9 @@ func crashChild(loc string) {
 				return nil
 			})
 			for i := start + 1; ; i++ {
+				if slow > 0 {
+					time.Sleep(slow)
+				}
 				err := db.Update(ctx, func(tx *Tx) error {
 					if ttl {
 						tx.Put(fmt.Sprintf("ttl%d/%08d", g, i), []byte("x"), TTL(crashTTL))
@@ -187,6 +240,55 @@ func TestCrashKill9IndexFiles(t *testing.T) {
 
 // crashKill9 repeatedly SIGKILLs a committing child process on the store at
 // loc (a store URL or bare path) and checks the recovered state.
+// crashSig is what one child has printed so far (the parent waits on c).
+type crashSig struct {
+	mu                   sync.Mutex
+	c                    sync.Cond
+	ack, ing, base, ckpt int
+	firstAck             time.Time
+}
+
+// waitCrashSig blocks until pred (called with sig.mu held) is true, the
+// child exits, or crashWait times out. A timeout is a test failure: the
+// coverage assertion must not pass by luck on a fast box and fail on a
+// slow one.
+const crashWait = 60 * time.Second
+
+func waitCrashSig(t *testing.T, it int, cmd *exec.Cmd, sig *crashSig, done <-chan struct{}, pred func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(crashWait)
+	fail := func(why string) {
+		if cmd.Process != nil {
+			cmd.Process.Kill()
+		}
+		t.Fatalf("iter %d: %s (ack=%d ing=%d base=%d ckpt=%d)", it, why, sig.ack, sig.ing, sig.base, sig.ckpt)
+	}
+	sig.mu.Lock()
+	defer sig.mu.Unlock()
+	for !pred() {
+		if time.Now().After(deadline) {
+			fail("timed out waiting for crash coverage")
+		}
+		select {
+		case <-done:
+			if pred() {
+				return
+			}
+			fail("child exited before crash coverage")
+		default:
+		}
+		// Wake at least every 5ms so a TTL span can elapse without
+		// another line, and so a timeout is not stuck in Wait.
+		timer := time.AfterFunc(5*time.Millisecond, func() {
+			sig.mu.Lock()
+			sig.c.Broadcast()
+			sig.mu.Unlock()
+		})
+		sig.c.Wait()
+		timer.Stop()
+	}
+}
+
 func crashKill9(t *testing.T, dir string, env ...string) {
 	if testing.Short() {
 		t.Skip("short")
@@ -203,6 +305,9 @@ func crashKill9(t *testing.T, dir string, env ...string) {
 	ttlOn := slices.Contains(env, "LOGET_CRASH_TTL=1")
 	ttlLive := make([]int, crashG)
 	ttlExpired, ttlSeen := 0, 0
+	needING := slices.Contains(env, "LOGET_CRASH_INGEST=1")
+	needBASE := len(env) > 0
+	needCKPT := slices.Contains(env, "LOGET_CRASH_CKPT=1")
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	for it := 0; it < iters; it++ {
 		cmd := exec.Command(os.Args[0], "-test.run=^$")
@@ -212,25 +317,77 @@ func crashKill9(t *testing.T, dir string, env ...string) {
 			t.Fatal(err)
 		}
 		done := make(chan struct{})
+		var sig crashSig
+		sig.c.L = &sig.mu
 		go func() {
 			sc := bufio.NewScanner(out)
 			for sc.Scan() {
 				f := strings.Fields(sc.Text())
-				if len(f) == 2 && f[0] == "ING" {
+				sig.mu.Lock()
+				switch {
+				case len(f) == 1 && f[0] == "BASE":
+					sig.base++
+				case len(f) == 1 && f[0] == "CKPT":
+					sig.ckpt++
+				case len(f) == 2 && f[0] == "ING":
 					ingested[f[1]] = true
-				} else if len(f) == 3 && f[0] == "ACK" {
+					sig.ing++
+				case len(f) == 3 && f[0] == "ACK":
 					g, _ := strconv.Atoi(f[1])
 					i, _ := strconv.Atoi(f[2])
 					if i > acked[g] {
 						acked[g] = i
 					}
-				} else {
+					sig.ack++
+					if sig.firstAck.IsZero() {
+						sig.firstAck = time.Now()
+					}
+				default:
 					t.Errorf("child: %s", sc.Text())
 				}
+				sig.c.Broadcast()
+				sig.mu.Unlock()
 			}
+			sig.mu.Lock()
+			sig.c.Broadcast()
+			sig.mu.Unlock()
 			close(done)
 		}()
-		time.Sleep(time.Duration(20+rng.Intn(150)) * time.Millisecond)
+		// Coverage first: do not kill until the child has acknowledged the
+		// event this test asserts on (an ingest, a compaction base, a
+		// checkpoint, TTL keys spanning crashTTL). A later random pause
+		// still lands SIGKILL mid-operation. Once that event has been
+		// recovered, later cycles keep the original random kill window so
+		// early deaths stay in the mix.
+		//
+		// Compaction drops the index checkpoint when it commits a new
+		// base, so a cycle that still needs a checkpoint waits for ING
+		// and BASE first, then for a CKPT after that, and kills promptly
+		// so a later compact cannot drop it before we reopen.
+		if needING && sawIngest == 0 {
+			waitCrashSig(t, it, cmd, &sig, done, func() bool { return sig.ing > 0 })
+		}
+		if needBASE && based == 0 {
+			waitCrashSig(t, it, cmd, &sig, done, func() bool { return sig.base > 0 })
+		}
+		killQuick := false
+		if needCKPT && ckpted == 0 {
+			sig.mu.Lock()
+			after := sig.ckpt
+			sig.mu.Unlock()
+			waitCrashSig(t, it, cmd, &sig, done, func() bool { return sig.ckpt > after })
+			killQuick = true
+		}
+		if ttlOn && (ttlExpired == 0 || ttlSeen == 0) {
+			waitCrashSig(t, it, cmd, &sig, done, func() bool {
+				return sig.ack >= 2 && !sig.firstAck.IsZero() && time.Since(sig.firstAck) >= crashTTL
+			})
+		}
+		if killQuick {
+			time.Sleep(time.Duration(rng.Intn(5)) * time.Millisecond)
+		} else {
+			time.Sleep(time.Duration(20+rng.Intn(150)) * time.Millisecond)
+		}
 		cmd.Process.Kill() // SIGKILL mid-write
 		cmd.Wait()
 		<-done
