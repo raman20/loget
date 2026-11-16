@@ -155,6 +155,9 @@ func (l *KV) hotSource(lo, hi string, rev bool) *hotSrc {
 	h := &hotSrc{l: l, a: l.keys[i:j], rev: rev}
 	for _, k := range l.recent {
 		if k >= lo && k < hi {
+			if h.b == nil {
+				h.b = make([]string, 0, len(l.recent))
+			}
 			h.b = append(h.b, k)
 		}
 	}

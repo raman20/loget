@@ -111,10 +111,25 @@ func (db *DB) pfKey(o pfObj, ver index.Version) string {
 	return k
 }
 
+// pfScratch is a caller's reusable prefetch working memory (an iterator
+// prefetches one page at a time).
+type pfScratch struct {
+	rs     []pfReq
+	groups [][]pfReq
+}
+
 // prefetch fills vals[i] with the stored bytes of page[i] where that is
-// cheap to batch; vals[i] stays nil otherwise. vals has len(page).
-func (db *DB) prefetch(ctx context.Context, l *logState, page []index.Pair, vals [][]byte) {
-	var rs []pfReq
+// cheap to batch; vals[i] stays nil otherwise. vals has len(page). scr is
+// working memory, reused across calls (nil: allocate).
+func (db *DB) prefetch(ctx context.Context, l *logState, page []index.Pair, vals [][]byte, scr *pfScratch) {
+	if scr == nil {
+		scr = &pfScratch{}
+	}
+	defer func() { // keep the buffers, not what they point at
+		clear(scr.rs)
+		clear(scr.groups)
+	}()
+	rs := scr.rs[:0]
 	sc := newSrcCache(l)
 	for i := range page {
 		v := &page[i].Version
@@ -127,6 +142,7 @@ func (db *DB) prefetch(ctx context.Context, l *logState, page []index.Pair, vals
 		}
 		rs = append(rs, pfReq{i: i, obj: pfObjOf(x, seq, *v), off: int64(v.Off), n: int64(v.Len), sum: v.Sum})
 	}
+	scr.rs = rs
 	if len(rs) < 2 {
 		return
 	}
@@ -143,7 +159,7 @@ func (db *DB) prefetch(ctx context.Context, l *logState, page []index.Pair, vals
 			return rs[a].off < rs[b].off
 		})
 	}
-	var groups [][]pfReq
+	groups := scr.groups[:0]
 	start := 0
 	for j := 1; j <= len(rs); j++ {
 		if j < len(rs) && rs[j].obj == rs[start].obj &&
@@ -156,6 +172,7 @@ func (db *DB) prefetch(ctx context.Context, l *logState, page []index.Pair, vals
 		}
 		start = j
 	}
+	scr.groups = groups
 	read := func(g []pfReq) {
 		lo := g[0].off
 		hi := lo

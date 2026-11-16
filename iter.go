@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"iter"
+	"slices"
 	"sort"
 
 	"github.com/raman20/loget/index"
@@ -85,6 +86,7 @@ type Iterator struct {
 	started      bool   // resume is set
 	page         []index.Pair
 	vals         [][]byte // prefetched stored bytes of page values (nil: read on use)
+	pf           pfScratch
 	pi, pageSize int
 	more         bool // the index may have keys beyond page
 	local        []localKV
@@ -240,14 +242,15 @@ func (it *Iterator) fetch() {
 	})
 	v.mu.RUnlock()
 	it.page, it.pi, it.more = page, 0, len(page) == n
+	clear(it.vals) // Next hands each value out once and drops it
 	it.vals = it.vals[:0]
 	if len(page) > 1 {
-		it.vals = append(it.vals, make([][]byte, len(page))...)
+		it.vals = slices.Grow(it.vals, len(page))[:len(page)]
 		ctx := it.tx.lazyCtx
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		it.tx.db.prefetch(ctx, v.log, page, it.vals)
+		it.tx.db.prefetch(ctx, v.log, page, it.vals, &it.pf)
 	}
 	if len(page) > 0 {
 		last := page[len(page)-1].Key
