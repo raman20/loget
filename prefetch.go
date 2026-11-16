@@ -146,6 +146,18 @@ func (db *DB) prefetch(ctx context.Context, l *logState, page []index.Pair, vals
 	if len(rs) < 2 {
 		return
 	}
+	scr.groups = db.readGroups(ctx, rs, scr.groups[:0], func(r pfReq) string { return db.pfKey(r.obj, page[r.i].Version) },
+		vals, prefetchGap, prefetchSpan, 2, prefetchPar)
+}
+
+// readGroups sorts rs by position, joins requests in the same object at
+// most gap bytes apart into range reads of at most span bytes, and reads
+// the groups of at least minGroup requests, par at a time (key names a
+// request's object). A value that reads and checks out lands in
+// vals[r.i]; the rest stay nil. groups is reusable working memory; the
+// (cleared by the caller) slice is returned.
+func (db *DB) readGroups(ctx context.Context, rs []pfReq, groups [][]pfReq, key func(pfReq) string,
+	vals [][]byte, gap, span int64, minGroup, par int) [][]pfReq {
 	sorted := true // pages loaded in log order are already sorted
 	for j := 1; j < len(rs) && sorted; j++ {
 		a, b := &rs[j-1], &rs[j]
@@ -159,27 +171,25 @@ func (db *DB) prefetch(ctx context.Context, l *logState, page []index.Pair, vals
 			return rs[a].off < rs[b].off
 		})
 	}
-	groups := scr.groups[:0]
 	start := 0
 	for j := 1; j <= len(rs); j++ {
 		if j < len(rs) && rs[j].obj == rs[start].obj &&
-			rs[j].off <= rs[j-1].off+rs[j-1].n+prefetchGap &&
-			rs[j].off+rs[j].n-rs[start].off <= prefetchSpan {
+			rs[j].off <= rs[j-1].off+rs[j-1].n+gap &&
+			rs[j].off+rs[j].n-rs[start].off <= span {
 			continue
 		}
-		if j-start > 1 { // a lone value gains nothing from batching
+		if j-start >= minGroup {
 			groups = append(groups, rs[start:j])
 		}
 		start = j
 	}
-	scr.groups = groups
 	read := func(g []pfReq) {
 		lo := g[0].off
 		hi := lo
 		for _, r := range g {
 			hi = max(hi, r.off+r.n)
 		}
-		b, err := store.GetRange(ctx, db.st, db.pfKey(g[0].obj, page[g[0].i].Version), lo, hi-lo)
+		b, err := store.GetRange(ctx, db.st, key(g[0]), lo, hi-lo)
 		if err != nil || int64(len(b)) != hi-lo {
 			return
 		}
@@ -192,10 +202,10 @@ func (db *DB) prefetch(ctx context.Context, l *logState, page []index.Pair, vals
 	}
 	if len(groups) == 1 {
 		read(groups[0])
-		return
+		return groups
 	}
 	var wg sync.WaitGroup
-	sem := make(chan struct{}, prefetchPar)
+	sem := make(chan struct{}, par)
 	for _, g := range groups {
 		wg.Add(1)
 		sem <- struct{}{}
@@ -205,4 +215,5 @@ func (db *DB) prefetch(ctx context.Context, l *logState, page []index.Pair, vals
 		}(g)
 	}
 	wg.Wait()
+	return groups
 }

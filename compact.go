@@ -437,7 +437,7 @@ func (db *DB) writeBase(ctx context.Context, l *logState, v *view, head uint64, 
 	if err != nil {
 		return nil, err
 	}
-	err = v.kv.Latest(func(space, k string, ver index.Version) error {
+	process := func(space, k string, ver index.Version, pre []byte) error {
 		if ver.Del {
 			return nil
 		}
@@ -458,7 +458,9 @@ func (db *DB) writeBase(ctx context.Context, l *logState, v *view, head uint64, 
 			if !ok {
 				return fmt.Errorf("%w: LSN %d of %s/%s not in the log", ErrCorrupt, ver.LSN, space, k)
 			}
-			if ver.Ref() {
+			if ver.Ref() && pre != nil {
+				val = pre // read with its neighbours, CRC checked
+			} else if ver.Ref() {
 				if val, err = db.readValue(x, seq, ver); err != nil {
 					return err
 				}
@@ -490,7 +492,38 @@ func (db *DB) writeBase(ctx context.Context, l *logState, v *view, head uint64, 
 		}
 		stats.Keys++
 		return rw.Add(space, k, nv)
+	}
+	// Values are read a page of keys at a time, nearby positions joined
+	// into one range read and pages read in parallel (compactFetch):
+	// one GET per value made compaction on S3 cost one request and one
+	// round trip per live key.
+	var page []compactKey
+	pageBytes := 0
+	flush := func() error {
+		vals := db.compactFetch(ctx, l, page)
+		for i, p := range page {
+			if err := process(p.space, p.k, p.ver, vals[i]); err != nil {
+				return err
+			}
+		}
+		clear(page)
+		page, pageBytes = page[:0], 0
+		return nil
+	}
+	err = v.kv.Latest(func(space, k string, ver index.Version) error {
+		need := ver.Ref() && !ver.Del && !ver.Expired(ts) && (remap[ver.Chunk] == 0 || !ownChunk(l, ver))
+		page = append(page, compactKey{space, k, ver, need})
+		if need {
+			pageBytes += int(ver.Len)
+		}
+		if len(page) >= compactPageKeys || pageBytes >= compactPageBytes {
+			return flush()
+		}
+		return nil
 	})
+	if err == nil {
+		err = flush()
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -996,4 +1029,47 @@ func baseEpoch(key string) (uint64, bool) {
 	}
 	ep, err := strconv.ParseUint(f[1][1:], 10, 64)
 	return ep, err == nil
+}
+
+// Compaction value reads (compactFetch): a page holds at most this many
+// keys or this many bytes of values to read; reads join values at most
+// compactGap apart into ranges of at most compactSpan, compactPar at a time.
+const (
+	compactPageKeys  = 16384
+	compactPageBytes = 16 << 20
+	compactGap       = 256 << 10
+	compactSpan      = 4 << 20
+	compactPar       = 8
+)
+
+type compactKey struct {
+	space, k string
+	ver      index.Version
+	need     bool // its stored value must be read
+}
+
+// compactFetch returns the stored bytes of the page's values that need a
+// read, batched like an iterator page (readGroups) but in parallel even
+// for lone values. A value that fails to read or check out stays nil and
+// takes readValue's path, which retries and reports the error.
+func (db *DB) compactFetch(ctx context.Context, l *logState, page []compactKey) [][]byte {
+	vals := make([][]byte, len(page))
+	var rs []pfReq
+	sc := newSrcCache(l)
+	for i := range page {
+		if !page[i].need {
+			continue
+		}
+		v := page[i].ver
+		x, seq, ok := sc.source(v)
+		if !ok {
+			continue
+		}
+		rs = append(rs, pfReq{i: i, obj: pfObjOf(x, seq, v), off: int64(v.Off), n: int64(v.Len), sum: v.Sum})
+	}
+	if len(rs) > 0 {
+		db.readGroups(ctx, rs, nil, func(r pfReq) string { return db.pfKey(r.obj, page[r.i].ver) },
+			vals, compactGap, compactSpan, 1, compactPar)
+	}
+	return vals
 }
