@@ -28,9 +28,9 @@ func (l *KV) Range(space, lo, hi string, at uint64, reverse bool, fn func(key st
 	if klo >= khi {
 		return
 	}
-	srcs := make([]source, 0, 1+len(l.runs))
+	srcs := make([]hsrc, 0, 1+len(l.runs))
 	if hs := l.hotSource(klo, khi, reverse); hs.valid() {
-		srcs = append(srcs, hs)
+		srcs = append(srcs, hsrc{hs, 0})
 	}
 	for _, r := range l.runs {
 		var s source
@@ -40,40 +40,92 @@ func (l *KV) Range(space, lo, hi string, at uint64, reverse bool, fn func(key st
 			s = newFCursor(r, klo, khi)
 		}
 		if s.valid() {
-			srcs = append(srcs, s)
+			srcs = append(srcs, hsrc{s, len(srcs)})
 		}
 	}
 	defer runtime.KeepAlive(l.runs)
 	strip := len(space) + 1
-	for len(srcs) > 0 {
-		// the next key: smallest (largest in reverse) over the sources
-		var k []byte
-		for i, s := range srcs {
-			c := bytes.Compare(s.key(), k)
-			if i == 0 || (!reverse && c < 0) || (reverse && c > 0) {
-				k = s.key()
-			}
-		}
-		key := string(k)
+	// A heap of the sources ordered by current key (descending in reverse),
+	// ties broken newest first: the top is the next key from its newest
+	// source. Runs of a key-ordered load cover disjoint key ranges, so the
+	// top usually stays on top after a step: one or two comparisons per
+	// key instead of one per source.
+	h := srcHeap{s: srcs, rev: reverse}
+	h.init()
+	var kb []byte // the current key, copied: a source's key changes on step
+	for len(h.s) > 0 {
+		kb = append(kb[:0], h.s[0].src.key()...)
 		var v Version
 		found := false
-		// sources are newest first: the first with a version at `at` wins
-		live := srcs[:0]
-		for _, s := range srcs {
-			if string(s.key()) == key {
-				if !found {
-					v, found = s.at(at)
-				}
-				s.step()
+		// equal keys pop newest first: the first with a version at `at` wins
+		for len(h.s) > 0 && bytes.Equal(h.s[0].src.key(), kb) {
+			if !found {
+				v, found = h.s[0].src.at(at)
 			}
-			if s.valid() {
-				live = append(live, s)
-			}
+			h.stepTop()
 		}
-		srcs = live
-		if found && !v.Del && !fn(key[strip:], v) {
+		if found && !v.Del && !fn(string(kb[strip:]), v) {
 			return
 		}
+	}
+}
+
+// srcHeap is a binary heap of range-read sources (see Range).
+type srcHeap struct {
+	s   []hsrc
+	rev bool
+}
+
+type hsrc struct {
+	src source
+	age int // position in newest-first order: lower is newer
+}
+
+// less: a's key comes first in scan order, or the keys are equal and a
+// is newer.
+func (h *srcHeap) less(a, b *hsrc) bool {
+	c := bytes.Compare(a.src.key(), b.src.key())
+	if h.rev {
+		c = -c
+	}
+	return c < 0 || c == 0 && a.age < b.age
+}
+
+func (h *srcHeap) init() {
+	for i := len(h.s)/2 - 1; i >= 0; i-- {
+		h.down(i)
+	}
+}
+
+func (h *srcHeap) down(i int) {
+	n := len(h.s)
+	for {
+		m := i
+		if l := 2*i + 1; l < n && h.less(&h.s[l], &h.s[m]) {
+			m = l
+		}
+		if r := 2*i + 2; r < n && h.less(&h.s[r], &h.s[m]) {
+			m = r
+		}
+		if m == i {
+			return
+		}
+		h.s[i], h.s[m] = h.s[m], h.s[i]
+		i = m
+	}
+}
+
+// stepTop advances the top source and restores the heap, dropping the
+// source once it is exhausted.
+func (h *srcHeap) stepTop() {
+	h.s[0].src.step()
+	if !h.s[0].src.valid() {
+		last := len(h.s) - 1
+		h.s[0], h.s[last] = h.s[last], hsrc{}
+		h.s = h.s[:last]
+	}
+	if len(h.s) > 0 {
+		h.down(0)
 	}
 }
 
