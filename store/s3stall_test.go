@@ -3,6 +3,7 @@ package store
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -109,4 +110,63 @@ func TestS3StalledTransferTimesOut(t *testing.T) {
 			t.Logf("%s: %v after %v, %d requests", c.name, err, time.Since(t0).Round(time.Millisecond), n.Load())
 		})
 	}
+}
+
+// cutServer answers its first cuts requests with the response's headers
+// and only part of its body (an error document or a listing cut off by a
+// reset), then answers in full: GET is 404 NoSuchKey, LIST lists one key.
+func cutServer(t *testing.T, cuts int32) (*httptest.Server, *atomic.Int32) {
+	var n atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cut := n.Add(1) <= cuts
+		var body string
+		code := http.StatusOK
+		if r.URL.Query().Has("list-type") {
+			body = `<?xml version="1.0" encoding="UTF-8"?><ListBucketResult><Name>bkt</Name><Prefix>p/x/</Prefix><KeyCount>1</KeyCount><MaxKeys>1000</MaxKeys><IsTruncated>false</IsTruncated><Contents><Key>p/x/a</Key><Size>1</Size><ETag>"e"</ETag></Contents></ListBucketResult>`
+		} else {
+			code = http.StatusNotFound
+			body = `<?xml version="1.0" encoding="UTF-8"?><Error><Code>NoSuchKey</Code><Message>The specified key does not exist.</Message><Key>p/k</Key><RequestId>r</RequestId></Error>`
+		}
+		w.Header().Set("Content-Type", "application/xml")
+		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+		w.WriteHeader(code)
+		if !cut {
+			io.WriteString(w, body)
+			return
+		}
+		io.WriteString(w, body[:len(body)/3])
+		w.(http.Flusher).Flush()
+		panic(http.ErrAbortHandler)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &n
+}
+
+// A response cut off mid-body is transient even when it is an error
+// document or a listing: retried, never surfaced as a bare "unexpected
+// EOF" (found with the s3sim hostile profile: open failed on one).
+func TestS3CutResponseIsRetried(t *testing.T) {
+	ctx := context.Background()
+	t.Run("get-404", func(t *testing.T) {
+		srv, n := cutServer(t, 1)
+		s := stallStore(t, srv, "")
+		if _, err := s.Get(ctx, "k"); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("got %v after %d requests, want ErrNotFound", err, n.Load())
+		}
+	})
+	t.Run("range-404", func(t *testing.T) {
+		srv, n := cutServer(t, 1)
+		s := stallStore(t, srv, "")
+		if _, err := s.GetRange(ctx, "k", 0, 10); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("got %v after %d requests, want ErrNotFound", err, n.Load())
+		}
+	})
+	t.Run("list", func(t *testing.T) {
+		srv, n := cutServer(t, 1)
+		s := stallStore(t, srv, "")
+		ks, err := s.List(ctx, "x/")
+		if err != nil || len(ks) != 1 || ks[0] != "x/a" {
+			t.Fatalf("got %v, %v after %d requests", ks, err, n.Load())
+		}
+	})
 }

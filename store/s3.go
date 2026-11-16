@@ -192,6 +192,9 @@ func (s *S3) get(ctx context.Context, key string) ([]byte, error) {
 	// info with the body (Object.Stat would cost a second request).
 	body, info, _, err := minio.Core{Client: s.c}.GetObject(ctx, s.bucket, s.prefix+key, minio.GetObjectOptions{})
 	if err != nil {
+		if cutOff(ctx, err) { // e.g. a 404 whose error document was cut off
+			return nil, fmt.Errorf("%w: %s: %v", ErrShortRead, key, err)
+		}
 		return nil, mapNF(err)
 	}
 	defer body.Close()
@@ -252,7 +255,42 @@ func mapNF(err error) error {
 	return err
 }
 
+// cutOff reports whether err is a response cut off mid-body (an error
+// document or listing that ends early, a reset or stall while reading it)
+// rather than an answer from S3. minio-go retries failures before the
+// response; one that breaks while its body is parsed reaches us as a bare
+// io error. It is transient: the request is retried.
+func cutOff(ctx context.Context, err error) bool {
+	if ctx.Err() != nil || minio.ToErrorResponse(err).Code != "" {
+		return false
+	}
+	var ne net.Error
+	return errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) || errors.As(err, &ne)
+}
+
+// retryList retries a listing cut off mid-response.
+func retryList(ctx context.Context, f func() ([]string, error)) ([]string, error) {
+	var out []string
+	var err error
+	for try := 0; try < s3ReadTries; try++ {
+		if out, err = f(); err == nil || !cutOff(ctx, err) {
+			return out, err
+		}
+	}
+	return out, err
+}
+
 func (s *S3) List(ctx context.Context, prefix string) ([]string, error) {
+	return retryList(ctx, func() ([]string, error) { return s.list(ctx, prefix) })
+}
+
+// Keys lists every object under the prefix (recursive), sorted; the
+// conditional-write probe objects are skipped.
+func (s *S3) Keys(ctx context.Context) ([]string, error) {
+	return retryList(ctx, func() ([]string, error) { return s.keys(ctx) })
+}
+
+func (s *S3) list(ctx context.Context, prefix string) ([]string, error) {
 	var out []string
 	for o := range s.c.ListObjects(ctx, s.bucket, minio.ListObjectsOptions{Prefix: s.prefix + prefix}) {
 		if o.Err != nil {
@@ -268,9 +306,7 @@ func (s *S3) List(ctx context.Context, prefix string) ([]string, error) {
 	return out, nil
 }
 
-// Keys lists every object under the prefix (recursive), sorted; the
-// conditional-write probe objects are skipped.
-func (s *S3) Keys(ctx context.Context) ([]string, error) {
+func (s *S3) keys(ctx context.Context) ([]string, error) {
 	var out []string
 	for o := range s.c.ListObjects(ctx, s.bucket, minio.ListObjectsOptions{Prefix: s.prefix, Recursive: true}) {
 		if o.Err != nil {
