@@ -122,20 +122,27 @@ func (tx *Tx) openWith(ver index.Version, space, key string, raw []byte) ([]byte
 	}
 	val, owned := ver.Val, false // ver.Val is shared index state
 	var logID string
-	if ver.Ref() || ver.Subject != "" {
+	if ver.Ref() {
 		x, seq, ok := tx.v.log.source(ver)
 		if !ok {
 			return nil, fmt.Errorf("%w: LSN %d of %s/%s not in the log", ErrCorrupt, ver.LSN, space, key)
 		}
 		logID = x.meta.ID
-		if ver.Ref() && raw != nil {
+		if raw != nil {
 			val, owned = raw, true
-		} else if ver.Ref() {
+		} else {
 			var err error
 			if val, err = tx.db.readValue(x, seq, ver); err != nil {
 				return nil, err
 			}
 			owned = true // readValue returns a private copy
+		}
+	}
+	if ver.Subject != "" {
+		if id, ok := tx.v.log.originLog(ver); ok {
+			logID = id
+		} else if logID == "" {
+			return nil, fmt.Errorf("%w: LSN %d of %s/%s not in the log", ErrCorrupt, ver.LSN, space, key)
 		}
 	}
 	if ver.Subject == "" {

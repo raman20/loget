@@ -25,20 +25,22 @@ import (
 //	[uvarint Off, uvarint Len, Sum u32le] if fPos,
 //	[uvarint Chunk] if fChunk,
 //	[uvarint len, Val] if fVal, [uvarint len, Subject] if fSubj,
-//	[Exp i64le] if fExp (design 27)
+//	[Exp i64le] if fExp (design 27),
+//	[uvarint len, Log] if fLog (design 30: origin log id for AAD)
 //
 // Versions carry absolute LSNs, so the bodies of one key in two runs merge
 // by concatenation.
 type run struct {
-	b     []byte
-	bofs  []int    // block i is b[bofs[i]:bofs[i+1]]
-	slots []uint64 // open addressing, 0 = empty: hash>>fpShift | block offset+1 | offset in block
-	mp    RunFile  // non-nil: b and slots live in a mapped run file (kvfile.go)
-	n     int      // keys
-	vers  int      // versions
-	chunk bool     // some version has Chunk != 0
-	exp   bool     // some version has Exp != 0
-	subj  map[string]int
+	b      []byte
+	bofs   []int    // block i is b[bofs[i]:bofs[i+1]]
+	slots  []uint64 // open addressing, 0 = empty: hash>>fpShift | block offset+1 | offset in block
+	mp     RunFile  // non-nil: b and slots live in a mapped run file (kvfile.go)
+	n      int      // keys
+	vers   int      // versions
+	chunk  bool     // some version has Chunk != 0
+	exp    bool     // some version has Exp != 0
+	hasLog bool     // some version has Log != ""
+	subj   map[string]int
 	// key is the key a checkpoint stored the run under (kvimage.go).
 	// Written and read only by checkpoints, which are serialised.
 	key string
@@ -60,6 +62,7 @@ const (
 	fVal
 	fSubj
 	fExp
+	fLog
 )
 
 // subjects counts, per subject, the versions DropSubject would still change.
@@ -100,6 +103,9 @@ func appendVer(b []byte, v *Version) []byte {
 	if v.Exp != 0 {
 		f |= fExp
 	}
+	if v.Log != "" {
+		f |= fLog
+	}
 	b = binary.AppendUvarint(b, v.LSN)
 	b = binary.AppendUvarint(b, uint64(v.Op))
 	b = append(b, f)
@@ -121,6 +127,10 @@ func appendVer(b []byte, v *Version) []byte {
 	}
 	if f&fExp != 0 {
 		b = binary.LittleEndian.AppendUint64(b, uint64(v.Exp))
+	}
+	if f&fLog != 0 {
+		b = binary.AppendUvarint(b, uint64(len(v.Log)))
+		b = append(b, v.Log...)
 	}
 	return b
 }
@@ -163,6 +173,10 @@ func decVer(b []byte) (Version, []byte) {
 	if f&fExp != 0 {
 		v.Exp, b = int64(binary.LittleEndian.Uint64(b)), b[8:]
 	}
+	if f&fLog != 0 {
+		x, b = uv(b)
+		v.Log, b = string(b[:x]), b[x:]
+	}
 	return v, b
 }
 
@@ -191,6 +205,10 @@ func skipVer(b []byte) (uint64, []byte) {
 	}
 	if f&fExp != 0 {
 		b = b[8:]
+	}
+	if f&fLog != 0 {
+		x, r := uv(b)
+		b = r[x:]
 	}
 	return lsn, b
 }
@@ -259,6 +277,7 @@ func (w *builder) ver(v *Version) {
 	w.nv++
 	w.r.chunk = w.r.chunk || v.Chunk != 0
 	w.r.exp = w.r.exp || v.Exp != 0
+	w.r.hasLog = w.r.hasLog || v.Log != ""
 	if liveSubject(v) {
 		w.r.subj[v.Subject]++
 	}
@@ -722,6 +741,7 @@ func (m *merger) result() (*run, error) {
 	for _, r := range m.in {
 		m.w.r.chunk = m.w.r.chunk || r.chunk
 		m.w.r.exp = m.w.r.exp || r.exp
+		m.w.r.hasLog = m.w.r.hasLog || r.hasLog
 		for s, k := range r.subj {
 			m.w.r.subj[s] += k
 		}

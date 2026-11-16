@@ -21,7 +21,7 @@ func (l *mapKV) Apply(e *Entry, env Env) {
 	for i, op := range e.Ops {
 		switch op.Kind {
 		case format.OpPut:
-			v := Version{LSN: e.LSN, Op: uint32(i), Subject: op.Subject, Exp: op.Exp}
+			v := Version{LSN: e.LSN, Op: uint32(i), Subject: op.Subject, Exp: op.Exp, Log: e.Log}
 			if op.ValOff != 0 && len(op.Value) > l.inline {
 				v.Off, v.Len, v.Sum = op.ValOff, uint32(len(op.Value)), crc32.Checksum(op.Value, Castagnoli)
 			} else {
@@ -34,7 +34,7 @@ func (l *mapKV) Apply(e *Entry, env Env) {
 			l.m[k] = append(l.m[k], v)
 		case format.OpDel:
 			k := ck(op.Space, op.Key)
-			l.m[k] = append(l.m[k], Version{LSN: e.LSN, Op: uint32(i), Del: true})
+			l.m[k] = append(l.m[k], Version{LSN: e.LSN, Op: uint32(i), Del: true, Log: e.Log})
 		case format.OpShred:
 			l.DropSubject(op.Key)
 		}
@@ -102,14 +102,22 @@ func (l *mapKV) Range(space, lo, hi string, at uint64, reverse bool) []Pair {
 func (l *mapKV) SetLatest(space, key string, v Version) { l.m[ck(space, key)] = []Version{v} }
 
 func (l *mapKV) encode() []byte {
-	v3 := false
+	v3, v4, v5 := false, false, false
 	for _, vs := range l.m {
 		for _, v := range vs {
 			v3 = v3 || v.Chunk != 0
+			v4 = v4 || v.Exp != 0
+			v5 = v5 || v.Log != ""
 		}
 	}
 	e := &enc{}
-	if v3 {
+	if v5 {
+		v4, v3 = true, true
+		e.str("KV5")
+	} else if v4 {
+		v3 = true
+		e.str("KV4")
+	} else if v3 {
 		e.str("KV3")
 	} else {
 		e.str("KV2")
@@ -125,6 +133,12 @@ func (l *mapKV) encode() []byte {
 			e.u64(uint64(v.Op)<<32 | uint64(v.Sum))
 			if v3 {
 				e.u64(uint64(v.Chunk))
+			}
+			if v4 {
+				e.u64(uint64(v.Exp))
+			}
+			if v5 {
+				e.str(v.Log)
 			}
 			e.bytes(v.Val)
 			e.str(v.Subject)

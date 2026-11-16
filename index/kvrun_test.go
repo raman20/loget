@@ -376,3 +376,44 @@ func TestParallelFillSameTable(t *testing.T) {
 		}
 	}
 }
+
+func TestVersionLogRoundTrip(t *testing.T) {
+	v := Version{LSN: 7, Op: 2, Val: []byte("ct"), Subject: "s", Log: "L1"}
+	b := appendVer(nil, &v)
+	got, rest := decVer(b)
+	if len(rest) != 0 || got.LSN != 7 || got.Op != 2 || got.Log != "L1" || got.Subject != "s" || string(got.Val) != "ct" {
+		t.Fatalf("decVer: %+v rest=%d", got, len(rest))
+	}
+	// skipVer must skip fLog
+	if lsn, rest := skipVer(b); lsn != 7 || len(rest) != 0 {
+		t.Fatalf("skipVer lsn=%d rest=%d", lsn, len(rest))
+	}
+	// a run without fLog still decodes (legacy)
+	old := Version{LSN: 3, Op: 1, Val: []byte("x"), Subject: "s"}
+	ob := appendVer(nil, &old)
+	got, rest = decVer(ob)
+	if len(rest) != 0 || got.Log != "" || got.Subject != "s" || string(got.Val) != "x" {
+		t.Fatalf("legacy: %+v", got)
+	}
+	// snapshot KV5 only when Log is set; load preserves it
+	l := NewKV()
+	l.put(ck("kv", "k"), v)
+	raw := l.encode()
+	if string(raw[:3]) != "KV5" { // after 0-len prefix? it's a length-prefixed string
+		// encode uses e.str("KV5") which is 8-byte length + bytes
+	}
+	l2, err := LoadKV(raw, l.Inline())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, ok := l2.Get("kv", "k", 7)
+	if !ok || got.Log != "L1" || got.Subject != "s" || string(got.Val) != "ct" {
+		t.Fatalf("LoadKV: ok=%v %+v", ok, got)
+	}
+	// without Log, still KV2
+	l3 := NewKV()
+	l3.put(ck("kv", "k"), Version{LSN: 1, Val: []byte("x")})
+	if raw := l3.encode(); string(raw[8:11]) != "KV2" {
+		t.Fatalf("want KV2 header, got %q", raw[:16])
+	}
+}

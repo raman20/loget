@@ -124,6 +124,19 @@ func (l *logState) source(ver index.Version) (*logState, uint64, bool) {
 	return nil, 0, false
 }
 
+// originLog is the log id a version was sealed under: Version.Log when
+// set, otherwise source() (legacy images without the field).
+func (l *logState) originLog(ver index.Version) (string, bool) {
+	if ver.Log != "" {
+		return ver.Log, true
+	}
+	x, _, ok := l.source(ver)
+	if !ok {
+		return "", false
+	}
+	return x.meta.ID, true
+}
+
 // tip returns the chain head after the last frame. Caller holds l.mu.
 func (l *logState) tip() [32]byte {
 	if len(l.segs) > 0 {

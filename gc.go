@@ -199,13 +199,25 @@ func (db *DB) gcPlan(ctx context.Context, o GCOptions) (map[string]cutInfo, []st
 					cp = min(cp, l.floor())
 				}
 			}
-			if (m.Base != nil || c.set()) && cp >= m.ParentLSN {
+			// keep=0: a based child's window is its head, served
+			// from its pointer base; do not cap the parent at the
+			// fork or retired parents never drop.
+			// keep>0 and cp == ParentLSN: ViewAt at the fork is
+			// not served by a child base above the fork, so cap.
+			if o.KeepCommits == 0 {
+				if m.Base != nil || c.set() {
+					continue
+				}
+			} else if (m.Base != nil || c.set()) && cp > m.ParentLSN {
 				continue
 			}
 			for x != "" {
 				xm, ok := db.man.Logs[x]
 				if !ok {
-					return nil, nil, nil, fmt.Errorf("%w: log %s: parent %s missing", ErrCorrupt, id, x)
+					// A based log's parent may already have been
+					// dropped (design 30). History below the fork
+					// is gone; there is nothing left to cap.
+					break
 				}
 				if !reach[x] {
 					reach[x], changed = true, true

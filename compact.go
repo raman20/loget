@@ -536,7 +536,12 @@ func (db *DB) writeBase(ctx context.Context, l *logState, v *view, head uint64, 
 			live[obj] = struct{}{}
 		}
 		nv := index.Version{LSN: ver.LSN, Op: ver.Op, Subject: ver.Subject, Exp: ver.Exp, Val: ver.Val,
-			Chunk: ver.Chunk, Off: ver.Off, Len: ver.Len, Sum: ver.Sum}
+			Chunk: ver.Chunk, Off: ver.Off, Len: ver.Len, Sum: ver.Sum, Log: ver.Log}
+		if nv.Log == "" {
+			if id, ok := l.originLog(ver); ok {
+				nv.Log = id
+			}
+		}
 		if nc := remap[ver.Chunk]; nc != 0 && ownChunk(l, ver) {
 			nv.Chunk = nc
 			stats.SharedBytes += int64(ver.Len)

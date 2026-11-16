@@ -43,10 +43,20 @@ for values larger than `InlineMax`. Values at or below `InlineMax` may
 still be inlined in the key run as a cache (they are also in the
 segment; the inline bytes are rebuilt from the log).
 
-Subject (encrypted) values stay in the original segment. Compaction
-does not reseal them. Associated data already includes log id, LSN, op
-index, space and key, which do not change. `Shred` is unchanged: it
-deletes the DEK and leaves ciphertext in the segment.
+Subject (encrypted) values are sealed once, in the committing
+segment, and are never resealed. Associated data is `(origin log id,
+LSN, op index, space, key)` and does not change. The ciphertext is
+**self-describing**: `index.Version` carries the origin log id
+(`Version.Log`) alongside the existing LSN, op index, subject and
+inline bytes, so opening a pointer-base image never needs the sealing
+segment to still exist. Large (`Version.Ref()`) subject values still
+live in, and pin, their segment. Inlined subject values then match
+plain inlines: they do not pin the source. After history GC the
+pointer base holds the durable copy of that ciphertext (the same
+bytes, not a reseal). `Shred` is unchanged: it deletes the DEK and
+leaves ciphertext wherever it was stored.
+
+The trade-off that led here is in [Subject sealing and GC](#subject-sealing-and-gc).
 
 ### KV compaction (pointers only)
 
@@ -300,6 +310,63 @@ Safety, as in `LogEtCompact`, plus the new model `LogEtLogGC`:
 - `ErrCompacted` only when a needed segment is gone.
 - Open does not GET checkpoint-covered segments (except the bind
   of the last one); `Verify` still does.
+
+## Subject sealing and GC
+
+Inlined subject ciphertext cannot be opened without reconstructing
+AAD. LSN, op index, space and key already live on the `Version`. The
+origin log id did not: `source()` recovered it by locating the
+sealing segment. That made GC pin sealing segments even after the
+value was inlined, and a fork after parent GC keep=0 could not
+decrypt inherited inlines (`source()` fell back to the child's log
+id). The keep3-b16-at-5 shrink is this class.
+
+### Option A: rebind AAD to (subject, origin log id, LSN)
+
+Store that tuple next to the ciphertext and open without the
+segment.
+
+- **Shred is sound.** Crypto-shred works by deleting the subject DEK.
+  Every ciphertext under that DEK becomes unreadable, in every
+  segment, pointer base, snapshot and branch, regardless of AAD.
+  Certificates and audit markers are unchanged. AAD does not confer
+  shred; deleting the DEK does.
+- **Integrity is not sound as stated.** A single commit can contain
+  two subject-sealed ops for the same subject at the same LSN
+  (different keys or op indexes). Identical AAD would let those
+  ciphertexts be swapped and still authenticate. Today's AAD includes
+  op index, space and key specifically to prevent that. We do not
+  drop those bindings.
+- **Migration would be costly.** A new AAD requires resealing every
+  existing subject value. Design 30 does not copy or reseal values
+  into a shadow store; reseal would also need a successful open with
+  the old AAD first — the same sealing-segment dependency we are
+  trying to remove. Old and new AAD would have to coexist under a
+  format tag.
+
+### Option B (chosen): keep today's AAD, persist the origin log id
+
+Make the ciphertext self-describing by recording the origin log id
+on `index.Version` (`Log`), next to the fields already used as AAD
+inputs. Opening a pointer-base image never needs the sealing
+segment. This removes the GC edge entirely for inlined subject
+values; we do not add it to `LogEtLogGCFork` or `gcReach`.
+
+- **Shred guarantees are unchanged.** DEK deletion still blinds every
+  copy (segment and inline).
+- **Format.** Optional `fLog` flag on the KV run version record, and
+  snapshot encoding `KV5` when some version has `Log` set (same
+  pattern as `KV4` for expiry). Still manifest format 5; an absent
+  flag or a `KV2`/`KV3`/`KV4` snapshot means empty `Log`. Existing
+  sealed *log* bytes are unchanged (no reseal).
+- **Migration.** New folds and new pointer bases record `Version.Log`
+  from the frame's log id. Old format-5 bases and snapshots without
+  the field still open via `source()` / locate, so a sealing segment
+  may still be required until the next compact rewrites the base.
+- If this had not been sound, the fallback would have been to add
+  the value → sealing-segment edge to `LogEtLogGCFork` and `gcReach`
+  as an ordinary reference. That is not needed for inlines once
+  `Log` is persisted.
 
 ## Success metrics (phase 4, 10M keys, vs main)
 

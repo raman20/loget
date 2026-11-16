@@ -29,6 +29,7 @@ type Version struct {
 	Subject string
 	Val     []byte // inline stored bytes (ciphertext if Subject != "")
 	Exp     int64  // absolute expiry (frame TS unit); 0 = never (design 27)
+	Log     string // origin log id; with LSN, Op, space, key it reconstructs AAD
 }
 
 // Expired reports whether v has expired at read time now: Exp <= now.
@@ -118,19 +119,20 @@ type ver struct {
 	lsn                      uint64
 	off, len, op, sum, chunk uint32
 	del                      bool
-	x                        *verX // nil unless Subject or Val is set
+	x                        *verX // nil unless Subject, Val, Exp or Log is set
 }
 
 type verX struct {
 	subject string
 	val     []byte
 	exp     int64
+	log     string
 }
 
 func pack(v Version) ver {
 	w := ver{lsn: v.LSN, off: v.Off, len: v.Len, op: v.Op, sum: v.Sum, chunk: v.Chunk, del: v.Del}
-	if v.Subject != "" || v.Val != nil || v.Exp != 0 {
-		w.x = &verX{v.Subject, v.Val, v.Exp}
+	if v.Subject != "" || v.Val != nil || v.Exp != 0 || v.Log != "" {
+		w.x = &verX{v.Subject, v.Val, v.Exp, v.Log}
 	}
 	return w
 }
@@ -138,7 +140,7 @@ func pack(v Version) ver {
 func (w ver) unpack() Version {
 	v := Version{LSN: w.lsn, Off: w.off, Len: w.len, Op: w.op, Sum: w.sum, Chunk: w.chunk, Del: w.del}
 	if w.x != nil {
-		v.Subject, v.Val, v.Exp = w.x.subject, w.x.val, w.x.exp
+		v.Subject, v.Val, v.Exp, v.Log = w.x.subject, w.x.val, w.x.exp, w.x.log
 	}
 	return v
 }
@@ -253,7 +255,7 @@ func (l *KV) Apply(e *Entry, env Env) {
 	for i, op := range e.Ops {
 		switch op.Kind {
 		case format.OpPut:
-			v := Version{LSN: e.LSN, Op: uint32(i), Subject: op.Subject, Exp: op.Exp}
+			v := Version{LSN: e.LSN, Op: uint32(i), Subject: op.Subject, Exp: op.Exp, Log: e.Log}
 			if op.ValOff != 0 && len(op.Value) > l.inline {
 				v.Off, v.Len, v.Sum = op.ValOff, uint32(len(op.Value)), crc32.Checksum(op.Value, Castagnoli)
 			} else {
@@ -264,7 +266,7 @@ func (l *KV) Apply(e *Entry, env Env) {
 			}
 			l.put(ck(op.Space, op.Key), v)
 		case format.OpDel:
-			l.put(ck(op.Space, op.Key), Version{LSN: e.LSN, Op: uint32(i), Del: true})
+			l.put(ck(op.Space, op.Key), Version{LSN: e.LSN, Op: uint32(i), Del: true, Log: e.Log})
 		case format.OpShred:
 			l.DropSubject(op.Key)
 		case format.OpIngest:
@@ -616,19 +618,26 @@ func (l *KV) encode() []byte {
 	// uncompacted state are unchanged.
 	// KV4 adds an expiry per version (design 27); written only when some
 	// version has one, so older encodings and digests are unchanged.
-	v3, v4 := false, false
+	// KV5 adds the origin log id (design 30); written only when some
+	// version has Log set.
+	v3, v4, v5 := false, false, false
 	for _, vs := range l.m {
 		for i := 0; i < vs.n(); i++ {
 			v3 = v3 || vs.at(i).chunk != 0
 			v4 = v4 || (vs.at(i).x != nil && vs.at(i).x.exp != 0)
+			v5 = v5 || (vs.at(i).x != nil && vs.at(i).x.log != "")
 		}
 	}
 	for _, r := range l.runs {
 		v3 = v3 || r.chunk
 		v4 = v4 || r.exp
+		v5 = v5 || r.hasLog
 	}
 	e := &enc{}
-	if v4 {
+	if v5 {
+		v4, v3 = true, true
+		e.str("KV5")
+	} else if v4 {
 		v3 = true
 		e.str("KV4")
 	} else if v3 {
@@ -654,6 +663,9 @@ func (l *KV) encode() []byte {
 			}
 			if v4 {
 				e.u64(uint64(v.Exp))
+			}
+			if v5 {
+				e.str(v.Log)
 			}
 			e.bytes(v.Val)
 			e.str(v.Subject)
@@ -722,7 +734,7 @@ func (l *KV) dropRuns() {
 func (l *KV) load(b []byte, strict bool) (err error) {
 	d := &dec{b: b}
 	f := d.str()
-	if f != "KV2" && f != "KV3" && f != "KV4" {
+	if f != "KV2" && f != "KV3" && f != "KV4" && f != "KV5" {
 		return ErrBadSnapshot
 	}
 	if d.u64() != uint64(l.inline) && strict {
@@ -748,7 +760,7 @@ func (l *KV) load(b []byte, strict bool) (err error) {
 		}
 		return nil
 	}
-	chunked, expd, prev := false, false, ""
+	chunked, expd, hasLog, prev := false, false, false, ""
 	for i := uint64(0); i < n && !d.bad; i++ {
 		k := d.str()
 		// Keys are written sorted and unique as space+"\x00"+key. A key
@@ -777,9 +789,13 @@ func (l *KV) load(b []byte, strict bool) (err error) {
 				}
 				v.Chunk, chunked = uint32(ch), chunked || ch != 0
 			}
-			if f == "KV4" {
+			if f == "KV4" || f == "KV5" {
 				v.Exp = int64(d.u64())
 				expd = expd || v.Exp != 0
+			}
+			if f == "KV5" {
+				v.Log = d.str()
+				hasLog = hasLog || v.Log != ""
 			}
 			v.Val, v.Subject, v.Del = d.bytes(), d.str(), d.bool()
 			if v.Exp != 0 && v.Del {
@@ -805,8 +821,9 @@ func (l *KV) load(b []byte, strict bool) (err error) {
 		}
 	}
 	// KV3 is written only when some version carries a base chunk.
-	// KV4 only when some version expires.
-	if d.bad || len(d.b) != 0 || (f == "KV3" && !chunked) || (f == "KV4") != expd {
+	// KV4 only when some version expires (and none has Log).
+	// KV5 only when some has Log (expiry fields are still present).
+	if d.bad || len(d.b) != 0 || (f == "KV3" && !chunked) || (f == "KV4") != (expd && f != "KV5") || (f == "KV5") != hasLog {
 		return ErrBadSnapshot
 	}
 	return add()

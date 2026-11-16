@@ -206,13 +206,12 @@ func (db *DB) eachBase(ctx context.Context, img *baseImage, keep func(space stri
 		for j < len(items) && items[j].ver.LSN == items[i].ver.LSN {
 			j++
 		}
-		// AAD is bound to the log that sealed the value (design 30:
-		// values stay in their original segment, so a branch may name
-		// an ancestor's log). Format-4 resealed under the based log;
-		// source() still reports that log for inlined leftover values.
+		// AAD is bound to the log that sealed the value. Version.Log
+		// is self-describing (design 30); source() is the fallback
+		// for images written before that field existed.
 		logID := img.log.meta.ID
-		if x, _, ok := img.log.source(items[i].ver); ok {
-			logID = x.meta.ID
+		if id, ok := img.log.originLog(items[i].ver); ok {
+			logID = id
 		}
 		e := &index.Entry{Log: logID, LSN: items[i].ver.LSN, Ops: make([]format.Op, items[j-1].ver.Op+1)}
 		for _, it := range items[i:j] {

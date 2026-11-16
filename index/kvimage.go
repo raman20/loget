@@ -249,7 +249,7 @@ func (l *KV) loadRun(src RunSource) (*run, error) {
 func (r *run) check(m RunMeta) error {
 	bad := func(p int, why string) error { return badRun("entry at " + strconv.Itoa(p) + ": " + why) }
 	b := r.b
-	r.bofs, r.subj, r.n, r.vers, r.chunk, r.exp = nil, map[string]int{}, 0, 0, false, false
+	r.bofs, r.subj, r.n, r.vers, r.chunk, r.exp, r.hasLog = nil, map[string]int{}, 0, 0, false, false, false
 	var first, key, prev []byte
 	for p := 0; p < len(b); {
 		if r.n%runBlock == 0 {
@@ -333,7 +333,7 @@ func (r *run) checkBody(b []byte) (int, error) {
 		}
 		f := b[0]
 		b = b[1:]
-		if f&^(fDel|fPos|fChunk|fVal|fSubj|fExp) != 0 {
+		if f&^(fDel|fPos|fChunk|fVal|fSubj|fExp|fLog) != 0 {
 			return 0, errors.New("unknown flags")
 		}
 		if f&fPos != 0 {
@@ -375,6 +375,14 @@ func (r *run) checkBody(b []byte) (int, error) {
 			}
 			r.exp = true
 			b = b[8:]
+		}
+		if f&fLog != 0 {
+			x, err := u()
+			if err != nil || x > uint64(len(b)) {
+				return 0, errShort
+			}
+			r.hasLog = r.hasLog || x != 0
+			b = b[x:]
 		}
 		if subj != "" && !(f&fDel != 0 && f&(fVal|fPos|fChunk) == 0) {
 			r.subj[subj]++

@@ -290,19 +290,10 @@ func (db *DB) objectOf(l *logState, ver index.Version) string {
 		}
 		return segKey(x.meta.ID, seq)
 	}
-	// Inlined subject values still were sealed in their original
-	// segment: env.Open uses that log's AAD. A later fork reads the
-	// ciphertext from a child's pointer base but still needs the
-	// parent's sealing segment (GC parent, then branch, then GC
-	// child). Plain inlined values are copies and do not pin.
-	if ver.LSN == 0 || ver.Subject == "" {
-		return ""
-	}
-	x, s, ok := l.locate(ver.LSN)
-	if !ok {
-		return ""
-	}
-	return segKey(x.meta.ID, s.seq)
+	// Inlined values (plain or subject) are self-describing in the
+	// pointer image: subject ciphertext carries Version.Log so AAD
+	// does not need the sealing segment. They do not pin it.
+	return ""
 }
 
 func (db *DB) addLiveFromIndex(live map[string]struct{}, l *logState, idx index.Index) {
