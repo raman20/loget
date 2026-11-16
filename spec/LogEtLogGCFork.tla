@@ -106,6 +106,8 @@ CTailSegs == IF fork = 0 THEN {} ELSE
                {CSeg(i) : i \in {n \in 1..MaxLSN : n > fork /\ n >= cTail /\ n <= cHead}}
 
 \* Correct live set for history GC: both lineages, both images, both tails.
+\* Go gcReach is this set, plus live Snapshots (not in this model). The
+\* ancestor chain is already here: CLive may name a parent segment.
 Live == PLive \cup CLive \cup PTailSegs \cup CTailSegs
 
 \* Buggy live set: parent GC ignores the child's refs (seed 12).

@@ -1,9 +1,11 @@
 package loget
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 
 	"github.com/raman20/loget/index"
 )
@@ -288,17 +290,16 @@ func (db *DB) objectOf(l *logState, ver index.Version) string {
 		}
 		return segKey(x.meta.ID, seq)
 	}
-	// Inherited inlined subject values still were sealed in their
-	// original segment: source() / env.Open must name that log's AAD.
-	// Plain inlined values are copies in the pointer image and do not
-	// pin the source (or compact could never drop a retired parent).
-	// A log's own inlined values live in its pointer base and must
-	// not pin the cut segment either.
+	// Inlined subject values still were sealed in their original
+	// segment: env.Open uses that log's AAD. A later fork reads the
+	// ciphertext from a child's pointer base but still needs the
+	// parent's sealing segment (GC parent, then branch, then GC
+	// child). Plain inlined values are copies and do not pin.
 	if ver.LSN == 0 || ver.Subject == "" {
 		return ""
 	}
 	x, s, ok := l.locate(ver.LSN)
-	if !ok || x == l {
+	if !ok {
 		return ""
 	}
 	return segKey(x.meta.ID, s.seq)
@@ -351,6 +352,259 @@ func addLiveTail(live map[string]struct{}, l *logState, seq uint64) {
 	for _, s := range l.segs {
 		add(s)
 	}
+}
+
+// gcNewBase is a pointer base this compaction is committing.
+type gcNewBase struct {
+	id   string
+	base *BaseMeta
+	live map[string]struct{} // image refs + tail, as writeBase built them
+}
+
+// gcReach is the single GC liveness set, the Go form of LogEtLogGCFork
+// Live: a stored object is live iff it is reachable from any kept log's
+// pointer base, recoverable tail (the retention window), head image, or
+// a live Snapshot. Refs walk the ancestor chain (a child may pin a
+// parent segment). A planned drop is cancelled if the log is named by
+// that set, or if it is an ancestor of an unbased kept log (loadLog
+// and manifest validate walk that chain).
+func (db *DB) gcReach(ctx context.Context, drop []string, newBases []gcNewBase, o GCOptions, now, snapMaxAge int64) (live map[string]struct{}, stillDrop []string, err error) {
+	newBy := map[string]gcNewBase{}
+	for _, b := range newBases {
+		newBy[b.id] = b
+	}
+	gone := map[string]bool{}
+	for _, id := range drop {
+		gone[id] = true
+	}
+	based := func(id string, lm *LogMeta) bool {
+		if lm != nil && lm.Base != nil {
+			return true
+		}
+		_, ok := newBy[id]
+		return ok
+	}
+
+	live = map[string]struct{}{}
+	for round := 0; ; round++ {
+		if round > 2*len(db.man.Logs)+2 {
+			return nil, nil, fmt.Errorf("%w: gc reach does not converge", ErrCorrupt)
+		}
+		// Unbased kept logs need their parent chain.
+		changed := false
+		for id, lm := range db.man.Logs {
+			if gone[id] || lm == nil {
+				continue
+			}
+			cur, cid := lm, id
+			for !based(cid, cur) && cur.Parent != "" {
+				if gone[cur.Parent] {
+					delete(gone, cur.Parent)
+					changed = true
+				}
+				cid, cur = cur.Parent, db.man.Logs[cur.Parent]
+				if cur == nil {
+					break
+				}
+			}
+		}
+		// Recompute live from the current kept set.
+		live = map[string]struct{}{}
+		for _, id := range sortedMapKeys(db.man.Logs) {
+			if gone[id] {
+				continue
+			}
+			if err := db.addLiveFromKept(ctx, live, id, newBy, o); err != nil {
+				return nil, nil, err
+			}
+		}
+		if err := db.addLiveFromSnapshots(ctx, live, now, snapMaxAge, gone); err != nil {
+			return nil, nil, err
+		}
+		// A live object may name a log we planned to drop.
+		for k := range live {
+			id, ok := liveLogID(k)
+			if !ok || !gone[id] {
+				continue
+			}
+			if _, ok := db.man.Logs[id]; ok {
+				delete(gone, id)
+				changed = true
+			}
+		}
+		if !changed {
+			break
+		}
+	}
+	stillDrop = drop[:0]
+	for _, id := range drop {
+		if gone[id] {
+			stillDrop = append(stillDrop, id)
+		}
+	}
+	return live, stillDrop, nil
+}
+
+func liveLogID(obj string) (string, bool) {
+	const p = "log/"
+	if !strings.HasPrefix(obj, p) {
+		return "", false
+	}
+	rest := obj[len(p):]
+	i := strings.IndexByte(rest, '/')
+	if i <= 0 {
+		return "", false
+	}
+	return rest[:i], true
+}
+
+func (db *DB) addLiveFromKept(ctx context.Context, live map[string]struct{}, id string, newBy map[string]gcNewBase, o GCOptions) error {
+	if b, ok := newBy[id]; ok {
+		for k := range b.live {
+			live[k] = struct{}{}
+		}
+	} else {
+		l, err := db.loadLog(ctx, id, false)
+		if err != nil || l == nil {
+			return err
+		}
+		if l.meta.Base != nil {
+			img, err := db.loadBase(ctx, l)
+			if err != nil {
+				return err
+			}
+			if img != nil && img.kv != nil {
+				db.addLiveFromLatest(live, l, img.kv)
+			}
+			addLiveTail(live, l, l.meta.Base.Seq)
+		} else {
+			// Unbased: the whole own tail stays, and the head image pins
+			// inherited refs in ancestor segments.
+			addLiveTail(live, l, 0)
+			if v := db.views[id]; v != nil {
+				v.mu.RLock()
+				db.addLiveFromIndex(live, l, v.kv)
+				for _, d := range v.derived {
+					db.addLiveFromIndex(live, l, d)
+				}
+				v.mu.RUnlock()
+			} else {
+				v, err := db.buildView(ctx, l, l.head(), db.loadSnapshot(ctx, l))
+				if err != nil {
+					return err
+				}
+				v.mu.RLock()
+				db.addLiveFromIndex(live, l, v.kv)
+				for _, d := range v.derived {
+					db.addLiveFromIndex(live, l, d)
+				}
+				v.mu.RUnlock()
+			}
+		}
+	}
+	// A child's keep window may extend below its own base into an
+	// ancestor (LogEtLogGCFork: tail of the child lineage). Pin those
+	// segments even if the parent cut could not be rewritten.
+	l, err := db.loadLog(ctx, id, false)
+	if err != nil || l == nil {
+		return err
+	}
+	// Pin the count-based keep window through the ancestor chain.
+	// KeepFor is already expressed as a written cut + tail (b.live);
+	// do not pin [0, head] or the time window never shrinks.
+	if o.KeepCommits > 0 {
+		from := uint64(0)
+		if l.head() > o.KeepCommits {
+			from = l.head() - o.KeepCommits
+		}
+		addLiveWindow(live, l, from, l.head())
+	}
+	return nil
+}
+
+// addLiveWindow pins every segment in this lineage that overlaps
+// [from, to], walking parents for inherited LSNs.
+func addLiveWindow(live map[string]struct{}, l *logState, from, to uint64) {
+	if to < from {
+		return
+	}
+	for x := l; x != nil; x = x.parent {
+		for _, s := range x.foldSegs() {
+			if s.n == 0 {
+				continue
+			}
+			end := s.first + s.n - 1
+			if end < from || s.first > to {
+				continue
+			}
+			live[segKey(x.meta.ID, s.seq)] = struct{}{}
+		}
+		if x.meta.ParentLSN == 0 || x.meta.ParentLSN < from {
+			break
+		}
+	}
+}
+
+func (db *DB) addLiveFromSnapshots(ctx context.Context, live map[string]struct{}, now, maxAge int64, gone map[string]bool) error {
+	type pin struct {
+		at   uint64
+		logs []string
+	}
+	var pins []pin
+	db.snaps.mu.Lock()
+	for _, s := range db.snaps.live {
+		if maxAge > 0 && now-s.created > maxAge {
+			continue
+		}
+		pins = append(pins, pin{at: s.at, logs: append([]string(nil), s.logs...)})
+	}
+	db.snaps.mu.Unlock()
+	for _, p := range pins {
+		if len(p.logs) == 0 {
+			continue
+		}
+		id := p.logs[0]
+		if gone[id] {
+			continue
+		}
+		l, err := db.loadLog(ctx, id, false)
+		if err != nil || l == nil {
+			return err
+		}
+		if p.at > 0 && !l.canFold(p.at) {
+			continue
+		}
+		v, err := db.buildView(ctx, l, p.at, nil)
+		if err != nil {
+			return err
+		}
+		v.mu.RLock()
+		db.addLiveFromIndex(live, l, v.kv)
+		for _, d := range v.derived {
+			db.addLiveFromIndex(live, l, d)
+		}
+		v.mu.RUnlock()
+		// Keep the segments needed to fold this LSN, including on
+		// ancestors. The snapshot's logs[] is the parent chain.
+		for _, lid := range p.logs {
+			if gone[lid] {
+				continue
+			}
+			xl, err := db.loadLog(ctx, lid, false)
+			if err != nil || xl == nil {
+				continue
+			}
+			for _, s := range xl.foldSegs() {
+				if s.n == 0 {
+					continue
+				}
+				if p.at == 0 || s.first <= p.at {
+					live[segKey(xl.meta.ID, s.seq)] = struct{}{}
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // retentionSatisfied reports whether the current pointer base already

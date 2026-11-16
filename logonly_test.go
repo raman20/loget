@@ -522,3 +522,63 @@ func TestLogOnlyBranchHeadAfterGCKeepZero(t *testing.T) {
 		t.Fatalf("b1@1 after GC keep 0 changed:\nwant:\n%s\ngot:\n%s", want, got)
 	}
 }
+
+// A branch forked at the parent's head, then a later put on the parent,
+// still has to fold head-keep into the inherited prefix after GC.
+func TestLogOnlyBranchKeepWindowIntoParent(t *testing.T) {
+	st := store.NewMem()
+	db := mustOpen(t, st, WithInlineMax(0), WithSnapshotEvery(1))
+	defer db.Close()
+	if err := db.Put(ctx, "k0", []byte("0x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Put(ctx, "k0", []byte("1x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CreateBranch(ctx, "b3", "main", 0); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Compact(ctx, CompactOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Put(ctx, "k0", []byte("2x")); err != nil {
+		t.Fatal(err)
+	}
+	want := dump(t, db, "b3", 1)
+	if _, err := db.GC(ctx, GCOptions{KeepCommits: 1, KeepReflog: 1, KeepManifests: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if got := dump(t, db, "b3", 1); got != want {
+		t.Fatalf("b3@1 after parent put + GC keep 1 changed:\nwant:\n%s\ngot:\n%s", want, got)
+	}
+}
+
+// GC keep=0 on the parent inlines a subject value into the parent's
+// pointer base and would otherwise drop the sealing segment. A branch
+// created afterwards must still decrypt that value after its own GC.
+func TestLogOnlyForkAfterParentGCKeepZero(t *testing.T) {
+	st := store.NewMem()
+	db := mustOpen(t, st, WithInlineMax(0), WithSnapshotEvery(1))
+	defer db.Close()
+	if err := db.Branch("main").Update(ctx, func(tx *Tx) error {
+		return tx.Put("k0", []byte("0x"), Subject("s1"))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Put(ctx, "k1", []byte("1x")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.GC(ctx, GCOptions{KeepCommits: 0, KeepReflog: 1, KeepManifests: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CreateBranch(ctx, "b3", "main", 0); err != nil {
+		t.Fatal(err)
+	}
+	want := dump(t, db, "b3", 0)
+	if _, err := db.GC(ctx, GCOptions{KeepCommits: 0, KeepReflog: 1, KeepManifests: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if got := dump(t, db, "b3", 0); got != want {
+		t.Fatalf("b3 head after fork-after-parent-GC keep 0 changed:\nwant:\n%s\ngot:\n%s", want, got)
+	}
+}

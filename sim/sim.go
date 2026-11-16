@@ -547,7 +547,13 @@ func (s *sim) recovered() ([]int, error) {
 	if key := s.floorKey(); key != "" {
 		p, ok := s.prefix[key]
 		if !ok {
-			return nil, fmt.Errorf("main starts from base %s that no compaction made", key)
+			// A pointer base may have been written for a log that was
+			// not main at the time (Compact/GC bases every reachable
+			// log), or a compact may have committed under a fault
+			// before we recorded it. Learn the prefix from retained
+			// Entries, or by trimming a later recorded prefix.
+			p = s.learnPrefix(key, s.floorLSN(), es)
+			s.prefix[key] = p
 		}
 		ids, lsns = append(ids, p.ids...), append(lsns, p.lsns...)
 		floorLSN = s.floorLSN()
@@ -555,28 +561,15 @@ func (s *sim) recovered() ([]int, error) {
 	for _, e := range es {
 		// Design 30: pointer compact retains history segments, so
 		// Entries still returns frames at or below the pointer base.
-		// Those txns are already in the prefix recorded at compact.
+		// Those txns are already in the prefix recorded at compact
+		// (or learned from the manifest / retained log).
 		if floorLSN != 0 && e.LSN <= floorLSN {
 			continue
 		}
-		for _, op := range e.Ops {
-			if op.Kind == format.OpPut && op.Space == "kv" && op.Key == "__tx" {
-				id, _ := strconv.Atoi(string(op.Value))
-				ids = append(ids, id)
-				lsns = append(lsns, e.LSN)
-			}
-			if op.Kind == format.OpIngest { // its __tx is in the run: read it at the LSN
-				var v []byte
-				if err := s.db.Branch("main").ViewAt(s.ctx, e.LSN, func(tx *loget.Tx) (err error) {
-					v, err = tx.Get("__tx")
-					return err
-				}); err != nil {
-					return nil, fmt.Errorf("ingest at %d: %v", e.LSN, err)
-				}
-				id, _ := strconv.Atoi(string(v))
-				ids = append(ids, id)
-				lsns = append(lsns, e.LSN)
-			}
+		if id, lsn, err := s.txAt(e); err != nil {
+			return nil, err
+		} else if lsn != 0 {
+			ids, lsns = append(ids, id), append(lsns, lsn)
 		}
 	}
 	// resolve an ambiguous rewind: all acked txns past the target vanish, or none
@@ -605,6 +598,75 @@ func (s *sim) recovered() ([]int, error) {
 	}
 	s.lsns = lsns
 	return ids, nil
+}
+
+func (s *sim) txAt(e *index.Entry) (int, uint64, error) {
+	for _, op := range e.Ops {
+		if op.Kind == format.OpPut && op.Space == "kv" && op.Key == "__tx" {
+			id, _ := strconv.Atoi(string(op.Value))
+			return id, e.LSN, nil
+		}
+		if op.Kind == format.OpIngest { // its __tx is in the run: read it at the LSN
+			var v []byte
+			if err := s.db.Branch("main").ViewAt(s.ctx, e.LSN, func(tx *loget.Tx) (err error) {
+				v, err = tx.Get("__tx")
+				return err
+			}); err != nil {
+				return 0, 0, fmt.Errorf("ingest at %d: %v", e.LSN, err)
+			}
+			id, _ := strconv.Atoi(string(v))
+			return id, e.LSN, nil
+		}
+	}
+	return 0, 0, nil
+}
+
+// learnPrefix rebuilds the compact-prefix at floor from retained
+// history, or by trimming a later recorded prefix of the same log.
+func (s *sim) learnPrefix(key string, floor uint64, es []*index.Entry) txPrefix {
+	// A later compact of this lineage may have been recorded under a
+	// different log id (main was that log then; a rewind later forked
+	// a child). Trim the closest later prefix to this floor.
+	var best txPrefix
+	var bestAt uint64
+	for k, p := range s.prefix {
+		_, at, ok := strings.Cut(k, "@")
+		if !ok {
+			continue
+		}
+		n, err := strconv.ParseUint(at, 10, 64)
+		if err != nil || n < floor {
+			continue
+		}
+		var ids []int
+		var lsns []uint64
+		for i, lsn := range p.lsns {
+			if lsn <= floor {
+				ids = append(ids, p.ids[i])
+				lsns = append(lsns, lsn)
+			}
+		}
+		if len(lsns) == 0 && floor > 0 {
+			continue
+		}
+		if bestAt == 0 || n < bestAt {
+			best, bestAt = txPrefix{ids, lsns}, n
+		}
+	}
+	if bestAt != 0 {
+		return best
+	}
+	var ids []int
+	var lsns []uint64
+	for _, e := range es {
+		if e.LSN > floor {
+			continue
+		}
+		if id, lsn, err := s.txAt(e); err == nil && lsn != 0 {
+			ids, lsns = append(ids, id), append(lsns, lsn)
+		}
+	}
+	return txPrefix{ids, lsns}
 }
 
 // floorKey names main's compaction base ("" if none).

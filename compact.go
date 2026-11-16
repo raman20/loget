@@ -284,7 +284,10 @@ func (db *DB) compactLocked(ctx context.Context, o GCOptions, gc bool, stats *Co
 			// A cut below the current pointer base needs a complete
 			// foldable prefix. If history was already swept, keep the
 			// current base (the window is already as tight as it can be).
-			if !l.canFold(c.k) {
+			if !l.canFold(c.k) || !l.coveredFrom(c.k, l.head()) {
+				// LogEtLogGCFork CompactP: a cut is only legal if
+				// the fold at the cut and every LSN above it to the
+				// head are still stored (no hole in the keep window).
 				continue
 			}
 			var v *view
@@ -328,111 +331,15 @@ func (db *DB) compactLocked(ctx context.Context, o GCOptions, gc bool, stats *Co
 		}
 	}
 	pruned := len(db.man.Reflog) - len(reflog)
-	after := db.opts.Clock() + int64(o.Grace)
-	// Live objects from every log: a child's pointer can pin a parent
-	// segment (CreateBranch / inherited prefix). Sweeping each log
-	// against only its own view would drop those parent objects.
-	globalLive := map[string]struct{}{}
-	for _, b := range bs {
-		for k := range b.live {
-			globalLive[k] = struct{}{}
-		}
+	now := db.opts.Clock()
+	after := now + int64(o.Grace)
+	newBases := make([]gcNewBase, len(bs))
+	for i, b := range bs {
+		newBases[i] = gcNewBase{id: b.id, base: b.base, live: b.live}
 	}
-	for _, id := range sortedMapKeys(db.views) {
-		l, v := db.logs[id], db.views[id]
-		if l == nil || v == nil {
-			continue
-		}
-		v.mu.RLock()
-		db.addLiveFromIndex(globalLive, l, v.kv)
-		for _, d := range v.derived {
-			db.addLiveFromIndex(globalLive, l, d)
-		}
-		v.mu.RUnlock()
-	}
-	// A retired parent may have fallen out of the reflog while a
-	// reachable child still names its segments (rewind + KeepReflog=1,
-	// sim seed 12). Do not drop those logs; the sweep below still
-	// collects unreferenced history against globalLive.
-	if len(drop) > 0 {
-		gone := map[string]bool{}
-		for _, id := range drop {
-			gone[id] = true
-		}
-		for _, id := range drop {
-			pref := "log/" + id + "/"
-			for k := range globalLive {
-				if strings.HasPrefix(k, pref) {
-					delete(gone, id)
-					break
-				}
-			}
-		}
-		// An unbased leftover log still walks its parent chain
-		// (manifest validate, loadLog). Keep those ancestors even
-		// if no live ref names them. Logs in bs get a base in this
-		// same commit: they no longer need the chain (db.man is
-		// still the pre-commit image).
-		newBase := map[string]bool{}
-		for _, b := range bs {
-			newBase[b.id] = true
-		}
-		based := func(id string, lm *LogMeta) bool {
-			return lm.Base != nil || newBase[id]
-		}
-		for changed := true; changed; {
-			changed = false
-			for id, lm := range db.man.Logs {
-				if gone[id] || lm == nil {
-					continue
-				}
-				cur, cid := lm, id
-				for !based(cid, cur) && cur.Parent != "" {
-					if gone[cur.Parent] {
-						delete(gone, cur.Parent)
-						changed = true
-					}
-					cid, cur = cur.Parent, db.man.Logs[cur.Parent]
-					if cur == nil {
-						break
-					}
-				}
-			}
-		}
-		kept := drop[:0]
-		for _, id := range drop {
-			if gone[id] {
-				kept = append(kept, id)
-			}
-		}
-		drop = kept
-	}
-	// Pointer bases of logs we are keeping still name values in
-	// segments the head live set may no longer pin (a later keep-0
-	// cut of the tip vs a retired ancestor base). Dropping those
-	// segments makes foldStart on the old base return dangling refs
-	// (sim seed 16).
-	dropped := map[string]bool{}
-	for _, id := range drop {
-		dropped[id] = true
-	}
-	replaced := map[string]bool{}
-	for _, b := range bs {
-		replaced[b.id] = true
-	}
-	for _, id := range sortedMapKeys(db.man.Logs) {
-		if dropped[id] || replaced[id] {
-			continue
-		}
-		l, err := db.loadLog(ctx, id, false)
-		if err != nil || l == nil || l.meta.Base == nil {
-			continue
-		}
-		img, err := db.loadBase(ctx, l)
-		if err != nil || img == nil || img.kv == nil {
-			continue
-		}
-		db.addLiveFromLatest(globalLive, l, img.kv)
+	globalLive, drop, err := db.gcReach(ctx, drop, newBases, o, now, int64(db.opts.SnapshotMaxAge))
+	if err != nil {
+		return false, err
 	}
 	err = db.commitManifest(ctx, func(m *Manifest) error {
 		m.Format = max(m.Format, manifestFormatLogOnly)
@@ -460,15 +367,7 @@ func (db *DB) compactLocked(ctx context.Context, o GCOptions, gc bool, stats *Co
 			dropCkpt(b.id)
 			keep, drop := b.covered, []uint64(nil)
 			if dropHist {
-				live := map[string]struct{}{}
-				for k := range globalLive {
-					live[k] = struct{}{}
-				}
-				for k := range b.live {
-					live[k] = struct{}{}
-				}
-				addLiveTail(live, db.logs[b.id], b.base.Seq)
-				keep, drop = filterLiveSegs(b.covered, live, b.id)
+				keep, drop = filterLiveSegs(b.covered, globalLive, b.id)
 			}
 			lm.Retain = metaFromSegs(keep)
 			if len(drop) > 0 {
@@ -513,16 +412,11 @@ func (db *DB) compactLocked(ctx context.Context, o GCOptions, gc bool, stats *Co
 					stats.Pinned++
 					continue
 				}
-				live := map[string]struct{}{}
-				for k := range globalLive {
-					live[k] = struct{}{}
-				}
 				seq := l.nextSeq
 				if l.meta.Base != nil {
 					seq = l.meta.Base.Seq
 				}
-				addLiveTail(live, l, seq)
-				keep, dropSeqs := filterLiveSegs(l.coveredSegs(seq), live, id)
+				keep, dropSeqs := filterLiveSegs(l.coveredSegs(seq), globalLive, id)
 				m.Logs[id].Retain = metaFromSegs(keep)
 				if len(dropSeqs) > 0 {
 					m.Garbage = append(m.Garbage, Garbage{Kind: "segs", Log: id, Seqs: dropSeqs, After: after})

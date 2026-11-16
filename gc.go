@@ -177,19 +177,30 @@ func (db *DB) gcPlan(ctx context.Context, o GCOptions) (map[string]cutInfo, []st
 				return nil, nil, nil, err
 			}
 			m := db.man.Logs[id]
-			if m.Base != nil || c.set() || m.Parent == "" {
+			if m.Parent == "" {
 				continue
 			}
-			// id stays unbased: it reads its ancestors up to cp, and its
-			// own window reaches down to head-KeepCommits (KeepFor needs
-			// nothing extra: the ancestors' frames carry the same times)
+			// The keep window is [head-KeepCommits, head]. A branch
+			// forked at the parent's head may have a pointer base at
+			// the fork while the window still extends below it into
+			// the parent (keep=1, child head=2, ViewAt(1)). Cap the
+			// ancestor even when the child is already based.
+			// KeepFor needs nothing extra: ancestor frames carry the
+			// same times.
 			cp, x := m.ParentLSN, m.Parent
 			if o.KeepCommits > 0 {
 				l, err := db.loadLog(ctx, id, false)
 				if err != nil {
 					return nil, nil, nil, err
 				}
-				cp = min(cp, l.head()-min(l.head(), o.KeepCommits))
+				if l.head() > o.KeepCommits {
+					cp = min(cp, l.head()-o.KeepCommits)
+				} else {
+					cp = min(cp, l.floor())
+				}
+			}
+			if (m.Base != nil || c.set()) && cp >= m.ParentLSN {
+				continue
 			}
 			for x != "" {
 				xm, ok := db.man.Logs[x]
