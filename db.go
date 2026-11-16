@@ -179,6 +179,7 @@ type DB struct {
 	views   map[string]*view   // live views of writable logs
 	writers map[string]*writer // by log id
 	vcache  *valueCache
+	bg      bgReads // iterator read-ahead in flight; Close waits for it
 	// runFiles holds the KV index's large runs (nil = Go heap; design 21).
 	runFiles  index.RunFiles
 	stopBound func() // stops the IndexResidentBytes check
@@ -563,6 +564,7 @@ func (db *DB) Close() error {
 	for _, id := range sortedMapKeys(ws) {
 		ws[id].stop()
 	}
+	db.bg.closeWait()
 	db.vcache.close()
 	if db.stopBound != nil {
 		db.stopBound()
@@ -586,6 +588,7 @@ func (db *DB) Crash() {
 	for _, id := range sortedMapKeys(ws) {
 		ws[id].crash()
 	}
+	db.bg.closeWait()
 	db.vcache.close()
 	if db.stopBound != nil {
 		db.stopBound()
@@ -628,4 +631,34 @@ func (db *DB) Entries(branch string) ([]*index.Entry, error) {
 	h := w.v.head
 	w.v.mu.RUnlock()
 	return w.l.lineage(context.Background(), h)
+}
+
+// bgReads tracks background reads (iterator read-ahead) so Close can wait
+// for them before the store is closed. Once closed it refuses new ones;
+// the caller then reads in the foreground.
+type bgReads struct {
+	mu     sync.Mutex
+	closed bool
+	wg     sync.WaitGroup
+}
+
+// add registers a background read; false once closed.
+func (b *bgReads) add() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return false
+	}
+	b.wg.Add(1)
+	return true
+}
+
+func (b *bgReads) done() { b.wg.Done() }
+
+// closeWait refuses new background reads and waits for those running.
+func (b *bgReads) closeWait() {
+	b.mu.Lock()
+	b.closed = true
+	b.mu.Unlock()
+	b.wg.Wait()
 }

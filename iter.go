@@ -87,6 +87,8 @@ type Iterator struct {
 	page         []index.Pair
 	vals         [][]byte // prefetched stored bytes of page values (nil: read on use)
 	pf           pfScratch
+	ahead        *aheadPage // the next page, its values loading (read-ahead)
+	spare        *aheadPage // buffers for the page after it
 	pi, pageSize int
 	more         bool // the index may have keys beyond page
 	local        []localKV
@@ -193,8 +195,135 @@ func (it *Iterator) Next() bool {
 	return false
 }
 
-// fetch reads the next page of index keys under the view's read lock.
+// fetch makes the next page of index keys current, with as many of its
+// values as prefetch could batch. Once an iterator has grown to full
+// pages (it has returned ~1,000 keys: a long scan, not a point-like
+// read) it reads ahead one page: while the caller walks page N, the
+// values of page N+1 are read in the background and the keys of page N+2
+// are ranged on the next fetch, so key work and value reads overlap. At
+// most one page is in flight, so an abandoned iterator wastes at most
+// one page of reads (and none above readAheadMax bytes).
 func (it *Iterator) fetch() {
+	a := it.ahead
+	if a == nil {
+		page, more, err := it.rangePage(it.page[:0], it.pageN())
+		it.install(page, more, err)
+		if err == nil && len(page) > 1 {
+			it.vals = slices.Grow(it.vals, len(page))[:len(page)]
+			it.tx.db.prefetch(it.ctx(), it.tx.v.log, page, it.vals, &it.pf)
+		}
+		it.startAhead()
+		return
+	}
+	it.ahead = nil
+	// a's keys are known; range the page after it while its values load
+	spare := it.spare
+	it.spare = nil
+	if a.more && it.readAhead() && a.err == nil {
+		it.startAheadFrom(spare)
+		spare = nil
+	}
+	<-a.done
+	old := &aheadPage{page: it.page, vals: it.vals, pf: it.pf}
+	it.install(a.page, a.more, a.err)
+	it.vals, it.pf = a.vals, a.pf
+	if spare == nil {
+		spare = old
+	}
+	it.spare = spare
+}
+
+// aheadPage is a page read ahead: keys ranged in the foreground, values
+// prefetched in the background until done is closed.
+type aheadPage struct {
+	page []index.Pair
+	vals [][]byte
+	pf   pfScratch
+	more bool
+	err  error
+	done chan struct{}
+}
+
+// readAheadMax bounds the value bytes of a page read ahead (a page of
+// large values is read when the caller reaches it, as without read-ahead).
+const readAheadMax = 4 << 20
+
+// readAhead reports whether the next page should be read ahead.
+func (it *Iterator) readAhead() bool {
+	return it.pageSize >= iterMaxPage && it.limit == 0 && it.err == nil && !it.done
+}
+
+// startAhead begins reading the page after the current one, if wanted.
+func (it *Iterator) startAhead() {
+	if it.more && it.readAhead() {
+		s := it.spare
+		it.spare = nil
+		it.startAheadFrom(s)
+	}
+}
+
+// startAheadFrom ranges the next page into the buffers of s (nil: new
+// ones) and starts prefetching its values. It sets it.ahead.
+func (it *Iterator) startAheadFrom(s *aheadPage) {
+	if s == nil {
+		s = &aheadPage{}
+	}
+	a := &aheadPage{vals: s.vals[:0], pf: s.pf, done: make(chan struct{})}
+	a.page, a.more, a.err = it.rangePage(s.page[:0], it.pageN())
+	it.ahead = a
+	var size int64
+	for i := range a.page {
+		if v := &a.page[i].Version; v.Ref() {
+			size += int64(v.Len)
+		}
+	}
+	if a.err != nil || len(a.page) < 2 || size == 0 || size > readAheadMax || !it.tx.db.bg.add() {
+		if a.err == nil && len(a.page) > 1 { // read now, as without read-ahead
+			a.vals = slices.Grow(a.vals, len(a.page))[:len(a.page)]
+			it.tx.db.prefetch(it.ctx(), it.tx.v.log, a.page, a.vals, &a.pf)
+		}
+		close(a.done)
+		return
+	}
+	a.vals = slices.Grow(a.vals, len(a.page))[:len(a.page)]
+	ctx, l, db := it.ctx(), it.tx.v.log, it.tx.db
+	go func() {
+		defer db.bg.done()
+		defer close(a.done)
+		db.prefetch(ctx, l, a.page, a.vals, &a.pf)
+	}()
+}
+
+// install makes page current.
+func (it *Iterator) install(page []index.Pair, more bool, err error) {
+	clear(it.vals) // Next hands each value out once and drops it
+	it.vals = it.vals[:0]
+	it.page, it.pi, it.more = page, 0, more && err == nil
+	if err != nil {
+		it.err, it.done = err, true
+	}
+}
+
+func (it *Iterator) ctx() context.Context {
+	if it.tx.lazyCtx != nil {
+		return it.tx.lazyCtx
+	}
+	return context.Background()
+}
+
+// pageN is the size of the next page to range.
+func (it *Iterator) pageN() int {
+	n := it.pageSize
+	if it.limit > 0 {
+		n = min(n, it.limit-it.n)
+	}
+	return max(n, 1)
+}
+
+// rangePage ranges up to n index keys after the last page ranged, into
+// page, under the view's read lock, and advances the resume position.
+func (it *Iterator) rangePage(page []index.Pair, n int) ([]index.Pair, bool, error) {
+	defer func() { it.pageSize = min(it.pageSize*2, iterMaxPage) }()
 	lo, hi, inf := it.lo, it.hi, it.inf
 	if it.started {
 		if it.rev {
@@ -204,18 +333,11 @@ func (it *Iterator) fetch() {
 		}
 	}
 	if !inf && lo >= hi {
-		it.page, it.pi, it.more = it.page[:0], 0, false
-		return
+		return page, false, nil
 	}
 	if inf {
 		hi = "" // KV.Range: no upper bound
 	}
-	n := it.pageSize
-	if it.limit > 0 {
-		n = min(n, it.limit-it.n)
-	}
-	n = max(n, 1)
-	page := it.page[:0]
 	v := it.tx.v
 	// The read time is fixed before the read lock (it may read a segment);
 	// only a view that has seen an expiry needs it.
@@ -225,8 +347,7 @@ func (it *Iterator) fetch() {
 		v.mu.RUnlock()
 		if may {
 			if _, err := it.tx.Now(); err != nil {
-				it.err, it.done, it.page, it.pi, it.more = err, true, page, 0, false
-				return
+				return page, false, err
 			}
 		}
 	}
@@ -241,17 +362,6 @@ func (it *Iterator) fetch() {
 		return len(page) < n
 	})
 	v.mu.RUnlock()
-	it.page, it.pi, it.more = page, 0, len(page) == n
-	clear(it.vals) // Next hands each value out once and drops it
-	it.vals = it.vals[:0]
-	if len(page) > 1 {
-		it.vals = slices.Grow(it.vals, len(page))[:len(page)]
-		ctx := it.tx.lazyCtx
-		if ctx == nil {
-			ctx = context.Background()
-		}
-		it.tx.db.prefetch(ctx, v.log, page, it.vals, &it.pf)
-	}
 	if len(page) > 0 {
 		last := page[len(page)-1].Key
 		it.started = true
@@ -261,7 +371,7 @@ func (it *Iterator) fetch() {
 			it.resume = last + "\x00"
 		}
 	}
-	it.pageSize = min(it.pageSize*2, iterMaxPage)
+	return page, len(page) == n, nil
 }
 
 // cover extends the read set through k, the key just returned.
