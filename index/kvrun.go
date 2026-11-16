@@ -126,6 +126,9 @@ func appendVer(b []byte, v *Version) []byte {
 }
 
 func uv(b []byte) (uint64, []byte) {
+	if len(b) > 0 && b[0] < 0x80 { // most lengths and counts are one byte
+		return uint64(b[0]), b[1:]
+	}
 	v, n := binary.Uvarint(b)
 	return v, b[n:]
 }
@@ -198,6 +201,13 @@ func skipVer(b []byte) (uint64, []byte) {
 // bodyAt returns the version of a body visible at `at` and whether one is.
 func bodyAt(body []byte, at uint64) (Version, bool) {
 	n, b := uv(body)
+	if n == 1 { // the common case: decode once, no skip pass
+		v, _ := decVer(b)
+		if v.LSN > at {
+			return Version{}, false
+		}
+		return v, true
+	}
 	var best []byte
 	for i := uint64(0); i < n; i++ {
 		lsn, rest := skipVer(b)

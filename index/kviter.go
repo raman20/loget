@@ -212,21 +212,27 @@ func (h *hotSrc) step() {
 
 // fCursor is a run cursor bounded to [lo, hi).
 type fCursor struct {
-	c  *cursor
-	hi []byte
-	ok bool
+	c    *cursor
+	hi   []byte
+	safe int // every key in blocks below safe is below hi
+	ok   bool
 }
 
 func newFCursor(r *run, lo, hi string) *fCursor {
 	f := &fCursor{c: r.cursor(), hi: []byte(hi)}
+	// keys of block i sort below the first key of block i+1, so a block
+	// whose successor starts at or below hi needs no bound check per key
+	f.safe = sort.Search(r.blocks(), func(i int) bool { return bytes.Compare(r.firstKey(i), f.hi) > 0 }) - 1
 	f.c.seek([]byte(lo))
 	f.step()
 	return f
 }
 
-func (f *fCursor) valid() bool                  { return f.ok }
-func (f *fCursor) key() []byte                  { return f.c.key }
-func (f *fCursor) step()                        { f.ok = f.c.next() && bytes.Compare(f.c.key, f.hi) < 0 }
+func (f *fCursor) valid() bool { return f.ok }
+func (f *fCursor) key() []byte { return f.c.key }
+func (f *fCursor) step() {
+	f.ok = f.c.next() && (f.c.bi < f.safe || bytes.Compare(f.c.key, f.hi) < 0)
+}
 func (f *fCursor) at(at uint64) (Version, bool) { return runAt(f.c.r, f.c.body, at) }
 
 func runAt(r *run, body []byte, at uint64) (Version, bool) {
@@ -247,6 +253,7 @@ type rCursor struct {
 	ents []rent
 	keys []byte // backing store of the decoded keys
 	i    int    // current entry; -1 = exhausted
+	geLo bool   // the block starts at or above lo: no bound check per key
 }
 
 type rent struct {
@@ -279,10 +286,11 @@ func (c *rCursor) load(bi int) {
 		c.ents = append(c.ents, rent{k0, len(c.keys), fc.body})
 	}
 	c.i = len(c.ents) - 1
+	c.geLo = bytes.Compare(c.r.firstKey(bi), c.lo) >= 0
 }
 
 func (c *rCursor) check() {
-	if c.i >= 0 && bytes.Compare(c.key(), c.lo) < 0 {
+	if c.i >= 0 && !c.geLo && bytes.Compare(c.key(), c.lo) < 0 {
 		c.i = -1
 	}
 }
