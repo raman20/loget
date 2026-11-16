@@ -229,6 +229,7 @@ func (db *DB) compactLocked(ctx context.Context, o GCOptions, gc bool, stats *Co
 		base    *BaseMeta
 		head    uint64 // log head at the cut: snapshots up to it are replaced
 		live    map[string]struct{}
+		refs    map[string]struct{}
 		covered []segIdx
 	}
 	dropHist := gc || o.DropHistory
@@ -253,7 +254,7 @@ func (db *DB) compactLocked(ctx context.Context, o GCOptions, gc bool, stats *Co
 			return false, err
 		}
 		var bm *BaseMeta
-		var live map[string]struct{}
+		var live, refs map[string]struct{}
 		cut := c.k
 		if c.head {
 			cut = l.head()
@@ -279,7 +280,7 @@ func (db *DB) compactLocked(ctx context.Context, o GCOptions, gc bool, stats *Co
 					return false, err
 				}
 			}
-			bm, live, err = db.writeBase(ctx, l, v, head, nil, stats)
+			bm, live, refs, err = db.writeBase(ctx, l, v, head, nil, stats)
 		} else {
 			// A cut below the current pointer base needs a complete
 			// foldable prefix. If history was already swept, keep the
@@ -294,12 +295,12 @@ func (db *DB) compactLocked(ctx context.Context, o GCOptions, gc bool, stats *Co
 			if v, err = db.buildView(ctx, l, c.k, nil); err != nil {
 				return false, err
 			}
-			bm, live, err = db.writeBase(ctx, l, v, c.k, &c, stats)
+			bm, live, refs, err = db.writeBase(ctx, l, v, c.k, &c, stats)
 		}
 		if err != nil {
 			return false, err
 		}
-		bs = append(bs, built{id, bm, l.head(), live, l.coveredSegs(bm.Seq)})
+		bs = append(bs, built{id, bm, l.head(), live, refs, l.coveredSegs(bm.Seq)})
 	}
 	if len(bs) == 0 && len(drop) == 0 && len(reflog) == len(db.man.Reflog) {
 		return false, nil
@@ -333,9 +334,38 @@ func (db *DB) compactLocked(ctx context.Context, o GCOptions, gc bool, stats *Co
 	pruned := len(db.man.Reflog) - len(reflog)
 	now := db.opts.Clock()
 	after := now + int64(o.Grace)
+	// LogEtLogGCFork CompactP: replacing a parent base must leave
+	// every kept log openable. An unbased child cannot use a parent
+	// base above the fork, so if 1..fork is already gone, keep the
+	// old parent base (the child can take a base at the fork later).
+	{
+		gone := map[string]bool{}
+		for _, id := range drop {
+			gone[id] = true
+		}
+		others := make(map[string]*BaseMeta, len(bs))
+		for _, b := range bs {
+			others[b.id] = b.base
+		}
+		keep := bs[:0]
+		for _, b := range bs {
+			rest := make(map[string]*BaseMeta, len(others))
+			for k, v := range others {
+				if k != b.id {
+					rest[k] = v
+				}
+			}
+			if db.rebaseLeavesOpen(ctx, b.id, b.base, rest, gone) {
+				keep = append(keep, b)
+			} else {
+				delete(others, b.id)
+			}
+		}
+		bs = keep
+	}
 	newBases := make([]gcNewBase, len(bs))
 	for i, b := range bs {
-		newBases[i] = gcNewBase{id: b.id, base: b.base, live: b.live}
+		newBases[i] = gcNewBase{id: b.id, base: b.base, live: b.live, refs: b.refs}
 	}
 	globalLive, drop, err := db.gcReach(ctx, drop, newBases, o, now, int64(db.opts.SnapshotMaxAge))
 	if err != nil {
@@ -478,10 +508,10 @@ func baseGarbage(id string, b, next *BaseMeta, after int64) []Garbage {
 // writeBase writes the base of log l at head from its view v.
 // at is nil for a base at the log's head; for a retention cut below the
 // head it gives the segment after the cut and the cut frame's time.
-func (db *DB) writeBase(ctx context.Context, l *logState, v *view, head uint64, at *cutInfo, stats *CompactStats) (*BaseMeta, map[string]struct{}, error) {
+func (db *DB) writeBase(ctx context.Context, l *logState, v *view, head uint64, at *cutInfo, stats *CompactStats) (*BaseMeta, map[string]struct{}, map[string]struct{}, error) {
 	nonce, err := db.keys.randBytes(4)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	key := fmt.Sprintf("base/%s/%020d-e%d-%s", l.meta.ID, head, db.epoch, hex.EncodeToString(nonce))
 	id := l.meta.ID
@@ -507,7 +537,7 @@ func (db *DB) writeBase(ctx context.Context, l *logState, v *view, head uint64, 
 	} else if ts, err = frameTS(ctx, l, head); err != nil {
 		// the same as lastTS for a log with frames of its own; a branch
 		// without any takes its parent's frame (or base) at the fork
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	v.mu.RLock()
 	defer v.mu.RUnlock()
@@ -516,7 +546,7 @@ func (db *DB) writeBase(ctx context.Context, l *logState, v *view, head uint64, 
 	// chunk (no shareMin, no new .val, no reseal).
 	shared, remap, err := db.leftoverChunks(l, v, ts)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	live := map[string]struct{}{}
 	err = v.kv.Latest(func(space, k string, ver index.Version) error {
@@ -550,18 +580,18 @@ func (db *DB) writeBase(ctx context.Context, l *logState, v *view, head uint64, 
 		return rw.Add(space, k, nv)
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	chain, err := l.chainAt(ctx, head)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if at == nil {
 		// every segment that exists now is covered (a read-only load may
 		// stop before a torn tail)
 		keys, err := db.st.List(ctx, "log/"+id+"/")
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		for _, k := range keys {
 			if s, ok := parseNum(k, "log/"+id+"/", ".seg"); ok && s >= seq {
@@ -572,7 +602,7 @@ func (db *DB) writeBase(ctx context.Context, l *logState, v *view, head uint64, 
 	cut, err := rw.Finish()
 	done = true
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	run := &index.RunMeta{} // no live key: an empty base
 	if cut != nil {
@@ -581,17 +611,21 @@ func (db *DB) writeBase(ctx context.Context, l *logState, v *view, head uint64, 
 		m := cr.Meta()
 		run = &m
 		if err := db.putRun(ctx, key, cr.Bytes(), m.Piece); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 	}
 	stats.BaseBytes += run.Len
+	refs := make(map[string]struct{}, len(live))
+	for k := range live {
+		refs[k] = struct{}{}
+	}
 	addLiveTail(live, l, seq)
 	bm := &BaseMeta{LSN: head, Seq: seq, Key: key, Chain: hex.EncodeToString(chain[:]), TS: ts, Run: run}
 	if len(shared) > 0 {
 		bm.Refs = shared
 		stats.SharedChunks += len(shared)
 	}
-	return bm, live, nil
+	return bm, live, refs, nil
 }
 
 // leftoverChunks keeps every leftover format-4 value chunk that a live

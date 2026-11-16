@@ -256,8 +256,17 @@ func (l *logState) chainAt(ctx context.Context, lsn uint64) ([32]byte, error) {
 	if lsn == 0 {
 		return [32]byte{}, nil
 	}
-	if b := l.based(); b != nil && lsn == b.meta.Base.LSN {
-		return b.base, nil
+	// A pointer base at exactly lsn, on this log or an ancestor, is the
+	// chain head there even when a later base on a descendant hides it
+	// from based() and the segment at lsn has been collected (a child
+	// forked at the ancestor's cut, then compacted at a later head).
+	for x := l; x != nil; x = x.parent {
+		if x.meta.Base != nil && lsn == x.meta.Base.LSN {
+			return x.base, nil
+		}
+		if lsn > x.meta.ParentLSN {
+			break
+		}
 	}
 	x, s, ok := l.locate(lsn)
 	if !ok {

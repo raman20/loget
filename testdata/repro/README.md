@@ -7,7 +7,11 @@ These failfiles are regression fixtures. They should stay green.
 Historical shrinks of TestPropCompactEqualsUncompacted. After
 self-describing subject ciphertext (`Version.Log`) they are no longer
 valid rapid programs; the missing-key / AAD class they captured is
-fixed. Keep them only as a record.
+fixed. Kept here (not under testdata/rapid/) so rapid will not auto-load
+them and poison a later run.
+
+- `testdata/repro/keep1-b3-at-1.fail`
+- `testdata/repro/keep3-b16-at-5.fail`
 
 ## keep2-b2-at-2
 
@@ -20,11 +24,16 @@ fork, so retired parents can drop).
 - Failfile: `testdata/rapid/TestPropCompactEqualsUncompacted/keep2-b2-at-2.fail`
 - Replay: `go test -run TestPropCompactEqualsUncompacted -rapid.failfile=testdata/rapid/TestPropCompactEqualsUncompacted/keep2-b2-at-2.fail .`
 
-## keep0-reopen-lsn3 (still red)
+## keep0-reopen-lsn3 (fixed)
 
-TestPropCompactEqualsUncompacted: after GC keep=0, a later OpenStore
-fails with `history was deleted by log GC: LSN 3`. Unit tests and a
-200-seed sim sweep are green; this is the remaining prop shrink.
+After GC keep=0, OpenStore used to fail with `history was deleted by
+log GC: LSN 3`. gcReach now pins needed(manifest) — the segments
+Open/recover/ViewAt(head) will read, including an unbased child's
+fold prefix when the parent base sits after the fork. chainAt walks
+ancestor pointer bases so a branch at an ancestor's cut can reopen
+after a later compact of the child. TestOpenReadsOnlyNeeded fails if
+Open/ViewAt(head) GETs a log/*.seg outside needed ∪ Snapshots ∪
+retention windows.
 
 - Failfile: `testdata/rapid/TestPropCompactEqualsUncompacted/keep0-reopen-lsn3.fail`
 - Replay: `go test -run TestPropCompactEqualsUncompacted -rapid.failfile=testdata/rapid/TestPropCompactEqualsUncompacted/keep0-reopen-lsn3.fail .`

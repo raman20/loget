@@ -126,6 +126,25 @@ func (l *logState) canFold(upto uint64) bool {
 // for a cut below it: the parent's cut base is the fold at that LSN
 // (inlined or as refs) even if the cut's own segment was collected.
 func (l *logState) foldStart(upto uint64) *logState {
+	return l.foldStartWith(upto, nil)
+}
+
+// plannedBase is the pointer base to use for this log: a base this
+// commit is writing replaces the current one (the old image will be
+// garbage).
+func (l *logState) plannedBase(bases map[string]*BaseMeta) *BaseMeta {
+	if bases != nil {
+		if b, ok := bases[l.meta.ID]; ok {
+			return b
+		}
+	}
+	return l.meta.Base
+}
+
+// foldStartWith is foldStart honouring planned bases (needed / gcReach
+// during compactLocked). A parent base being moved past a child's fork
+// is not a legal start for that child.
+func (l *logState) foldStartWith(upto uint64, bases map[string]*BaseMeta) *logState {
 	if upto == 0 {
 		return nil
 	}
@@ -133,10 +152,9 @@ func (l *logState) foldStart(upto uint64) *logState {
 	var bestLSN uint64
 	limit := upto
 	for x := l; x != nil; x = x.parent {
-		if x.meta.Base != nil {
-			b := x.meta.Base.LSN
-			if b > 0 && b <= limit && l.coveredFrom(b, upto) && (best == nil || b >= bestLSN) {
-				best, bestLSN = x, b
+		if b := x.plannedBase(bases); b != nil {
+			if bl := b.LSN; bl > 0 && bl <= limit && l.coveredFrom(bl, upto) && (best == nil || bl >= bestLSN) {
+				best, bestLSN = x, bl
 			}
 		}
 		if x.meta.ParentLSN == 0 {
@@ -350,15 +368,16 @@ type gcNewBase struct {
 	id   string
 	base *BaseMeta
 	live map[string]struct{} // image refs + tail, as writeBase built them
+	refs map[string]struct{} // image refs only (needed of a descendant using this base)
 }
 
 // gcReach is the single GC liveness set, the Go form of LogEtLogGCFork
-// Live: a stored object is live iff it is reachable from any kept log's
-// pointer base, recoverable tail (the retention window), head image, or
-// a live Snapshot. Refs walk the ancestor chain (a child may pin a
-// parent segment). A planned drop is cancelled if the log is named by
-// that set, or if it is an ancestor of an unbased kept log (loadLog
-// and manifest validate walk that chain).
+// Live: needed(manifest) ∪ live Snapshots ∪ retention windows.
+// needed is the set of objects Open / recover / ViewAt(head) will read
+// for each kept log (pointer-base image refs plus the continuous fold
+// prefix after that base). A planned drop is cancelled if the log is
+// named by that set, or if it is an ancestor of an unbased kept log
+// (loadLog and manifest validate walk that chain).
 func (db *DB) gcReach(ctx context.Context, drop []string, newBases []gcNewBase, o GCOptions, now, snapMaxAge int64) (live map[string]struct{}, stillDrop []string, err error) {
 	newBy := map[string]gcNewBase{}
 	for _, b := range newBases {
@@ -450,59 +469,18 @@ func liveLogID(obj string) (string, bool) {
 }
 
 func (db *DB) addLiveFromKept(ctx context.Context, live map[string]struct{}, id string, newBy map[string]gcNewBase, o GCOptions) error {
-	if b, ok := newBy[id]; ok {
-		for k := range b.live {
-			live[k] = struct{}{}
-		}
-	} else {
-		l, err := db.loadLog(ctx, id, false)
-		if err != nil || l == nil {
-			return err
-		}
-		if l.meta.Base != nil {
-			img, err := db.loadBase(ctx, l)
-			if err != nil {
-				return err
-			}
-			if img != nil && img.kv != nil {
-				db.addLiveFromLatest(live, l, img.kv)
-			}
-			addLiveTail(live, l, l.meta.Base.Seq)
-		} else {
-			// Unbased: the whole own tail stays, and the head image pins
-			// inherited refs in ancestor segments.
-			addLiveTail(live, l, 0)
-			if v := db.views[id]; v != nil {
-				v.mu.RLock()
-				db.addLiveFromIndex(live, l, v.kv)
-				for _, d := range v.derived {
-					db.addLiveFromIndex(live, l, d)
-				}
-				v.mu.RUnlock()
-			} else {
-				v, err := db.buildView(ctx, l, l.head(), db.loadSnapshot(ctx, l))
-				if err != nil {
-					return err
-				}
-				v.mu.RLock()
-				db.addLiveFromIndex(live, l, v.kv)
-				for _, d := range v.derived {
-					db.addLiveFromIndex(live, l, d)
-				}
-				v.mu.RUnlock()
-			}
-		}
-	}
-	// A child's keep window may extend below its own base into an
-	// ancestor (LogEtLogGCFork: tail of the child lineage). Pin those
-	// segments even if the parent cut could not be rewritten.
 	l, err := db.loadLog(ctx, id, false)
 	if err != nil || l == nil {
 		return err
 	}
-	// Pin the count-based keep window through the ancestor chain.
-	// KeepFor is already expressed as a written cut + tail (b.live);
-	// do not pin [0, head] or the time window never shrinks.
+	if err := db.addNeeded(ctx, live, l, l.head(), plannedBases(newBy), newBy); err != nil {
+		return err
+	}
+	// A child's keep window may extend below its own base into an
+	// ancestor (LogEtLogGCFork: tail of the child lineage). Pin those
+	// segments even if the parent cut could not be rewritten.
+	// KeepFor is already expressed as a written cut + tail (needed /
+	// b.live); do not pin [0, head] or the time window never shrinks.
 	if o.KeepCommits > 0 {
 		from := uint64(0)
 		if l.head() > o.KeepCommits {
@@ -511,6 +489,191 @@ func (db *DB) addLiveFromKept(ctx context.Context, live map[string]struct{}, id 
 		addLiveWindow(live, l, from, l.head())
 	}
 	return nil
+}
+
+func plannedBases(newBy map[string]gcNewBase) map[string]*BaseMeta {
+	if len(newBy) == 0 {
+		return nil
+	}
+	bases := make(map[string]*BaseMeta, len(newBy))
+	for id, b := range newBy {
+		bases[id] = b.base
+	}
+	return bases
+}
+
+// needed is the set of objects Open / recover / ViewAt(head) will read
+// for every kept log. gcReach is this set ∪ live Snapshots ∪ retention
+// windows. newBy honours pointer bases this commit is writing.
+func (db *DB) needed(ctx context.Context, newBy map[string]gcNewBase, gone map[string]bool) (map[string]struct{}, error) {
+	live := map[string]struct{}{}
+	bases := plannedBases(newBy)
+	for _, id := range sortedMapKeys(db.man.Logs) {
+		if gone[id] {
+			continue
+		}
+		l, err := db.loadLog(ctx, id, false)
+		if err != nil || l == nil {
+			return nil, err
+		}
+		if err := db.addNeeded(ctx, live, l, l.head(), bases, newBy); err != nil {
+			return nil, err
+		}
+	}
+	return live, nil
+}
+
+// addNeeded pins the objects Open / recover / ViewAt(upto) will read
+// for l: the fold-start pointer-base image's Ref() objects, plus every
+// lineage segment overlapping (baseLSN, upto], or the prefix through
+// upto if there is no usable base. A log getting a new base at upto
+// contributes exactly writeBase's live set (image refs + tail after
+// the new base), not the prefix the new base is about to drop.
+func (db *DB) addNeeded(ctx context.Context, live map[string]struct{}, l *logState, upto uint64, bases map[string]*BaseMeta, newBy map[string]gcNewBase) error {
+	if upto == 0 {
+		return nil
+	}
+	var recoverFrom uint64
+	if b, ok := newBy[l.meta.ID]; ok && b.base != nil && b.base.LSN == upto {
+		for k := range b.live {
+			live[k] = struct{}{}
+		}
+		recoverFrom = b.base.Seq
+	} else {
+		start := l.foldStartWith(upto, bases)
+		after := uint64(0)
+		if start != nil {
+			bm := start.plannedBase(bases)
+			after = bm.LSN
+			if err := db.addLiveFromBaseImage(ctx, live, start, bm, newBy); err != nil {
+				return err
+			}
+			if start.meta.ID == l.meta.ID {
+				recoverFrom = bm.Seq
+			}
+		}
+		if after < upto {
+			addLiveWindow(live, l, after+1, upto)
+		}
+		if recoverFrom == 0 {
+			if bm := l.plannedBase(bases); bm != nil && bm.Seq != 0 {
+				recoverFrom = bm.Seq
+			} else {
+				l.mu.RLock()
+				recoverFrom = l.nextSeq
+				l.mu.RUnlock()
+			}
+		}
+	}
+	// Recover starts at Base.Seq (or nextSeq) and GETs until the first
+	// hole, including empty fence segments that never enter foldSegs.
+	if err := db.addLiveRecoverTail(ctx, live, l, recoverFrom); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (db *DB) addLiveRecoverTail(ctx context.Context, live map[string]struct{}, l *logState, from uint64) error {
+	if from == 0 {
+		from = 1
+	}
+	keys, err := db.st.List(ctx, "log/"+l.meta.ID+"/")
+	if err != nil {
+		return err
+	}
+	for _, k := range keys {
+		if s, ok := parseNum(k, "log/"+l.meta.ID+"/", ".seg"); ok && s >= from {
+			live[k] = struct{}{}
+		}
+	}
+	return nil
+}
+
+func (db *DB) addLiveFromBaseImage(ctx context.Context, live map[string]struct{}, l *logState, bm *BaseMeta, newBy map[string]gcNewBase) error {
+	if bm == nil {
+		return nil
+	}
+	if b, ok := newBy[l.meta.ID]; ok && b.base != nil && b.base.LSN == bm.LSN {
+		for k := range b.refs {
+			live[k] = struct{}{}
+		}
+		return nil
+	}
+	img, err := db.loadBase(ctx, l)
+	if err != nil {
+		return err
+	}
+	if img != nil && img.kv != nil {
+		db.addLiveFromLatest(live, l, img.kv)
+	}
+	return nil
+}
+
+// neededSegsHeld reports whether every log/*.seg in needed(manifest)
+// is still in some kept log's foldSegs (not already swept). Used as
+// the CompactP guard: a new parent base must not make Open need a
+// segment a previous GC already dropped.
+func (db *DB) neededSegsHeld(ctx context.Context, newBy map[string]gcNewBase, gone map[string]bool) bool {
+	live, err := db.needed(ctx, newBy, gone)
+	if err != nil {
+		return false
+	}
+	for obj := range live {
+		if !strings.HasPrefix(obj, "log/") || !strings.HasSuffix(obj, ".seg") {
+			continue
+		}
+		if !db.segHeld(ctx, obj) {
+			return false
+		}
+	}
+	return true
+}
+
+func (db *DB) segHeld(ctx context.Context, obj string) bool {
+	id, ok := liveLogID(obj)
+	if !ok {
+		return false
+	}
+	seq, ok := parseNum(obj, "log/"+id+"/", ".seg")
+	if !ok {
+		return false
+	}
+	l, err := db.loadLog(ctx, id, false)
+	if err != nil || l == nil {
+		return false
+	}
+	for _, s := range l.foldSegs() {
+		if s.seq == seq {
+			return true
+		}
+	}
+	return false
+}
+
+// rebaseLeavesOpen is the CompactP guard for one planned base: installing
+// it must not make a kept log unopenable that is openable without it.
+func (db *DB) rebaseLeavesOpen(ctx context.Context, id string, base *BaseMeta, others map[string]*BaseMeta, gone map[string]bool) bool {
+	with := make(map[string]*BaseMeta, len(others)+1)
+	for k, v := range others {
+		with[k] = v
+	}
+	with[id] = base
+	for _, cid := range sortedMapKeys(db.man.Logs) {
+		if gone[cid] {
+			continue
+		}
+		l, err := db.loadLog(ctx, cid, false)
+		if err != nil || l == nil {
+			return false
+		}
+		head := l.head()
+		okWithout := l.foldStartWith(head, others) != nil || l.coveredThrough(head)
+		okWith := l.foldStartWith(head, with) != nil || l.coveredThrough(head)
+		if okWithout && !okWith {
+			return false
+		}
+	}
+	return true
 }
 
 // addLiveWindow pins every segment in this lineage that overlaps

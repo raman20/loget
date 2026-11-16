@@ -1,10 +1,12 @@
 package loget
 
 import (
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/raman20/loget/index"
@@ -581,4 +583,108 @@ func TestLogOnlyForkAfterParentGCKeepZero(t *testing.T) {
 	if got := dump(t, db, "b3", 0); got != want {
 		t.Fatalf("b3 head after fork-after-parent-GC keep 0 changed:\nwant:\n%s\ngot:\n%s", want, got)
 	}
+}
+
+// TestKeep0ReopenAfterParentCompact is the Go form of LogEtLogGCFork
+// SweepOmitsOpenPrefix (keep0-reopen-lsn3): delete k@1, put k@2, fork
+// at 1, compact-at-head, GC keep=0, then Open must still fold every
+// kept log (an unbased child cannot use a parent base after the fork).
+func TestKeep0ReopenAfterParentCompact(t *testing.T) {
+	st := store.NewMem()
+	db := mustOpen(t, st)
+	if err := db.Update(ctx, func(tx *Tx) error { return tx.Delete("k") }); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Update(ctx, func(tx *Tx) error { return tx.Put("k", []byte("v2")) }); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CreateBranch(ctx, "side", "main", 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Compact(ctx, CompactOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.GC(ctx, GCOptions{KeepCommits: 0}); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	var err error
+	db, err = OpenStore(ctx, st, quiet(), WithIndex(tallyKind()))
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer db.Close()
+	for _, br := range []string{"main", "side"} {
+		if err := db.Branch(br).ViewAt(ctx, 0, func(*Tx) error { return nil }); err != nil {
+			t.Fatalf("ViewAt(%s, head): %v", br, err)
+		}
+	}
+}
+
+// TestOpenReadsOnlyNeeded fails if Open or ViewAt(head) successfully
+// GETs a log/*.seg outside needed ∪ Snapshots ∪ retention windows
+// (gcReach). NotFound probes (recover scanning until a hole) are not
+// reads of a segment. Anything else is a bug: Open and GC liveness
+// come from the same needed().
+func TestOpenReadsOnlyNeeded(t *testing.T) {
+	st := store.NewMem()
+	db := mustOpen(t, st)
+	if err := db.Update(ctx, func(tx *Tx) error { return tx.Delete("k") }); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Update(ctx, func(tx *Tx) error { return tx.Put("k", []byte("v2")) }); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CreateBranch(ctx, "side", "main", 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Branch("main").Update(ctx, func(tx *Tx) error { return tx.Put("k", []byte("v3")) }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.GC(ctx, GCOptions{KeepCommits: 0}); err != nil {
+		t.Fatal(err)
+	}
+	db.mu.Lock()
+	live, _, err := db.gcReach(ctx, nil, nil, GCOptions{}, db.opts.Clock(), int64(db.opts.SnapshotMaxAge))
+	db.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+
+	wrap := &getSegs{Store: st}
+	db, err = OpenStore(ctx, wrap, quiet(), WithIndex(tallyKind()))
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer db.Close()
+	for _, br := range []string{"main", "side"} {
+		if err := db.Branch(br).ViewAt(ctx, 0, func(*Tx) error { return nil }); err != nil {
+			t.Fatalf("ViewAt(%s, head): %v", br, err)
+		}
+	}
+	wrap.mu.Lock()
+	got := append([]string{}, wrap.got...)
+	wrap.mu.Unlock()
+	for _, k := range got {
+		if _, ok := live[k]; !ok {
+			t.Errorf("Open/ViewAt GET %s, not in needed ∪ Snapshots ∪ retention windows", k)
+		}
+	}
+}
+
+type getSegs struct {
+	store.Store
+	mu  sync.Mutex
+	got []string
+}
+
+func (s *getSegs) Get(ctx context.Context, key string) ([]byte, error) {
+	b, err := s.Store.Get(ctx, key)
+	if err == nil && strings.HasPrefix(key, "log/") && strings.HasSuffix(key, ".seg") {
+		s.mu.Lock()
+		s.got = append(s.got, key)
+		s.mu.Unlock()
+	}
+	return b, err
 }
