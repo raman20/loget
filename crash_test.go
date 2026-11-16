@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -196,6 +197,29 @@ func TestMain(m *testing.M) {
 
 func TestCrashKill9PrefixConsistent(t *testing.T) { crashKill9(t, "fs://"+t.TempDir()) }
 
+// The same kill -9 invariants against an S3 endpoint (LOGET_TEST_S3, e.g.
+// local MinIO or LocalStack behind a latency/fault proxy): the child's
+// in-flight PUTs die with it, recovery reads the bucket.
+func TestCrashKill9S3(t *testing.T) { crashKill9(t, s3CrashURL(t), "LOGET_CRASH_WAITACK=1") }
+
+// ... and with compactions running in the child (killed mid-base too).
+func TestCrashKill9S3Compact(t *testing.T) {
+	crashKill9(t, s3CrashURL(t), "LOGET_CRASH_COMPACT=1", "LOGET_CRASH_WAITACK=1")
+}
+
+func s3CrashURL(t *testing.T) string {
+	raw := os.Getenv("LOGET_TEST_S3")
+	if raw == "" {
+		t.Skip("LOGET_TEST_S3 not set")
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u.Path += fmt.Sprintf("/crash-%d", time.Now().UnixNano())
+	return u.String()
+}
+
 // The journal store keeps every segment in one file; same invariants.
 func TestCrashKill9Journal(t *testing.T) { crashKill9(t, "journal://"+t.TempDir()) }
 
@@ -329,7 +353,11 @@ func crashKill9(t *testing.T, dir string, env ...string) {
 	ttlLive := make([]int, crashG)
 	ttlExpired, ttlSeen := 0, 0
 	needING := slices.Contains(env, "LOGET_CRASH_INGEST=1")
-	needBASE := len(env) > 0
+	// LOGET_CRASH_WAITACK: kill only after this cycle's first ack, so a
+	// slow store (S3 latency: open alone takes about a second) still
+	// crashes mid-workload instead of mid-open every time.
+	needACK := slices.Contains(env, "LOGET_CRASH_WAITACK=1")
+	needBASE := len(env) > 0 && !(needACK && len(env) == 1)
 	needCKPT := slices.Contains(env, "LOGET_CRASH_CKPT=1")
 	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	for it := 0; it < iters; it++ {
@@ -405,6 +433,9 @@ func crashKill9(t *testing.T, dir string, env ...string) {
 			waitCrashSig(t, it, cmd, &sig, done, func() bool {
 				return sig.ack >= 2 && !sig.firstAck.IsZero() && time.Since(sig.firstAck) >= crashTTL
 			})
+		}
+		if needACK {
+			waitCrashSig(t, it, cmd, &sig, done, func() bool { return sig.ack > 0 })
 		}
 		if killQuick {
 			time.Sleep(time.Duration(rng.Intn(5)) * time.Millisecond)
@@ -543,7 +574,7 @@ func crashKill9(t *testing.T, dir string, env ...string) {
 		}
 		db.Close()
 	}
-	if len(env) > 0 && based == 0 {
+	if needBASE && based == 0 {
 		t.Fatal("no recovery started from a compaction base")
 	}
 	if slices.Contains(env, "LOGET_CRASH_INGEST=1") && sawIngest == 0 {
