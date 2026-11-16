@@ -38,7 +38,7 @@ func cmdIngest(args []string) {
 	val := []byte(strings.Repeat("v", *vsize))
 	key := func(i int) string { return fmt.Sprintf("key%012d", i) }
 	ctx := context.Background()
-	start := time.Now()
+	var start time.Time
 	switch *system + "/" + *mode {
 	case "loget/bulk", "loget/batch":
 		st, err := store.OpenLocal(*dir)
@@ -103,7 +103,9 @@ func cmdIngest(args []string) {
 			if err := w.Close(); err != nil {
 				fatal(err)
 			}
-			err = db.Ingest(ctx, []string{path})
+			if err := db.Ingest(ctx, []string{path}); err != nil {
+				fatal(err)
+			}
 		} else {
 			b := db.NewBatch()
 			for i := 0; i < *n && err == nil; i++ {
