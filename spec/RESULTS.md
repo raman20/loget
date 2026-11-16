@@ -51,6 +51,7 @@ the first run reported 32 with identical state counts.
 | LogEtSnapshot | snapshot retention (design 27, 2026-11-04): writers append, snapshot creation (check floor and planned cut, register) and compaction planning (skip a cut below a live snapshot, record the cut, monotone) under one mutex, then commit or fail; snapshots age out (stop pinning) and are released; 3 snapshots, MaxLSN=4 | 768,903 | 151,967 | 17 | no error |
 | LogEtTTL | per-key expiry in the fold (design 27): frames with non-decreasing commit timestamps, puts with absolute expiries, reads at LSN L using TS(L), compaction to a base at any cut dropping keys expired at TS(cut); checks base+tail = full replay at every L ≥ cut and that OCC validation with the expiry rule implies the read is unchanged at commit; 2 keys, 4 frames, timestamps 0..3 | 5,085,081 | 1,833,081 | 6 | no error |
 | LogEtChunks | value chunks shared between bases (design 28): compactions sharing any subset of the current base's chunks and uploading fresh ones, crashes before commit (orphans), garbage = old refs minus new refs, due-garbage sweeps under grace, orphan sweep, readers of older manifests; checks no chunk a manifest, reader or in-flight compaction refers to is deleted; 5 chunks, 4 compactions | 9,826,032 | 2,158,748 | 15 | no error |
+| LogEtLogGC | log-only values and segment GC (design 30, 2026-11-16): values live in segments; a KV compact writes only a pointer base (no new chunks); history segments and leftover format-4 chunks are deleted only when no index, snapshot or recoverable tail refers to them; a second index may fold retained segments; crashes before commit leave orphan bases; grace for readers of older live-sets. CI config MaxLSN=3, MaxBase=2, MaxSnaps=1, MaxReaders=1, one leftover chunk | 773,363 | 124,028 | 20 | no error |
 
 ## Properties checked
 
@@ -129,6 +130,18 @@ the first run reported 32 with identical state counts.
   A small model: it exists to show the locking rule is needed, see the
   mutant below.
 
+- **LogEtLogGC** (design 30): `NoDangling` (every ref from KV, a second
+  folded index, live snapshots, readers of older live-sets, the
+  recoverable tail, and an in-flight or committed pointer base exists
+  in the store), `TailPinned` (the recoverable tail is never history-GC'd),
+  `NoNewChunks` (no compaction creates a value chunk), `ValuesOnly`
+  (indexes and snapshots point at segments or leftover format-4 chunks,
+  never at a pointer base). Fencing of the manifest commit is the same
+  create-only rule already checked in LogEtLog and LogEtCompact; this
+  model is a single writer plus a crash that leaves orphan pointer
+  bases. LogEtChunks remains the model of the format-4 chunk protocol,
+  which format-5 databases can still read.
+
 ## Mutation checks (are the properties strong enough?)
 
 | Mutation | Result |
@@ -153,6 +166,8 @@ the first run reported 32 with identical state counts.
 | LogEtTTL with OCC validation ignoring expiries (`LogEtTTL_noexpcheck.cfg`) | `OCCSound` violated in 2 steps |
 | LogEtChunks with garbage listing all old chunks, shared ones too (`LogEtChunks_nosub.cfg`) | `NoDangling` violated in 6 steps |
 | LogEtChunks with the orphan sweep keeping only chunks the current base wrote (`LogEtChunks_byowner.cfg`) | `NoDangling` violated in 6 steps |
+| LogEtLogGC with history GC ignoring index and snapshot refs (`LogEtLogGC_sweepref.cfg`) | `NoDangling` violated in 4 steps (a leftover chunk still named by KV is deleted) |
+| LogEtLogGC with a pointer compact listing all covered segments as garbage (`LogEtLogGC_dropsegs.cfg`, the design-03 behaviour) | `NoDangling` violated in 6 steps (KV still points at a deleted segment) |
 | LogEtShred with `Sweep` disabled | `KeyEventuallyGone` violated |
 | LogEtShred with reads ignoring the shred marker | `ShreddedNeverRevealed` violated |
 
