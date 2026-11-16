@@ -33,8 +33,8 @@ import (
 var gctx = context.Background()
 
 // goldenMain writes a current-format golden database: the workload, and
-// with compact a compaction (manifest format 2, base, value chunk),
-// followed by more writes.
+// with compact a pointer-only compact (manifest format 5, design 30:
+// values stay in log segments; the base is pointers), followed by more writes.
 func goldenMain(t *testing.T, dir string, compact bool) string {
 	t.Helper()
 	db, err := loget.Open(gctx, "fs://"+dir, goldenOpts()...)

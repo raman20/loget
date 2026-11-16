@@ -2,6 +2,7 @@ package loget
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -48,8 +49,12 @@ func TestCompactDeletesInBatches(t *testing.T) {
 	bc := &batchCount{Store: j}
 	db := mustOpen(t, bc, WithSnapshotEvery(1<<30))
 	defer db.Close()
-	fill(t, db, 300) // one segment per commit
-	st, err := db.Compact(ctx, CompactOptions{})
+	for i := 0; i < 300; i++ { // one segment per commit; overwrites leave earlier segs unreferenced
+		if err := db.Put(ctx, "k", []byte(fmt.Sprint("v", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	st, err := db.Compact(ctx, CompactOptions{DropHistory: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,9 +72,13 @@ func TestCompactDeletesInBatches(t *testing.T) {
 
 	h := db.st.(*holdStore)
 	release := h.hold()
-	fill(t, db, 50)
+	for i := 0; i < 50; i++ {
+		if err := db.Put(ctx, "k", []byte(fmt.Sprint("w", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
 	before := bc.batched
-	if _, err := db.Compact(ctx, CompactOptions{}); err != nil {
+	if _, err := db.Compact(ctx, CompactOptions{DropHistory: true}); err != nil {
 		t.Fatal(err)
 	}
 	if bc.batched != before {

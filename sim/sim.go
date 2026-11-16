@@ -535,14 +535,30 @@ func (s *sim) recovered() ([]int, error) {
 	if s.headOK {
 		s.headTS = es[len(es)-1].TS
 	}
+	// After a head compact, DropHistory may delete the segment that
+	// held the head frame if no live value lives there. Entries then
+	// ends before the pointer base; Now() is still the base's TS.
+	if lm := s.db.Manifest().Logs[s.db.Manifest().Refs["main"]]; lm != nil && lm.Base != nil {
+		if !s.headOK || es[len(es)-1].LSN < lm.Base.LSN {
+			s.headTS, s.headOK = lm.Base.TS, true
+		}
+	}
+	var floorLSN uint64
 	if key := s.floorKey(); key != "" {
 		p, ok := s.prefix[key]
 		if !ok {
 			return nil, fmt.Errorf("main starts from base %s that no compaction made", key)
 		}
 		ids, lsns = append(ids, p.ids...), append(lsns, p.lsns...)
+		floorLSN = s.floorLSN()
 	}
 	for _, e := range es {
+		// Design 30: pointer compact retains history segments, so
+		// Entries still returns frames at or below the pointer base.
+		// Those txns are already in the prefix recorded at compact.
+		if floorLSN != 0 && e.LSN <= floorLSN {
+			continue
+		}
 		for _, op := range e.Ops {
 			if op.Kind == format.OpPut && op.Space == "kv" && op.Key == "__tx" {
 				id, _ := strconv.Atoi(string(op.Value))
@@ -593,16 +609,35 @@ func (s *sim) recovered() ([]int, error) {
 
 // floorKey names main's compaction base ("" if none).
 func (s *sim) floorKey() string {
+	id, lsn := s.floorBase()
+	if id == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s@%d", id, lsn)
+}
+
+func (s *sim) floorLSN() uint64 {
+	_, lsn := s.floorBase()
+	return lsn
+}
+
+func (s *sim) floorBase() (string, uint64) {
 	m := s.db.Manifest()
+	// A rewind or fork cuts the lineage at ParentLSN: an ancestor's
+	// pointer base only applies if it sits at or below that cut.
+	var limit uint64 = ^uint64(0)
 	for lm := m.Logs[m.Refs["main"]]; lm != nil; lm = m.Logs[lm.Parent] {
-		if lm.Base != nil {
-			return fmt.Sprintf("%s@%d", lm.ID, lm.Base.LSN)
+		if lm.Base != nil && lm.Base.LSN <= limit {
+			return lm.ID, lm.Base.LSN
 		}
 		if lm.Parent == "" {
 			break
 		}
+		if lm.ParentLSN < limit {
+			limit = lm.ParentLSN
+		}
 	}
-	return ""
+	return "", 0
 }
 
 // compact records which txns are at main's head, then compacts. A

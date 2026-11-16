@@ -79,8 +79,8 @@ func (b *Branch) snapshot(ctx context.Context, o SnapshotOptions) (*Snapshot, er
 	if at > head {
 		return nil, fmt.Errorf("%w: %d > head %d", ErrBadLSN, at, head)
 	}
-	if f := w.l.floor(); at < f {
-		return nil, fmt.Errorf("%w: LSN %d < base %d", ErrSnapshotTooOld, at, f)
+	if at > 0 && !w.l.canFold(at) {
+		return nil, fmt.Errorf("%w: LSN %d", ErrSnapshotTooOld, at)
 	}
 	now := o.Now
 	if now == 0 {
@@ -98,8 +98,8 @@ func (b *Branch) snapshot(ctx context.Context, o SnapshotOptions) (*Snapshot, er
 	r := &b.db.snaps
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if f := w.l.floor(); at < f {
-		return nil, fmt.Errorf("%w: LSN %d < base %d", ErrSnapshotTooOld, at, f)
+	if at > 0 && !w.l.canFold(at) {
+		return nil, fmt.Errorf("%w: LSN %d", ErrSnapshotTooOld, at)
 	}
 	for _, id := range logs {
 		if c := r.cutting[id]; at < c {
@@ -147,8 +147,8 @@ func (s *Snapshot) check(l *logState) error {
 	if s.db.opts.Clock()-s.created > int64(s.db.opts.SnapshotMaxAge) {
 		return fmt.Errorf("%w: older than %v", ErrSnapshotTooOld, s.db.opts.SnapshotMaxAge)
 	}
-	if f := l.floor(); s.at < f {
-		return fmt.Errorf("%w: LSN %d < base %d", ErrSnapshotTooOld, s.at, f)
+	if s.at > 0 && !l.canFold(s.at) {
+		return fmt.Errorf("%w: LSN %d", ErrSnapshotTooOld, s.at)
 	}
 	return nil
 }
@@ -168,7 +168,11 @@ func (s *Snapshot) View(ctx context.Context, fn func(*Tx) error) error {
 		if err := s.check(w.l); err != nil {
 			return err
 		}
-		tx := &Tx{db: s.db, v: w.v, at: s.at, lazyCtx: ctx, lazyLog: w.l, now: s.now, nowOK: true}
+		v, err := s.db.viewForLSN(ctx, w.l, w.v, s.at)
+		if err != nil {
+			return err
+		}
+		tx := &Tx{db: s.db, v: v, at: s.at, lazyCtx: ctx, lazyLog: w.l, now: s.now, nowOK: true}
 		ferr := fn(tx)
 		// A compaction that passed an aged snapshot during fn may have
 		// changed what fn read: report it rather than a silently mixed view.

@@ -31,8 +31,8 @@ var (
 	ErrBadLSN         = errors.New("loget: LSN out of range")
 	ErrMainBranch     = errors.New("loget: branch main cannot be deleted")
 	// ErrCompacted: the requested history (time travel, branch point,
-	// rewind target) is older than the log's compaction base.
-	ErrCompacted = errors.New("loget: history before the compaction base was compacted away")
+	// rewind target) needs a segment that log GC has deleted.
+	ErrCompacted = errors.New("loget: the requested history was deleted by log GC")
 	// ErrWrongKEK: the key-encryption key does not match the one this
 	// database was created with.
 	ErrWrongKEK = errors.New("loget: wrong key-encryption key for this database")
@@ -53,7 +53,8 @@ var (
 	ErrBadValue = errors.New("loget: invalid value")
 
 	// ErrSnapshotTooOld: a Snapshot outlived Options.SnapshotMaxAge, or
-	// its LSN is below the compaction base (or a compaction in progress).
+	// its LSN is below the history floor (a needed segment was GC'd, or
+	// a compaction in progress is about to delete one).
 	ErrSnapshotTooOld = errors.New("loget: snapshot too old")
 	// ErrSnapshotReleased: the Snapshot was released.
 	ErrSnapshotReleased = errors.New("loget: snapshot released")

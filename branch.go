@@ -167,11 +167,17 @@ func (db *DB) Promote(ctx context.Context, src, dst string) error {
 	return err
 }
 
-// floorOf is the compaction floor of log id's lineage (0 if none),
-// from the manifest. Caller holds db.mu.
+// floorOf is the history floor of log id's lineage (0 if the prefix is
+// complete or there is no base). Caller holds db.mu.
 func (db *DB) floorOf(id string) uint64 {
+	if l := db.logs[id]; l != nil {
+		return l.floor()
+	}
 	for m := db.man.Logs[id]; m != nil; m = db.man.Logs[m.Parent] {
 		if m.Base != nil {
+			if completeRetainMeta(m) {
+				return 0
+			}
 			return m.Base.LSN
 		}
 		if m.Parent == "" {

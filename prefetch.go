@@ -68,12 +68,20 @@ func newSrcCache(l *logState) srcCache { return srcCache{l: l, based: l.based()}
 
 // source is l.source(ver).
 func (c *srcCache) source(ver index.Version) (*logState, uint64, bool) {
-	if b := c.based; b != nil && (ver.Chunk != 0 || ver.LSN <= b.meta.Base.LSN) {
-		return b, 0, true
+	if ver.Chunk != 0 {
+		if b := c.based; b != nil {
+			return b, 0, true
+		}
 	}
 	if !c.ok || ver.LSN < c.lo || ver.LSN > c.hi {
 		x, s, lo, hi, ok := c.l.locateSpan(ver.LSN)
 		if !ok {
+			// Inlined subject values below a swept format-4 base.
+			if !ver.Ref() {
+				if b := c.based; b != nil && ver.LSN <= b.meta.Base.LSN {
+					return b, 0, true
+				}
+			}
 			return nil, 0, false
 		}
 		c.x, c.seq, c.lo, c.hi, c.ok = x, s.seq, lo, hi, true

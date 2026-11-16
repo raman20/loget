@@ -9,8 +9,13 @@ Golden databases for TestGoldenRead / TestGoldenBytes (docs/compatibility.md).
   24 (LGSNAP2 snapshots, single-object `.base` bases, manifest format 2),
   kept so TestGoldenRead keeps those readable.
 
+- `df4294b-compacted/`: unreleased, the format-4 compacted golden
+  (design 28 value chunks) as of origin/main `df4294b`, kept so
+  TestGoldenRead keeps those readable.
+
 - `main/`, `main-compacted/`: written by TestGoldenBytes with
   `LOGET_UPDATE_GOLDEN=1` (only for an intended format change).
+  `main-compacted` is manifest format 5 (design 30, pointer-only compact).
 
 `gen/workload.go` must stay identical to the workload in `golden_test.go`
 (TestGoldenWorkloadInSync).

@@ -18,7 +18,7 @@ var (
 	ErrNotFastForward = errors.New("loget: promote is not a fast-forward")
 	ErrBadLSN         = errors.New("loget: LSN out of range")
 	ErrMainBranch     = errors.New("loget: branch main cannot be deleted")
-	ErrCompacted = errors.New("loget: history before the compaction base was compacted away")
+	ErrCompacted = errors.New("loget: the requested history was deleted by log GC")
 	ErrWrongKEK = errors.New("loget: wrong key-encryption key for this database")
 	ErrTooLarge = errors.New("loget: transaction too large")
 	ErrBusy = errors.New("loget: compaction already running")
@@ -101,6 +101,7 @@ type CommitPolicy struct {
 	TargetBytes int
 type CompactOptions struct {
 	Grace time.Duration
+	DropHistory bool
 type CompactStats struct {
 	Logs      int   `json:"logs"`
 	Keys      int   `json:"keys"`
@@ -158,6 +159,7 @@ type GCOptions struct {
 	KeepCommits uint64
 	KeepReflog int
 	KeepManifests int
+	DropHistory bool
 type Garbage struct {
 	Kind   string `json:"kind"`
 	Log    string `json:"log,omitempty"`
@@ -165,7 +167,8 @@ type Garbage struct {
 	Key    string `json:"key,omitempty"`
 	Chunks int    `json:"chunks,omitempty"`
 	Pieces int    `json:"pieces,omitempty"`
-	Objs  []string `json:"objs,omitempty"`
+	Objs []string `json:"objs,omitempty"`
+	Seqs  []uint64 `json:"seqs,omitempty"`
 	After int64    `json:"after"`
 type Histogram struct {
 	Counts []uint64 `json:"counts"`
@@ -207,6 +210,7 @@ type LogMeta struct {
 	SnapLSN   uint64 `json:"snap_lsn,omitempty"`
 	SnapKey   string `json:"snap_key,omitempty"`
 	Base *BaseMeta `json:"base,omitempty"`
+	Retain []SegMeta `json:"retain,omitempty"`
 	Ckpt *CkptMeta `json:"ckpt,omitempty"`
 type Manifest struct {
 	Format  int                 `json:"format"`
@@ -277,6 +281,10 @@ type RestoreReport struct {
 	Objects int        `json:"objects"`
 	Bytes   int64      `json:"bytes"`
 func Restore(ctx context.Context, src, dst store.Store) (*RestoreReport, error)
+type SegMeta struct {
+	Seq   uint64 `json:"seq"`
+	First uint64 `json:"first"`
+	N     uint64 `json:"n"`
 type Snapshot struct {
 func (s *Snapshot) LSN() uint64
 func (s *Snapshot) Now() int64

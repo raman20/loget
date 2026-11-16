@@ -56,6 +56,7 @@ func (l *KV) Apply(e *Entry, env Env)
 func (l *KV) Cut() *Cut
 func (l *KV) Digest() [32]byte
 func (l *KV) DropSubject(s string)
+func (l *KV) EachRef(fn func(Version))
 func (l *KV) FileStats() (runs int, bytes int64)
 func (l *KV) Get(space, key string, at uint64) (Version, bool)
 func (l *KV) Inline() int
@@ -84,6 +85,7 @@ func (k *Kind) Owns(space string) bool
 func (k *Kind) SectionName() string
 type Pair struct {
 	Key string
+type Referencer interface {
 type Registry struct {
 func (r *Registry) Derived() []Kind
 func (r *Registry) Kinds() []Kind

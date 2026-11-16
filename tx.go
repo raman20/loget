@@ -300,11 +300,15 @@ func (b *Branch) ViewAt(ctx context.Context, at uint64, fn func(*Tx) error) erro
 	if at > head {
 		return fmt.Errorf("%w: %d > head %d", ErrBadLSN, at, head)
 	}
-	if f := w.l.floor(); at < f {
-		return fmt.Errorf("%w: LSN %d < base %d", ErrCompacted, at, f)
+	if at > 0 && !w.l.canFold(at) {
+		return fmt.Errorf("%w: LSN %d", ErrCompacted, at)
+	}
+	v, err := b.db.viewForLSN(ctx, w.l, w.v, at)
+	if err != nil {
+		return err
 	}
 	// Read-only: no read set and no local writes, so no maps to allocate.
-	tx := &Tx{db: b.db, v: w.v, at: at, lazyCtx: ctx, lazyLog: w.l}
+	tx := &Tx{db: b.db, v: v, at: at, lazyCtx: ctx, lazyLog: w.l}
 	return fn(tx)
 }
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"slices"
 	"sort"
 	"time"
 )
@@ -32,6 +31,9 @@ type GCOptions struct {
 	KeepReflog int
 	// KeepManifests keeps the newest this-many manifests (0 = 16).
 	KeepManifests int
+	// DropHistory is set by Compact when the caller asked to delete
+	// unreferenced history segments. GC implies it.
+	DropHistory bool
 }
 
 // GC compacts every log at its retention cut (see GCOptions), drops logs
@@ -65,8 +67,11 @@ func (db *DB) retentionCut(ctx context.Context, l *logState, o GCOptions, now in
 		lim = min(lim, head-o.KeepCommits)
 	}
 	tcut := now - int64(o.KeepFor)
+	// foldSegs: after a pointer compact the keep window may sit in
+	// retained history, not only in the writable tail (design 30).
+	segs := l.foldSegs()
 	l.mu.RLock()
-	segs, lastTS := slices.Clone(l.segs), l.lastTS
+	lastTS, nextSeq := l.lastTS, l.nextSeq
 	l.mu.RUnlock()
 	if lim == head && (o.KeepFor == 0 || lastTS <= tcut) {
 		if l.meta.Base != nil && l.meta.Base.LSN == head {
@@ -104,7 +109,11 @@ func (db *DB) retentionCut(ctx context.Context, l *logState, o GCOptions, now in
 	if rerr != nil {
 		return cutInfo{}, rerr
 	}
-	return cutInfo{k: end(j), seq: segs[j].seq + 1, ts: ts}, nil
+	seq := nextSeq
+	if j+1 < len(segs) {
+		seq = segs[j+1].seq
+	}
+	return cutInfo{k: end(j), seq: seq, ts: ts}, nil
 }
 
 // gcPlan decides GC's cuts, the logs to drop and the pruned reflog.

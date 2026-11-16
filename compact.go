@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"hash/crc32"
 	"math"
 	"strconv"
 	"strings"
@@ -18,16 +17,17 @@ import (
 	"github.com/raman20/loget/store"
 )
 
-// Compaction (docs/design/03-compaction.md, spec/LogEtCompact.tla).
+// Compaction (docs/design/03-compaction.md, docs/design/30-log-only.md,
+// spec/LogEtCompact.tla, spec/LogEtLogGC.tla).
 //
-// Compact gives every log a base: the full index state at its head K,
-// written as new objects (an image plus value chunks), and commits a
-// manifest that points each log at its base. Older segments, snapshots
-// and bases become garbage that a sweep deletes once a grace period has
-// passed. Overwritten, deleted and shredded values are not copied into
-// the base, so they leave storage with the garbage. History below a
-// base is gone: time travel, branching and rewinding below it return
-// ErrCompacted.
+// Compact writes a pointer base at each log's head: the latest version
+// of every live key, with values still in their original log segments
+// (or leftover format-4 .val chunks). Covered segments are retained,
+// not listed as garbage. Time travel, branching and rewind below the
+// new base keep working while those segments remain. GC (and Compact
+// with DropHistory) then deletes a segment only when no live index or
+// snapshot refers to it. ErrCompacted means a needed segment was
+// actually deleted, not that Compact ran.
 
 const (
 	baseMagic  = "LGETBAS1"
@@ -45,6 +45,12 @@ type CompactOptions struct {
 	// them, so readers holding an older manifest (another process, a
 	// read-only open, a backup) can finish. 0 deletes them right away.
 	Grace time.Duration
+	// DropHistory, after writing the pointer base, deletes history
+	// segments that no live value, leftover chunk, tail segment or
+	// Snapshot refers to. The default Compact keeps them so a new
+	// index can still fold the retained log. GC always drops unreferenced
+	// history (this flag is implied).
+	DropHistory bool
 }
 
 // CompactStats reports what Compact did.
@@ -79,7 +85,7 @@ func chunkKey(key string, n int) string {
 // Compact compacts every log (see above). Commits wait while it runs;
 // reads continue. It is a no-op for logs unchanged since their base.
 func (db *DB) Compact(ctx context.Context, o CompactOptions) (CompactStats, error) {
-	return db.runCompaction(ctx, GCOptions{Grace: o.Grace}, false)
+	return db.runCompaction(ctx, GCOptions{Grace: o.Grace, DropHistory: o.DropHistory}, false)
 }
 
 // runCompaction is Compact (gc false) or GC (gc true). Due garbage is
@@ -219,10 +225,14 @@ func (db *DB) compactPaused(ctx context.Context, o GCOptions, gc bool, stats *Co
 // reflog pruning, unreachable logs dropped).
 func (db *DB) compactLocked(ctx context.Context, o GCOptions, gc bool, stats *CompactStats) (committed bool, err error) {
 	type built struct {
-		id   string
-		base *BaseMeta
-		head uint64 // log head at the cut: snapshots up to it are replaced
+		id      string
+		base    *BaseMeta
+		head    uint64 // log head at the cut: snapshots up to it are replaced
+		live    map[string]struct{}
+		covered []segIdx
 	}
+	dropHist := gc || o.DropHistory
+	pinned := map[string]bool{}
 	plan := map[string]cutInfo{}
 	var drop []string
 	reflog := db.man.Reflog
@@ -243,15 +253,18 @@ func (db *DB) compactLocked(ctx context.Context, o GCOptions, gc bool, stats *Co
 			return false, err
 		}
 		var bm *BaseMeta
+		var live map[string]struct{}
 		cut := c.k
 		if c.head {
 			cut = l.head()
 		}
-		if l.meta.Base == nil || l.meta.Base.LSN < cut {
-			// A live snapshot below the cut holds this log back (bounded
-			// by SnapshotMaxAge; docs/design/27-ttl-snapshots.md).
+		if dropHist {
+			// Snapshots pin log GC / retention cuts, not pointer-only Compact
+			// (design 30). A cut may sit in retained history below the
+			// current pointer base.
 			if !db.snaps.plan(id, cut, db.opts.Clock, int64(db.opts.SnapshotMaxAge)) {
 				stats.Pinned++
+				pinned[id] = true
 				continue
 			}
 		}
@@ -266,18 +279,24 @@ func (db *DB) compactLocked(ctx context.Context, o GCOptions, gc bool, stats *Co
 					return false, err
 				}
 			}
-			bm, err = db.writeBase(ctx, l, v, head, nil, stats)
+			bm, live, err = db.writeBase(ctx, l, v, head, nil, stats)
 		} else {
+			// A cut below the current pointer base needs a complete
+			// foldable prefix. If history was already swept, keep the
+			// current base (the window is already as tight as it can be).
+			if !l.canFold(c.k) {
+				continue
+			}
 			var v *view
 			if v, err = db.buildView(ctx, l, c.k, nil); err != nil {
 				return false, err
 			}
-			bm, err = db.writeBase(ctx, l, v, c.k, &c, stats)
+			bm, live, err = db.writeBase(ctx, l, v, c.k, &c, stats)
 		}
 		if err != nil {
 			return false, err
 		}
-		bs = append(bs, built{id, bm, l.head()})
+		bs = append(bs, built{id, bm, l.head(), live, l.coveredSegs(bm.Seq)})
 	}
 	if len(bs) == 0 && len(drop) == 0 && len(reflog) == len(db.man.Reflog) {
 		return false, nil
@@ -310,8 +329,29 @@ func (db *DB) compactLocked(ctx context.Context, o GCOptions, gc bool, stats *Co
 	}
 	pruned := len(db.man.Reflog) - len(reflog)
 	after := db.opts.Clock() + int64(o.Grace)
+	// Live objects from every log: a child's pointer can pin a parent
+	// segment (CreateBranch / inherited prefix). Sweeping each log
+	// against only its own view would drop those parent objects.
+	globalLive := map[string]struct{}{}
+	for _, b := range bs {
+		for k := range b.live {
+			globalLive[k] = struct{}{}
+		}
+	}
+	for _, id := range sortedMapKeys(db.views) {
+		l, v := db.logs[id], db.views[id]
+		if l == nil || v == nil {
+			continue
+		}
+		v.mu.RLock()
+		db.addLiveFromIndex(globalLive, l, v.kv)
+		for _, d := range v.derived {
+			db.addLiveFromIndex(globalLive, l, d)
+		}
+		v.mu.RUnlock()
+	}
 	err = db.commitManifest(ctx, func(m *Manifest) error {
-		m.Format = max(m.Format, manifestFormatRunBase)
+		m.Format = max(m.Format, manifestFormatLogOnly)
 		// A checkpoint's runs point into segments a new base replaces
 		// (and are bound to the old base): it goes with them.
 		dropCkpt := func(id string) {
@@ -334,14 +374,76 @@ func (db *DB) compactLocked(ctx context.Context, o GCOptions, gc bool, stats *Co
 				m.Format = max(m.Format, manifestFormatRefs)
 			}
 			dropCkpt(b.id)
+			keep, drop := b.covered, []uint64(nil)
+			if dropHist {
+				live := map[string]struct{}{}
+				for k := range globalLive {
+					live[k] = struct{}{}
+				}
+				for k := range b.live {
+					live[k] = struct{}{}
+				}
+				addLiveTail(live, db.logs[b.id], b.base.Seq)
+				keep, drop = filterLiveSegs(b.covered, live, b.id)
+			}
+			lm.Retain = metaFromSegs(keep)
+			if len(drop) > 0 {
+				m.Garbage = append(m.Garbage, Garbage{Kind: "segs", Log: b.id, Seqs: drop, After: after})
+			}
+			// On-disk snapshots are disposable folds of a now-replaced
+			// pointer image; the retained log can rebuild any view.
 			m.Garbage = append(m.Garbage,
-				Garbage{Kind: "segs", Log: b.id, Below: b.base.Seq, After: after},
-				// a snapshot's versions point into segments the base
-				// replaces, so every snapshot so far goes (writers are
-				// stopped: none is newer than the head)
 				Garbage{Kind: "snaps", Log: b.id, Below: b.head + 1, After: after})
 			lm.Base = b.base
 			lm.SnapLSN, lm.SnapKey = 0, ""
+		}
+		handled := map[string]bool{}
+		for _, b := range bs {
+			handled[b.id] = true
+		}
+		if dropHist {
+			for _, id := range sortedMapKeys(m.Logs) {
+				if handled[id] || pinned[id] {
+					continue
+				}
+				l := db.logs[id]
+				if l == nil {
+					// try the already-loaded set; loadLog needs ctx and may recurse
+					var err error
+					l, err = db.loadLog(ctx, id, false)
+					if err != nil || l == nil {
+						continue
+					}
+				}
+				if l.meta.Base == nil && len(l.retained) == 0 {
+					continue
+				}
+				// Only sweep if the current pointer base already
+				// satisfies the retention window. Otherwise the
+				// head live set would drop history still in the
+				// window (the cut should have gone into bs).
+				if !l.retentionSatisfied(o, db.opts.Clock()) {
+					continue
+				}
+				if !db.snaps.plan(id, l.baseLSN(), db.opts.Clock, int64(db.opts.SnapshotMaxAge)) {
+					stats.Pinned++
+					continue
+				}
+				live := map[string]struct{}{}
+				for k := range globalLive {
+					live[k] = struct{}{}
+				}
+				seq := l.nextSeq
+				if l.meta.Base != nil {
+					seq = l.meta.Base.Seq
+				}
+				addLiveTail(live, l, seq)
+				keep, dropSeqs := filterLiveSegs(l.coveredSegs(seq), live, id)
+				m.Logs[id].Retain = metaFromSegs(keep)
+				if len(dropSeqs) > 0 {
+					m.Garbage = append(m.Garbage, Garbage{Kind: "segs", Log: id, Seqs: dropSeqs, After: after})
+				}
+			}
 		}
 		for _, id := range drop {
 			lm := m.Logs[id]
@@ -398,15 +500,14 @@ func baseGarbage(id string, b, next *BaseMeta, after int64) []Garbage {
 // writeBase writes the base of log l at head from its view v.
 // at is nil for a base at the log's head; for a retention cut below the
 // head it gives the segment after the cut and the cut frame's time.
-func (db *DB) writeBase(ctx context.Context, l *logState, v *view, head uint64, at *cutInfo, stats *CompactStats) (*BaseMeta, error) {
+func (db *DB) writeBase(ctx context.Context, l *logState, v *view, head uint64, at *cutInfo, stats *CompactStats) (*BaseMeta, map[string]struct{}, error) {
 	nonce, err := db.keys.randBytes(4)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	key := fmt.Sprintf("base/%s/%020d-e%d-%s", l.meta.ID, head, db.epoch, hex.EncodeToString(nonce))
 	id := l.meta.ID
 	o := db.kvOptions()
-	inline := index.NewKVOptions(o).Inline()
 	// The base is one run (design 24), built in key order in a run file
 	// (or on the heap) and stored in pieces: no single object holds it.
 	rw := index.NewRunWriter(o, 0)
@@ -416,7 +517,6 @@ func (db *DB) writeBase(ctx context.Context, l *logState, v *view, head uint64, 
 			rw.Abort()
 		}
 	}()
-	cw := &chunkWriter{db: db, key: key}
 	// The base's TS is the cut frame's commit time; a key expired at it is
 	// invisible to every read at or after the cut, so the base drops it
 	// (expiry GC is part of the fold: docs/design/27-ttl-snapshots.md).
@@ -429,14 +529,18 @@ func (db *DB) writeBase(ctx context.Context, l *logState, v *view, head uint64, 
 	} else if ts, err = frameTS(ctx, l, head); err != nil {
 		// the same as lastTS for a log with frames of its own; a branch
 		// without any takes its parent's frame (or base) at the fork
-		return nil, err
+		return nil, nil, err
 	}
 	v.mu.RLock()
 	defer v.mu.RUnlock()
-	shared, remap, err := db.shareChunks(l, v, ts)
+	// Pointer-only (design 30): keep segment positions and leftover
+	// format-4 chunk refs as they are. Any live ref pins a leftover
+	// chunk (no shareMin, no new .val, no reseal).
+	shared, remap, err := db.leftoverChunks(l, v, ts)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	live := map[string]struct{}{}
 	err = v.kv.Latest(func(space, k string, ver index.Version) error {
 		if ver.Del {
 			return nil
@@ -445,68 +549,38 @@ func (db *DB) writeBase(ctx context.Context, l *logState, v *view, head uint64, 
 			stats.Expired++
 			return nil
 		}
-		if nc := remap[ver.Chunk]; nc != 0 && ownChunk(l, ver) {
-			// in a chunk of the previous base kept as it is: point at it
-			stats.Keys++
-			stats.SharedBytes += int64(ver.Len)
-			return rw.Add(space, k, index.Version{LSN: ver.LSN, Op: ver.Op, Exp: ver.Exp,
-				Chunk: nc, Off: ver.Off, Len: ver.Len, Sum: ver.Sum})
-		}
-		val := ver.Val
-		if ver.Ref() || ver.Subject != "" {
-			x, seq, ok := l.source(ver)
+		if ver.Ref() {
+			x, _, ok := l.source(ver)
 			if !ok {
 				return fmt.Errorf("%w: LSN %d of %s/%s not in the log", ErrCorrupt, ver.LSN, space, k)
 			}
-			if ver.Ref() {
-				if val, err = db.readValue(x, seq, ver); err != nil {
-					return err
-				}
-			}
-			if ver.Subject != "" {
-				p, ok := db.keys.open(ver.Subject, val, aad(x.meta.ID, ver.LSN, int(ver.Op), space, k))
-				if !ok {
-					return nil // shredded since the index last saw it
-				}
-				ct, ok, err := db.keys.reseal(ver.Subject, p, aad(id, ver.LSN, int(ver.Op), space, k))
-				if err != nil {
-					return err
-				}
-				if !ok {
-					return nil
-				}
-				val = ct
+			_ = x
+			if obj := db.objectOf(l, ver); obj != "" {
+				live[obj] = struct{}{}
 			}
 		}
-		nv := index.Version{LSN: ver.LSN, Op: ver.Op, Subject: ver.Subject, Exp: ver.Exp}
-		if len(val) > inline {
-			n, off, err := cw.add(ctx, val)
-			if err != nil {
-				return err
-			}
-			nv.Chunk, nv.Off, nv.Len, nv.Sum = uint32(len(shared)+n+1), uint32(off), uint32(len(val)), crc32.Checksum(val, index.Castagnoli)
-		} else {
-			nv.Val = val // Latest's copy, or ours: encoded before the next key
+		nv := index.Version{LSN: ver.LSN, Op: ver.Op, Subject: ver.Subject, Exp: ver.Exp, Val: ver.Val,
+			Chunk: ver.Chunk, Off: ver.Off, Len: ver.Len, Sum: ver.Sum}
+		if nc := remap[ver.Chunk]; nc != 0 && ownChunk(l, ver) {
+			nv.Chunk = nc
+			stats.SharedBytes += int64(ver.Len)
 		}
 		stats.Keys++
 		return rw.Add(space, k, nv)
 	})
 	if err != nil {
-		return nil, err
-	}
-	if err := cw.flush(ctx); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	chain, err := l.chainAt(ctx, head)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if at == nil {
 		// every segment that exists now is covered (a read-only load may
 		// stop before a torn tail)
 		keys, err := db.st.List(ctx, "log/"+id+"/")
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		for _, k := range keys {
 			if s, ok := parseNum(k, "log/"+id+"/", ".seg"); ok && s >= seq {
@@ -517,7 +591,7 @@ func (db *DB) writeBase(ctx context.Context, l *logState, v *view, head uint64, 
 	cut, err := rw.Finish()
 	done = true
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	run := &index.RunMeta{} // no live key: an empty base
 	if cut != nil {
@@ -526,19 +600,64 @@ func (db *DB) writeBase(ctx context.Context, l *logState, v *view, head uint64, 
 		m := cr.Meta()
 		run = &m
 		if err := db.putRun(ctx, key, cr.Bytes(), m.Piece); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
-	stats.BaseBytes += run.Len + cw.bytes
-	bm := &BaseMeta{LSN: head, Seq: seq, Key: key, Chunks: cw.n, ChunkSizes: cw.sizes, Chain: hex.EncodeToString(chain[:]), TS: ts, Run: run}
+	stats.BaseBytes += run.Len
+	addLiveTail(live, l, seq)
+	bm := &BaseMeta{LSN: head, Seq: seq, Key: key, Chain: hex.EncodeToString(chain[:]), TS: ts, Run: run}
 	if len(shared) > 0 {
 		bm.Refs = shared
-		for i, n := range cw.sizes {
-			bm.Refs = append(bm.Refs, ChunkRef{Key: key, N: i, Size: n})
-		}
 		stats.SharedChunks += len(shared)
 	}
-	return bm, nil
+	return bm, live, nil
+}
+
+// leftoverChunks keeps every leftover format-4 value chunk that a live
+// version still names (design 30: any live ref pins the whole chunk;
+// numbers are remapped densely into the new base's Refs). WithCompactCopyAll
+// is a no-op: we still do not copy values out of the log.
+func (db *DB) leftoverChunks(l *logState, v *view, ts int64) ([]ChunkRef, map[uint32]uint32, error) {
+	ob := l.meta.Base
+	if ob == nil {
+		return nil, nil, nil
+	}
+	old := ob.Refs
+	if old == nil {
+		n := ob.Chunks
+		if n == 0 && len(ob.ChunkSizes) > 0 {
+			n = len(ob.ChunkSizes)
+		}
+		for i := 0; i < n; i++ {
+			sz := int64(0)
+			if i < len(ob.ChunkSizes) {
+				sz = ob.ChunkSizes[i]
+			}
+			old = append(old, ChunkRef{Key: ob.Key, N: i, Size: sz})
+		}
+	}
+	if len(old) == 0 {
+		return nil, nil, nil
+	}
+	used := make([]bool, len(old))
+	err := v.kv.Latest(func(_, _ string, ver index.Version) error {
+		if !ver.Del && !ver.Expired(ts) && ownChunk(l, ver) && int(ver.Chunk) <= len(used) {
+			used[ver.Chunk-1] = true
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	var shared []ChunkRef
+	remap := map[uint32]uint32{}
+	for i, r := range old {
+		if used[i] {
+			shared = append(shared, r)
+			remap[uint32(i+1)] = uint32(len(shared))
+		}
+	}
+	return shared, remap, nil
 }
 
 // shareMin: a chunk of the previous base is shared, not copied, while at
@@ -800,7 +919,23 @@ func (db *DB) deleteGarbage(ctx context.Context, g Garbage) (int, error) {
 			if !ok && g.Kind == "segs" {
 				n, _, _, ok = parseIngest(k, dir) // so does an ingest run committed there
 			}
-			if ok && n < g.Below {
+			if !ok {
+				continue
+			}
+			if len(g.Seqs) > 0 {
+				keep := false
+				for _, s := range g.Seqs {
+					if n == s {
+						keep = true
+						break
+					}
+				}
+				if keep {
+					keys = append(keys, k)
+				}
+				continue
+			}
+			if n < g.Below {
 				keys = append(keys, k)
 			}
 		}

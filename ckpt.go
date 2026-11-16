@@ -252,7 +252,7 @@ func (db *DB) writeIndexCkpt(ctx context.Context, l *logState, v *view) error {
 	}
 	v.mu.RLock()
 	lsn := v.head
-	if lsn <= prev || lsn <= l.floor() {
+	if lsn <= prev || lsn <= l.baseLSN() {
 		v.mu.RUnlock()
 		return nil
 	}
@@ -265,7 +265,7 @@ func (db *DB) writeIndexCkpt(ctx context.Context, l *logState, v *view) error {
 	}
 	v.mu.RUnlock()
 	defer cut.Release()
-	floor := l.floor()
+	floor := l.baseLSN()
 	chain, err := l.chainAt(ctx, lsn)
 	if err != nil {
 		return err
@@ -427,10 +427,10 @@ func (db *DB) readIndexCkpt(ctx context.Context, l *logState, c *CkptMeta) (*sna
 	switch {
 	case h.log != l.meta.ID || h.lsn != c.LSN || h.floor != c.Floor:
 		return nil, fmt.Errorf("%w: it holds log %s LSN %d on base %d", errCkpt, h.log, h.lsn, h.floor)
-	case h.floor != l.floor():
-		return nil, fmt.Errorf("%w: built on base %d, the log's base is %d", errCkpt, h.floor, l.floor())
-	case h.lsn > l.head() || h.lsn <= l.floor():
-		return nil, fmt.Errorf("%w: LSN %d outside the log (%d..%d)", errCkpt, h.lsn, l.floor(), l.head())
+	case h.floor != l.baseLSN():
+		return nil, fmt.Errorf("%w: built on base %d, the log's base is %d", errCkpt, h.floor, l.baseLSN())
+	case h.lsn > l.head() || h.lsn <= l.baseLSN():
+		return nil, fmt.Errorf("%w: LSN %d outside the log (%d..%d)", errCkpt, h.lsn, l.baseLSN(), l.head())
 	case len(runs) != len(c.Runs):
 		return nil, fmt.Errorf("%w: %d runs, the manifest lists %d", errCkpt, len(runs), len(c.Runs))
 	}

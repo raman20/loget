@@ -158,7 +158,7 @@ func TestRecoverReadsOnWhenLogGrows(t *testing.T) {
 // damage; one that is really stored under the key is ErrCorrupt.
 func TestRecoverMisreadSegment(t *testing.T) {
 	mem := store.NewMem()
-	db := mustOpen(t, mem)
+	db := mustOpen(t, mem, WithCheckpointBytes(-1))
 	for i := 0; i < 4; i++ {
 		db.Put(ctx, fmt.Sprintf("k%d", i), []byte("v"))
 	}
@@ -166,10 +166,10 @@ func TestRecoverMisreadSegment(t *testing.T) {
 	seg2, _ := mem.Get(ctx, segKey("L1", 2))
 	st := newScripted(mem)
 	st.gets[segKey("L1", 3)] = [][]byte{seg2, seg2, seg2} // three identical misreads
-	db = mustOpen(t, st)
+	db = mustOpen(t, st, WithCheckpointBytes(-1))
 	db.Close()
 	mem.Raw(func(m map[string][]byte) { m[segKey("L1", 3)] = seg2 })
-	if _, err := OpenStore(ctx, mem, quiet()); !errors.Is(err, ErrCorrupt) {
+	if _, err := OpenStore(ctx, mem, quiet(), WithCheckpointBytes(-1)); !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("stored wrong segment: %v", err)
 	}
 }

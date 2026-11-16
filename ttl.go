@@ -88,11 +88,8 @@ func frameTS(ctx context.Context, l *logState, lsn uint64) (int64, error) {
 	if lsn == head && own > 0 {
 		return ts, nil
 	}
-	if b := l.based(); b != nil && lsn <= b.meta.Base.LSN {
-		if lsn == b.meta.Base.LSN {
-			return b.meta.Base.TS, nil
-		}
-		return 0, fmt.Errorf("%w: LSN %d", ErrCompacted, lsn)
+	if b := l.based(); b != nil && lsn == b.meta.Base.LSN {
+		return b.meta.Base.TS, nil
 	}
 	e, err := l.entryAt(ctx, lsn)
 	if err != nil {

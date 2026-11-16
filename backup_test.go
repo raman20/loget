@@ -192,7 +192,7 @@ func TestBackupHoldsDeletes(t *testing.T) {
 		t.Fatalf("backup ended before copying: %v", err)
 	}
 	before, _ := store.Keys(ctx, src)
-	cs, err := db.Compact(ctx, CompactOptions{})
+	cs, err := db.Compact(ctx, CompactOptions{DropHistory: true})
 	if err != nil || cs.Deleted == 0 {
 		t.Fatalf("compaction during backup: %+v %v (want deletes)", cs, err)
 	}

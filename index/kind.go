@@ -6,6 +6,14 @@ import (
 	"strings"
 )
 
+// Referencer is an index that holds positions into the log or leftover
+// value chunks. Log GC (design 30) walks these to know which objects are
+// live. The engine maps each Version to a store key via its own source
+// table; the index itself does not name objects.
+type Referencer interface {
+	EachRef(fn func(Version))
+}
+
 // Snapshotter is implemented by an index that can save its state, so the
 // engine can restore the state on open instead of replaying the log.
 // Snapshot must be canonical: two indexes that folded the same log

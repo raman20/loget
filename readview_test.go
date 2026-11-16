@@ -82,7 +82,7 @@ func TestSnapshotPinsCompaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	db.Put(ctx, "a", []byte("2"))
-	st, err := db.Compact(ctx, CompactOptions{})
+	st, err := db.GC(ctx, GCOptions{})
 	if err != nil || st.Pinned != 1 || st.Logs != 0 {
 		t.Fatalf("pinned compaction: %+v %v", st, err)
 	}
@@ -102,7 +102,7 @@ func TestSnapshotPinsCompaction(t *testing.T) {
 	if err := read(); !errors.Is(err, ErrSnapshotTooOld) {
 		t.Fatalf("aged: %v", err)
 	}
-	st, err = db.Compact(ctx, CompactOptions{})
+	st, err = db.GC(ctx, GCOptions{})
 	if err != nil || st.Pinned != 0 || st.Logs != 1 {
 		t.Fatalf("compaction past an aged snapshot: %+v %v", st, err)
 	}
@@ -116,7 +116,7 @@ func TestSnapshotPinsCompaction(t *testing.T) {
 	s2, _ := db.Snapshot(ctx, SnapshotOptions{})
 	db.Put(ctx, "a", []byte("4"))
 	s2.Release()
-	if st, err := db.Compact(ctx, CompactOptions{}); err != nil || st.Pinned != 0 || st.Logs != 1 {
+	if st, err := db.GC(ctx, GCOptions{}); err != nil || st.Pinned != 0 || st.Logs != 1 {
 		t.Fatalf("after release: %+v %v", st, err)
 	}
 }

@@ -18,7 +18,9 @@ import (
 
 // Options configure a DB. Every field has a working default.
 type Options struct {
-	// CompactCopyAll makes every compaction copy all live values into new
+	// CompactCopyAll is a no-op on format 5 (design 30: values stay in
+	// their log segments; compaction rewrites pointers only). On format 4
+	// it makes every compaction copy all live values into new
 	// chunks instead of sharing mostly-live chunks of the previous base
 	// (design 28). For benchmarks and tests.
 	CompactCopyAll bool
@@ -450,15 +452,26 @@ func (db *DB) loadLog(ctx context.Context, id string, writable bool) (*logState,
 	if !ok {
 		return nil, fmt.Errorf("%w: unknown log %s", ErrCorrupt, id)
 	}
-	l := &logState{meta: *meta, st: db.st, readAhead: db.opts.ReadAhead}
+	l := &logState{meta: *meta, st: db.st, readAhead: db.opts.ReadAhead, retained: segsFromMeta(meta.Retain)}
 	if b := meta.Base; b != nil {
-		// A compacted log starts from its base: no parent, no older segments.
+		// The writable tail starts at the pointer base (design 30).
+		// Retained history is not chained as that prefix; nextSeq is Base.Seq.
 		c, err := hex.DecodeString(b.Chain)
 		if err != nil || len(c) != 32 || b.LSN < meta.ParentLSN {
 			return nil, fmt.Errorf("%w: log %s: bad base", ErrCorrupt, id)
 		}
 		copy(l.base[:], c)
 		l.n, l.lastTS, l.nextSeq = b.LSN-meta.ParentLSN, b.TS, b.Seq
+		// Values may still live in an ancestor's segments. Attach the
+		// parent when it still exists (format-4 may have dropped it;
+		// leftover chunk refs do not need it).
+		if meta.Parent != "" && db.man.Logs[meta.Parent] != nil {
+			p, err := db.loadLog(ctx, meta.Parent, false)
+			if err != nil {
+				return nil, err
+			}
+			l.parent = p
+		}
 	} else if meta.Parent != "" {
 		p, err := db.loadLog(ctx, meta.Parent, false)
 		if err != nil {

@@ -558,6 +558,19 @@ func (l *KV) Scan(space, prefix string, at uint64) []Pair {
 	return out
 }
 
+// EachRef calls fn for every stored-bytes position the index holds
+// (design 30). Inlined values are not refs.
+func (l *KV) EachRef(fn func(Version)) {
+	_ = l.each(func(_ []byte, vs []Version) error {
+		for _, v := range vs {
+			if v.Ref() {
+				fn(v)
+			}
+		}
+		return nil
+	})
+}
+
 // each calls fn for every key in key order with all its versions, oldest
 // first (vs is reused between calls).
 func (l *KV) each(fn func(k []byte, vs []Version) error) error {

@@ -61,7 +61,13 @@ func (db *DB) buildView(ctx context.Context, l *logState, upto uint64, snap *sna
 	v := &view{log: l, env: env, kv: index.NewKVOptions(db.kvOptions()), derived: make([]index.Index, len(kinds))}
 	b := l.based()
 	if b != nil && upto < b.meta.Base.LSN {
-		return nil, fmt.Errorf("%w: LSN %d < base %d", ErrCompacted, upto, b.meta.Base.LSN)
+		// Below the pointer base: fold retained history from scratch
+		// (design 30). The pointer base is latest-only at a later LSN
+		// and must not be used as the starting image.
+		if !l.canFold(upto) {
+			return nil, fmt.Errorf("%w: LSN %d: history was deleted by log GC", ErrCompacted, upto)
+		}
+		b, snap = nil, nil
 	}
 	if snap != nil && (snap.lsn > upto || b != nil && snap.lsn < b.meta.Base.LSN) {
 		snap = nil
@@ -194,12 +200,24 @@ func (db *DB) eachBase(ctx context.Context, img *baseImage, keep func(space stri
 		for j < len(items) && items[j].ver.LSN == items[i].ver.LSN {
 			j++
 		}
-		e := &index.Entry{Log: img.log.meta.ID, LSN: items[i].ver.LSN, Ops: make([]format.Op, items[j-1].ver.Op+1)}
+		// AAD is bound to the log that sealed the value (design 30:
+		// values stay in their original segment, so a branch may name
+		// an ancestor's log). Format-4 resealed under the based log;
+		// source() still reports that log for inlined leftover values.
+		logID := img.log.meta.ID
+		if x, _, ok := img.log.source(items[i].ver); ok {
+			logID = x.meta.ID
+		}
+		e := &index.Entry{Log: logID, LSN: items[i].ver.LSN, Ops: make([]format.Op, items[j-1].ver.Op+1)}
 		for _, it := range items[i:j] {
 			val := it.ver.Val
 			if it.ver.Ref() {
+				x, seq, ok := img.log.source(it.ver)
+				if !ok {
+					return fmt.Errorf("%w: LSN %d of %s/%s not in the log", ErrCorrupt, it.ver.LSN, it.space, it.key)
+				}
 				var err error
-				if val, err = db.readValue(img.log, 0, it.ver); err != nil {
+				if val, err = db.readValue(x, seq, it.ver); err != nil {
 					return err
 				}
 			}
@@ -216,3 +234,14 @@ func (db *DB) eachBase(ctx context.Context, img *baseImage, keep func(space stri
 // spaceOK reports whether s is a space name records may be written to:
 // non-empty and without the NUL byte the record store uses as separator.
 func spaceOK(s string) bool { return s != "" && !strings.ContainsRune(s, 0) }
+
+// viewForLSN returns a view that can serve reads at LSN at. The branch's
+// head view is latest-only at and after a pointer base (design 30); below
+// the base, history is folded from retained segments.
+func (db *DB) viewForLSN(ctx context.Context, l *logState, head *view, at uint64) (*view, error) {
+	// at==0 means the branch head (ViewAt), not LSN 0.
+	if at == 0 || at >= head.head {
+		return head, nil
+	}
+	return db.buildView(ctx, l, at, nil)
+}

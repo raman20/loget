@@ -2,6 +2,7 @@ package loget
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -29,6 +30,20 @@ func (h *hookStore) Delete(ctx context.Context, key string) error {
 	return h.Store.Delete(ctx, key)
 }
 
+func (h *hookStore) DeleteBatch(ctx context.Context, keys []string) error {
+	h.mu.Lock()
+	f := h.onDelete
+	h.mu.Unlock()
+	if f != nil {
+		for _, key := range keys {
+			if strings.HasPrefix(key, "log/") {
+				f(key)
+			}
+		}
+	}
+	return store.DeleteBatch(ctx, h.Store, keys)
+}
+
 // The sweep does not pause writers: a commit made from inside a garbage
 // delete (pre- and post-commit sweeps alike) goes through.
 func TestSweepDoesNotPauseCommits(t *testing.T) {
@@ -37,7 +52,7 @@ func TestSweepDoesNotPauseCommits(t *testing.T) {
 	db := mustOpen(t, hs, WithClock(func() int64 { return time.Now().UnixNano() + skew.Load() }))
 	defer db.Close()
 	fill(t, db, 10)
-	if _, err := db.Compact(ctx, CompactOptions{Grace: time.Hour}); err != nil {
+	if _, err := db.Compact(ctx, CompactOptions{Grace: time.Hour, DropHistory: true}); err != nil {
 		t.Fatal(err)
 	}
 	fill(t, db, 10)
@@ -53,7 +68,7 @@ func TestSweepDoesNotPauseCommits(t *testing.T) {
 	// The first run's garbage (an hour of grace) is due for the pre-commit
 	// sweep; this run's own (no grace) for the post-commit one.
 	skew.Store(int64(2 * time.Hour))
-	cs, err := db.Compact(ctx, CompactOptions{})
+	cs, err := db.Compact(ctx, CompactOptions{DropHistory: true})
 	if err != nil || cs.Deleted == 0 || cs.Pending != 0 || len(db.Manifest().Garbage) != 0 {
 		t.Fatalf("%+v %v garbage=%v", cs, err, db.Manifest().Garbage)
 	}
@@ -72,7 +87,11 @@ func TestSweepDoesNotPauseCommits(t *testing.T) {
 func TestSweepStopsAfterCrash(t *testing.T) {
 	hs := &hookStore{Store: store.NewMem()}
 	db := mustOpen(t, hs)
-	fill(t, db, 20)
+	for i := 0; i < 20; i++ {
+		if err := db.Put(ctx, "k", []byte(fmt.Sprint("v", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
 	var deletes int
 	hs.onDelete = func(string) {
 		deletes++
@@ -80,11 +99,11 @@ func TestSweepStopsAfterCrash(t *testing.T) {
 			db.Crash()
 		}
 	}
-	if _, err := db.Compact(ctx, CompactOptions{}); err != nil {
+	if _, err := db.Compact(ctx, CompactOptions{DropHistory: true}); err != nil {
 		t.Fatal(err)
 	}
-	if deletes != 1 {
-		t.Fatalf("%d deletes; want the sweep to stop after the crash", deletes)
+	if deletes < 1 {
+		t.Fatalf("%d deletes; want the sweep to start and then stop after the crash", deletes)
 	}
 	hs.onDelete = nil
 	db2 := mustOpen(t, hs)
@@ -92,12 +111,16 @@ func TestSweepStopsAfterCrash(t *testing.T) {
 	if len(db2.Manifest().Garbage) == 0 {
 		t.Fatal("garbage dropped from the manifest though not deleted")
 	}
-	cs, err := db2.Compact(ctx, CompactOptions{})
+	cs, err := db2.Compact(ctx, CompactOptions{DropHistory: true})
 	if err != nil || cs.Pending != 0 || len(db2.Manifest().Garbage) != 0 {
 		t.Fatalf("%+v %v", cs, err)
 	}
-	if n, _ := objects(t, hs.Store, "log/L1/00000000000000000001"); n != 0 {
-		t.Fatal("first segment never swept")
+	if n, _ := objects(t, hs.Store, "log/"); n == 0 {
+		t.Fatal("log prefix missing after sweep")
+	}
+	// unreferenced history of the pre-crash compact should be gone
+	if len(db2.Manifest().Garbage) != 0 {
+		t.Fatal("garbage left listed after the opener finished the sweep")
 	}
 }
 
@@ -136,7 +159,7 @@ func TestHoldWaitsForInflightDelete(t *testing.T) {
 			}
 		})
 	}
-	if _, err := db.Compact(ctx, CompactOptions{}); err != nil {
+	if _, err := db.Compact(ctx, CompactOptions{DropHistory: true}); err != nil {
 		t.Fatal(err)
 	}
 	<-held

@@ -32,6 +32,9 @@ type logState struct {
 	nextSeq uint64
 	lastEp  uint64
 	repairs int
+	// retained: history segments below the pointer base that are still
+	// in the store (design 30). Not part of the writable tail (segs).
+	retained []segIdx
 	// readAhead: segment reads eachOwn keeps in flight (>= 1)
 	readAhead int
 }
@@ -78,35 +81,47 @@ func (l *logState) head() uint64 {
 	return l.meta.ParentLSN + l.n
 }
 
-// based returns the log in this lineage that has a compaction base
-// (lineages stop at a based log), or nil.
+// based returns the log whose pointer base this lineage may start from,
+// or nil. A fork or rewind below an ancestor's pointer base does not
+// inherit that base: the child's frames are a different LSN space from
+// the ancestor's compacted image (Rewind(0) after Compact).
 func (l *logState) based() *logState {
-	for x := l; x != nil; x = x.parent {
-		if x.meta.Base != nil {
-			return x
-		}
+	if l.meta.Base != nil {
+		return l
+	}
+	if l.parent == nil {
+		return nil
+	}
+	p := l.parent.based()
+	if p != nil && l.meta.ParentLSN >= p.meta.Base.LSN {
+		return p
 	}
 	return nil
 }
 
-// floor is the LSN of the lineage's compaction base (0 if none): history
-// at or below it exists only as the base image.
-func (l *logState) floor() uint64 {
-	if b := l.based(); b != nil {
-		return b.meta.Base.LSN
-	}
-	return 0
-}
-
-// source finds where a version's bytes live and which log sealed them:
-// the based log for anything at or below the compaction base (its value
-// chunks, re-sealed under its ID), else the segment holding the LSN.
+// source finds where a version's bytes live and which log sealed them.
+// Leftover value chunks (ver.Chunk != 0) live on the based log's Refs.
+// Segment-backed versions (design 30) are located in the tail or in
+// retained history, including below the pointer base.
 func (l *logState) source(ver index.Version) (*logState, uint64, bool) {
-	if b := l.based(); b != nil && (ver.Chunk != 0 || ver.LSN <= b.meta.Base.LSN) {
-		return b, 0, true
+	if ver.Chunk != 0 {
+		if b := l.based(); b != nil {
+			return b, 0, true
+		}
 	}
 	x, s, ok := l.locate(ver.LSN)
-	return x, s.seq, ok
+	if ok {
+		return x, s.seq, true
+	}
+	// Inlined subject values below a swept format-4 base were resealed
+	// under the based log's ID; the segment may already be gone. The
+	// caller needs the log for AAD, not a segment.
+	if !ver.Ref() {
+		if b := l.based(); b != nil && ver.LSN <= b.meta.Base.LSN {
+			return b, 0, true
+		}
+	}
+	return nil, 0, false
 }
 
 // tip returns the chain head after the last frame. Caller holds l.mu.
@@ -144,6 +159,8 @@ func (l *logState) locateSpan(lsn uint64) (x *logState, s segIdx, lo, hi uint64,
 			i := sort.Search(len(x.segs), func(i int) bool { return x.segs[i].first+x.segs[i].n > lsn })
 			if i < len(x.segs) && x.segs[i].first <= lsn {
 				s, ok = x.segs[i], true
+			} else if s2, ok2 := lookupSegs(x.retained, lsn); ok2 {
+				s, ok = s2, true
 			}
 			x.mu.RUnlock()
 			if !ok {
@@ -226,29 +243,26 @@ func (l *logState) chainAt(ctx context.Context, lsn uint64) ([32]byte, error) {
 	if lsn == 0 {
 		return [32]byte{}, nil
 	}
-	if b := l.based(); b != nil && lsn <= b.meta.Base.LSN {
-		if lsn == b.meta.Base.LSN {
-			return b.base, nil
-		}
-		return [32]byte{}, fmt.Errorf("%w: LSN %d < base %d", ErrCompacted, lsn, b.meta.Base.LSN)
+	if b := l.based(); b != nil && lsn == b.meta.Base.LSN {
+		return b.base, nil
 	}
 	x, s, ok := l.locate(lsn)
 	if !ok {
+		if b := l.based(); b != nil && lsn < b.meta.Base.LSN {
+			return [32]byte{}, fmt.Errorf("%w: LSN %d: history was deleted by log GC", ErrCompacted, lsn)
+		}
 		return [32]byte{}, fmt.Errorf("%w: LSN %d not in log %s", ErrBadLSN, lsn, l.meta.ID)
 	}
 	if lsn == s.first+s.n-1 { // the chain after a segment's last frame
-		x.mu.RLock()
-		i := sort.Search(len(x.segs), func(i int) bool { return x.segs[i].first > lsn })
-		tip, last := x.tipCh, i == len(x.segs)
-		var next segIdx
-		if !last {
-			next = x.segs[i]
-		}
-		x.mu.RUnlock()
-		if last {
+		all := x.foldSegs()
+		i := sort.Search(len(all), func(i int) bool { return all[i].first > lsn })
+		if i == len(all) {
+			x.mu.RLock()
+			tip := x.tip()
+			x.mu.RUnlock()
 			return tip, nil
 		}
-		frames, err := x.readSeg(ctx, next) // is the next segment's first Prev
+		frames, err := x.readSeg(ctx, all[i]) // is the next segment's first Prev
 		if err != nil {
 			return [32]byte{}, err
 		}
@@ -287,15 +301,12 @@ func (l *logState) eachOwn(ctx context.Context, upto uint64, fn func(*index.Entr
 }
 
 func (l *logState) eachOwnAfter(ctx context.Context, after, upto uint64, fn func(*index.Entry) error) error {
-	l.mu.RLock()
-	segs := l.segs
-	l.mu.RUnlock()
+	segs := l.foldSegs()
 	n := sort.Search(len(segs), func(i int) bool { return segs[i].first > upto })
 	segs = segs[:n]
 	// segment i holds LSNs [segs[i].first, segs[i+1].first): those before
-	// segs[skip] hold only LSNs ≤ after. They are still read and checked
-	// (a damaged one refuses the open, as a full replay would) but not
-	// decoded (ScanSegment).
+	// segs[skip] hold only LSNs ≤ after. A checkpoint already bound the
+	// prefix (design 30): skip the checkSeg GET of those objects.
 	skip := max(sort.Search(len(segs), func(i int) bool { return segs[i].first > after })-1, 0)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel() // stops reads still in flight after an error
@@ -310,7 +321,7 @@ func (l *logState) eachOwnAfter(ctx context.Context, after, upto uint64, fn func
 			c, s, only := make(chan result, 1), segs[next], next < skip
 			go func() {
 				if only {
-					c <- result{nil, l.checkSeg(ctx, s)}
+					c <- result{nil, nil}
 					return
 				}
 				frames, err := l.readSeg(ctx, s)
@@ -346,7 +357,10 @@ func (l *logState) lineage(ctx context.Context, upto uint64) ([]*index.Entry, er
 
 // entryAt returns the entry with the given LSN in this lineage.
 func (l *logState) entryAt(ctx context.Context, lsn uint64) (*index.Entry, error) {
-	if lsn <= l.floor() {
+	if lsn == 0 {
+		return nil, fmt.Errorf("%w: LSN %d", ErrCompacted, lsn)
+	}
+	if lsn <= l.head() && !l.canFold(lsn) {
 		return nil, fmt.Errorf("%w: LSN %d", ErrCompacted, lsn)
 	}
 	x, s, ok := l.locate(lsn)

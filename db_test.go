@@ -164,7 +164,7 @@ func TestRegressionTornFilesDoNotBlockOpen(t *testing.T) {
 
 func TestCorruptMiddleSegmentRefusesOpen(t *testing.T) {
 	st := store.NewMem()
-	db := mustOpen(t, st)
+	db := mustOpen(t, st, WithCheckpointBytes(-1))
 	for i := 0; i < 5; i++ {
 		db.Put(ctx, fmt.Sprint("k", i), []byte("v"))
 	}

@@ -68,14 +68,19 @@ func (db *DB) Shred(ctx context.Context, subject string) (*Certificate, error) {
 	var names []string
 	for _, id := range sortedMapKeys(db.views) {
 		v := db.views[id]
+		if v == nil {
+			continue
+		}
 		v.mu.Lock()
 		for _, l := range v.indexes() {
 			l.DropSubject(h)
 		}
 		v.mu.Unlock()
 	}
-	for _, l := range db.views[db.man.Refs["main"]].indexes() {
-		names = append(names, l.Name())
+	if v := db.views[db.man.Refs["main"]]; v != nil {
+		for _, l := range v.indexes() {
+			names = append(names, l.Name())
+		}
 	}
 	db.mu.Unlock()
 	lsn, err := db.Branch("main").UpdateLSN(ctx, func(tx *Tx) error {

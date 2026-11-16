@@ -43,7 +43,12 @@ type Garbage struct {
 	Chunks int    `json:"chunks,omitempty"`
 	Pieces int    `json:"pieces,omitempty"`
 	// "vals" (design 28): value chunk objects, by name
-	Objs  []string `json:"objs,omitempty"`
+	Objs []string `json:"objs,omitempty"`
+	// Seqs (design 30): for kind "segs", delete only these sequence
+	// numbers (and their .repair/.idx/.ingest). When empty, Below is
+	// used as before (a dense prefix). A dense Below would catch live
+	// neighbours a single live key can pin.
+	Seqs  []uint64 `json:"seqs,omitempty"`
 	After int64    `json:"after"`
 }
 
@@ -103,9 +108,13 @@ type LogMeta struct {
 	ParentLSN uint64 `json:"parent_lsn,omitempty"`
 	SnapLSN   uint64 `json:"snap_lsn,omitempty"`
 	SnapKey   string `json:"snap_key,omitempty"`
-	// Base, if set, holds the state at Base.LSN: the log no longer needs
-	// its parent or its segments before Base.Seq (see compact.go).
+	// Base, if set, holds the pointer-index state at Base.LSN (design 30:
+	// values stay in their log segments; the base rewrites pointers).
+	// Recover still starts the writable tail at Base.Seq.
 	Base *BaseMeta `json:"base,omitempty"`
+	// Retain lists history segments below Base.Seq that are still in the
+	// store (design 30). Empty on a format-4 log whose prefix was swept.
+	Retain []SegMeta `json:"retain,omitempty"`
 	// Ckpt is the newest index checkpoint (ckpt.go, design 24).
 	Ckpt *CkptMeta `json:"ckpt,omitempty"`
 }
@@ -133,7 +142,11 @@ const (
 	// (BaseMeta.Refs, design 28); a build before it would read the wrong
 	// chunk objects.
 	manifestFormatRefs = 4
-	manifestFormatMax  = manifestFormatRefs
+	// manifestFormatLogOnly: values live only in log segments; the KV
+	// base is pointers; log GC is a separate live-ref sweep (design 30).
+	// Older binaries would treat covered segments as gone.
+	manifestFormatLogOnly = 5
+	manifestFormatMax     = manifestFormatLogOnly
 )
 
 // Formats describes the on-storage format versions this build reads and
@@ -200,6 +213,9 @@ func (m *Manifest) validate() error {
 			return fmt.Errorf("log %q: bad base chunk refs", id)
 		case lm.Ckpt != nil && lm.Ckpt.Key == "":
 			return fmt.Errorf("log %q: empty checkpoint", id)
+		}
+		if err := validateRetain(lm.Retain); err != nil {
+			return fmt.Errorf("log %q: %v", id, err)
 		}
 		if lm.Ckpt != nil {
 			for _, r := range lm.Ckpt.Runs {

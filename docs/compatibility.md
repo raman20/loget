@@ -14,7 +14,7 @@ formats: manifest 1-3, segment 1, base 1 and run pieces, journal 1-2, snapshot 2
 
 | object | stamp | unknown version |
 |---|---|---|
-| manifest (`.mf`) | JSON `"format"`: 1; 2 once compacted by a build before design 24; 3 once compacted since (base stored as run pieces) | open fails, `ErrVersion` (a build before design 24 refuses format 3) |
+| manifest (`.mf`) | JSON `"format"`: 1; 2 once compacted by a build before design 24; 3 once compacted since (base stored as run pieces); 4 once a base shares value chunks (design 28); 5 once compacted by a design-30 (log-only) build | open fails, `ErrVersion` (a build before the written format refuses it) |
 | segment (`.seg`) | magic `LGETSEG1` + u16 version | open fails, `ErrVersion` |
 | base (`.base`) | magic `LGETBAS1` (last byte = version); written before design 24, still read | open fails, `ErrVersion` |
 | base run pieces (`.run` under `base/`) | none; described by the manifest's `base.run` (gated by manifest format 3), one CRC-32C per piece | gated by the manifest format |
@@ -61,7 +61,8 @@ recognise LogEt objects either.
 | written by → read by | main |
 |---|---|
 | main, uncompacted (files and journal layouts) | yes (golden `main`) |
-| main, compacted (manifest 3, chunk sizes; manifest 4 once a base shares chunks) | yes (golden `main-compacted`) |
+| main, compacted (manifest 5, design 30: pointer base, retained segments) | yes (golden `main-compacted`) |
+| df4294b, compacted (manifest 4, design 28 value chunks) | yes (golden `df4294b-compacted`) |
 | 3ac2e00, compacted (manifest 3, before design 28) | yes (golden `3ac2e00-compacted`) |
 | d557e72 (before design 24), uncompacted, with a snapshot | yes (golden `d557e72`) |
 | d557e72, compacted (manifest 2, `.base` object) | yes (golden `d557e72-compacted`) |
