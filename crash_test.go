@@ -7,6 +7,8 @@ import (
 	"math/rand"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -289,6 +291,27 @@ func waitCrashSig(t *testing.T, it int, cmd *exec.Cmd, sig *crashSig, done <-cha
 	}
 }
 
+// reapCrashRunFiles removes loget-kv-*.run left in dir when SIGKILL landed
+// between CreateTemp and unlink. That window exists only on the
+// createUnlinked path (macOS and any Linux file system without O_TMPFILE).
+// Linux O_TMPFILE never names a file, so leftovers there stay for noFiles
+// to fail on.
+func reapCrashRunFiles(dir string) {
+	if runtime.GOOS == "linux" {
+		return
+	}
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range ents {
+		n := e.Name()
+		if strings.HasPrefix(n, "loget-kv-") && strings.HasSuffix(n, ".run") {
+			os.Remove(filepath.Join(dir, n))
+		}
+	}
+}
+
 func crashKill9(t *testing.T, dir string, env ...string) {
 	if testing.Short() {
 		t.Skip("short")
@@ -394,6 +417,7 @@ func crashKill9(t *testing.T, dir string, env ...string) {
 		var recOpts []Option
 		for _, e := range env {
 			if d, ok := strings.CutPrefix(e, "LOGET_CRASH_INDEXDIR="); ok {
+				reapCrashRunFiles(d)
 				noFiles(t, d)
 				fs, _ := testIndexFiles(t, d, nil)
 				recOpts = append(recOpts, WithIndexFiles(fs))

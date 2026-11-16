@@ -137,6 +137,15 @@ jobs:
           nohup ~/minio-bin/minio server /tmp/minio-data --address 127.0.0.1:9000 > /tmp/minio.log 2>&1 &
           for i in $(seq 1 60); do curl -fs http://127.0.0.1:9000/minio/health/live && break; sleep 1; done
           curl -fs http://127.0.0.1:9000/minio/health/live || { cat /tmp/minio.log; exit 1; }
+      - name: download modules
+        run: |
+          # proxy.golang.org can fail a DNS lookup on a fresh runner; retry
+          for i in 1 2 3 4 5; do
+            go mod download && exit 0
+            echo "go mod download failed (attempt $i), retrying..."
+            sleep $((i * 5))
+          done
+          go mod download
       - name: S3 conformance + end-to-end (conditional writes, fencing, shred)
         env:
           LOGET_TEST_S3: s3://loget-ci?endpoint=127.0.0.1:9000&insecure=1&create=1
