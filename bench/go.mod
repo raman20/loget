@@ -1,6 +1,6 @@
 module github.com/raman20/loget/bench
 
-go 1.27.3
+go 1.27.4
 
 require (
 	github.com/HdrHistogram/hdrhistogram-go v1.4.0

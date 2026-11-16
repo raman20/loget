@@ -1,6 +1,6 @@
 module github.com/raman20/loget
 
-go 1.27.3
+go 1.27.4
 
 require (
 	github.com/minio/minio-go/v7 v7.4.1
