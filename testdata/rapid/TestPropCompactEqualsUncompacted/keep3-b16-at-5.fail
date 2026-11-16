@@ -1,0 +1,515 @@
+# 2026/11/16 22:05:47.344343 [TestPropCompactEqualsUncompacted] [rapid] draw seed: 0
+# 2026/11/16 22:05:47.344367 [TestPropCompactEqualsUncompacted] [rapid] draw inline: 0
+# 2026/11/16 22:05:47.344378 [TestPropCompactEqualsUncompacted] [rapid] draw snapEvery: 1
+# 2026/11/16 22:05:47.344506 [TestPropCompactEqualsUncompacted] [rapid] draw snapEvery: 1
+# 2026/11/16 22:05:47.344572 [TestPropCompactEqualsUncompacted] [rapid] draw n: 25
+# 2026/11/16 22:05:47.344573 [TestPropCompactEqualsUncompacted] [rapid] draw branch: "main"
+# 2026/11/16 22:05:47.344574 [TestPropCompactEqualsUncompacted] [rapid] draw subj: "s1"
+# 2026/11/16 22:05:47.344575 [TestPropCompactEqualsUncompacted] [rapid] draw k: 0
+# 2026/11/16 22:05:47.344576 [TestPropCompactEqualsUncompacted] [rapid] draw size: 1
+# 2026/11/16 22:05:47.344577 [TestPropCompactEqualsUncompacted] [rapid] draw op: 0
+# 2026/11/16 22:05:47.344681 [TestPropCompactEqualsUncompacted] [rapid] draw branch: "main"
+# 2026/11/16 22:05:47.344682 [TestPropCompactEqualsUncompacted] [rapid] draw subj: ""
+# 2026/11/16 22:05:47.344684 [TestPropCompactEqualsUncompacted] [rapid] draw k: 0
+# 2026/11/16 22:05:47.344684 [TestPropCompactEqualsUncompacted] [rapid] draw size: 1
+# 2026/11/16 22:05:47.344685 [TestPropCompactEqualsUncompacted] [rapid] draw op: 0
+# 2026/11/16 22:05:47.344740 [TestPropCompactEqualsUncompacted] [rapid] draw branch: "main"
+# 2026/11/16 22:05:47.344741 [TestPropCompactEqualsUncompacted] [rapid] draw subj: ""
+# 2026/11/16 22:05:47.344742 [TestPropCompactEqualsUncompacted] [rapid] draw k: 0
+# 2026/11/16 22:05:47.344742 [TestPropCompactEqualsUncompacted] [rapid] draw size: 1
+# 2026/11/16 22:05:47.344744 [TestPropCompactEqualsUncompacted] [rapid] draw op: 0
+# 2026/11/16 22:05:47.344808 [TestPropCompactEqualsUncompacted] [rapid] draw branch: "main"
+# 2026/11/16 22:05:47.344808 [TestPropCompactEqualsUncompacted] [rapid] draw subj: ""
+# 2026/11/16 22:05:47.344809 [TestPropCompactEqualsUncompacted] [rapid] draw k: 0
+# 2026/11/16 22:05:47.344809 [TestPropCompactEqualsUncompacted] [rapid] draw size: 1
+# 2026/11/16 22:05:47.344810 [TestPropCompactEqualsUncompacted] [rapid] draw op: 0
+# 2026/11/16 22:05:47.344865 [TestPropCompactEqualsUncompacted] [rapid] draw branch: "main"
+# 2026/11/16 22:05:47.344865 [TestPropCompactEqualsUncompacted] [rapid] draw subj: ""
+# 2026/11/16 22:05:47.344867 [TestPropCompactEqualsUncompacted] [rapid] draw k: 0
+# 2026/11/16 22:05:47.344867 [TestPropCompactEqualsUncompacted] [rapid] draw size: 1
+# 2026/11/16 22:05:47.344868 [TestPropCompactEqualsUncompacted] [rapid] draw op: 0
+# 2026/11/16 22:05:47.344932 [TestPropCompactEqualsUncompacted] [rapid] draw branch: "main"
+# 2026/11/16 22:05:47.344932 [TestPropCompactEqualsUncompacted] [rapid] draw subj: ""
+# 2026/11/16 22:05:47.344933 [TestPropCompactEqualsUncompacted] [rapid] draw k: 0
+# 2026/11/16 22:05:47.344933 [TestPropCompactEqualsUncompacted] [rapid] draw size: 1
+# 2026/11/16 22:05:47.344934 [TestPropCompactEqualsUncompacted] [rapid] draw op: 8
+# 2026/11/16 22:05:47.344935 [TestPropCompactEqualsUncompacted] [rapid] draw at: 1
+# 2026/11/16 22:05:47.345015 [TestPropCompactEqualsUncompacted] [rapid] draw branch: "main"
+# 2026/11/16 22:05:47.345017 [TestPropCompactEqualsUncompacted] [rapid] draw subj: ""
+# 2026/11/16 22:05:47.345017 [TestPropCompactEqualsUncompacted] [rapid] draw k: 0
+# 2026/11/16 22:05:47.345018 [TestPropCompactEqualsUncompacted] [rapid] draw size: 1
+# 2026/11/16 22:05:47.345018 [TestPropCompactEqualsUncompacted] [rapid] draw op: 8
+# 2026/11/16 22:05:47.345019 [TestPropCompactEqualsUncompacted] [rapid] draw at: 1
+# 2026/11/16 22:05:47.345107 [TestPropCompactEqualsUncompacted] [rapid] draw branch: "main"
+# 2026/11/16 22:05:47.345108 [TestPropCompactEqualsUncompacted] [rapid] draw subj: ""
+# 2026/11/16 22:05:47.345108 [TestPropCompactEqualsUncompacted] [rapid] draw k: 0
+# 2026/11/16 22:05:47.345109 [TestPropCompactEqualsUncompacted] [rapid] draw size: 1
+# 2026/11/16 22:05:47.345109 [TestPropCompactEqualsUncompacted] [rapid] draw op: 3
+# 2026/11/16 22:05:47.345213 [TestPropCompactEqualsUncompacted] [rapid] draw branch: "main"
+# 2026/11/16 22:05:47.345214 [TestPropCompactEqualsUncompacted] [rapid] draw subj: ""
+# 2026/11/16 22:05:47.345214 [TestPropCompactEqualsUncompacted] [rapid] draw k: 0
+# 2026/11/16 22:05:47.345214 [TestPropCompactEqualsUncompacted] [rapid] draw size: 1
+# 2026/11/16 22:05:47.345215 [TestPropCompactEqualsUncompacted] [rapid] draw op: 12
+# 2026/11/16 22:05:47.345216 [TestPropCompactEqualsUncompacted] [rapid] draw keep: 0
+# 2026/11/16 22:05:47.345216 [TestPropCompactEqualsUncompacted] [rapid] draw keepReflog: 1
+# 2026/11/16 22:05:47.345216 [TestPropCompactEqualsUncompacted] [rapid] draw keepMans: 1
+# 2026/11/16 22:05:47.345594 [TestPropCompactEqualsUncompacted] [rapid] draw branch: "main"
+# 2026/11/16 22:05:47.345599 [TestPropCompactEqualsUncompacted] [rapid] draw subj: ""
+# 2026/11/16 22:05:47.345601 [TestPropCompactEqualsUncompacted] [rapid] draw k: 1
+# 2026/11/16 22:05:47.345601 [TestPropCompactEqualsUncompacted] [rapid] draw size: 1
+# 2026/11/16 22:05:47.345602 [TestPropCompactEqualsUncompacted] [rapid] draw op: 0
+# 2026/11/16 22:05:47.345731 [TestPropCompactEqualsUncompacted] [rapid] draw branch: "main"
+# 2026/11/16 22:05:47.345732 [TestPropCompactEqualsUncompacted] [rapid] draw subj: ""
+# 2026/11/16 22:05:47.345733 [TestPropCompactEqualsUncompacted] [rapid] draw k: 0
+# 2026/11/16 22:05:47.345733 [TestPropCompactEqualsUncompacted] [rapid] draw size: 1
+# 2026/11/16 22:05:47.345734 [TestPropCompactEqualsUncompacted] [rapid] draw op: 3
+# 2026/11/16 22:05:47.345821 [TestPropCompactEqualsUncompacted] [rapid] draw branch: "main"
+# 2026/11/16 22:05:47.345821 [TestPropCompactEqualsUncompacted] [rapid] draw subj: ""
+# 2026/11/16 22:05:47.345822 [TestPropCompactEqualsUncompacted] [rapid] draw k: 1
+# 2026/11/16 22:05:47.345822 [TestPropCompactEqualsUncompacted] [rapid] draw size: 1
+# 2026/11/16 22:05:47.345823 [TestPropCompactEqualsUncompacted] [rapid] draw op: 0
+# 2026/11/16 22:05:47.345907 [TestPropCompactEqualsUncompacted] [rapid] draw branch: "main"
+# 2026/11/16 22:05:47.345907 [TestPropCompactEqualsUncompacted] [rapid] draw subj: ""
+# 2026/11/16 22:05:47.345908 [TestPropCompactEqualsUncompacted] [rapid] draw k: 0
+# 2026/11/16 22:05:47.345908 [TestPropCompactEqualsUncompacted] [rapid] draw size: 1
+# 2026/11/16 22:05:47.345911 [TestPropCompactEqualsUncompacted] [rapid] draw op: 12
+# 2026/11/16 22:05:47.345912 [TestPropCompactEqualsUncompacted] [rapid] draw keep: 0
+# 2026/11/16 22:05:47.345912 [TestPropCompactEqualsUncompacted] [rapid] draw keepReflog: 1
+# 2026/11/16 22:05:47.345913 [TestPropCompactEqualsUncompacted] [rapid] draw keepMans: 1
+# 2026/11/16 22:05:47.346186 [TestPropCompactEqualsUncompacted] [rapid] draw branch: "main"
+# 2026/11/16 22:05:47.346188 [TestPropCompactEqualsUncompacted] [rapid] draw subj: ""
+# 2026/11/16 22:05:47.346189 [TestPropCompactEqualsUncompacted] [rapid] draw k: 0
+# 2026/11/16 22:05:47.346190 [TestPropCompactEqualsUncompacted] [rapid] draw size: 1
+# 2026/11/16 22:05:47.346191 [TestPropCompactEqualsUncompacted] [rapid] draw op: 0
+# 2026/11/16 22:05:47.346316 [TestPropCompactEqualsUncompacted] [rapid] draw branch: "main"
+# 2026/11/16 22:05:47.346317 [TestPropCompactEqualsUncompacted] [rapid] draw subj: ""
+# 2026/11/16 22:05:47.346318 [TestPropCompactEqualsUncompacted] [rapid] draw k: 0
+# 2026/11/16 22:05:47.346318 [TestPropCompactEqualsUncompacted] [rapid] draw size: 1
+# 2026/11/16 22:05:47.346319 [TestPropCompactEqualsUncompacted] [rapid] draw op: 0
+# 2026/11/16 22:05:47.346435 [TestPropCompactEqualsUncompacted] [rapid] draw branch: "main"
+# 2026/11/16 22:05:47.346435 [TestPropCompactEqualsUncompacted] [rapid] draw subj: ""
+# 2026/11/16 22:05:47.346436 [TestPropCompactEqualsUncompacted] [rapid] draw k: 0
+# 2026/11/16 22:05:47.346436 [TestPropCompactEqualsUncompacted] [rapid] draw size: 1
+# 2026/11/16 22:05:47.346438 [TestPropCompactEqualsUncompacted] [rapid] draw op: 0
+# 2026/11/16 22:05:47.346532 [TestPropCompactEqualsUncompacted] [rapid] draw branch: "main"
+# 2026/11/16 22:05:47.346532 [TestPropCompactEqualsUncompacted] [rapid] draw subj: ""
+# 2026/11/16 22:05:47.346533 [TestPropCompactEqualsUncompacted] [rapid] draw k: 0
+# 2026/11/16 22:05:47.346533 [TestPropCompactEqualsUncompacted] [rapid] draw size: 1
+# 2026/11/16 22:05:47.346534 [TestPropCompactEqualsUncompacted] [rapid] draw op: 7
+# 2026/11/16 22:05:47.346535 [TestPropCompactEqualsUncompacted] [rapid] draw bat: 0
+# 2026/11/16 22:05:47.346721 [TestPropCompactEqualsUncompacted] [rapid] draw branch: "main"
+# 2026/11/16 22:05:47.346727 [TestPropCompactEqualsUncompacted] [rapid] draw subj: ""
+# 2026/11/16 22:05:47.346728 [TestPropCompactEqualsUncompacted] [rapid] draw k: 0
+# 2026/11/16 22:05:47.346729 [TestPropCompactEqualsUncompacted] [rapid] draw size: 1
+# 2026/11/16 22:05:47.346731 [TestPropCompactEqualsUncompacted] [rapid] draw op: 0
+# 2026/11/16 22:05:47.346906 [TestPropCompactEqualsUncompacted] [rapid] draw branch: "main"
+# 2026/11/16 22:05:47.346907 [TestPropCompactEqualsUncompacted] [rapid] draw subj: ""
+# 2026/11/16 22:05:47.346908 [TestPropCompactEqualsUncompacted] [rapid] draw k: 0
+# 2026/11/16 22:05:47.346909 [TestPropCompactEqualsUncompacted] [rapid] draw size: 1
+# 2026/11/16 22:05:47.346910 [TestPropCompactEqualsUncompacted] [rapid] draw op: 0
+# 2026/11/16 22:05:47.347025 [TestPropCompactEqualsUncompacted] [rapid] draw branch: "main"
+# 2026/11/16 22:05:47.347025 [TestPropCompactEqualsUncompacted] [rapid] draw subj: ""
+# 2026/11/16 22:05:47.347026 [TestPropCompactEqualsUncompacted] [rapid] draw k: 0
+# 2026/11/16 22:05:47.347027 [TestPropCompactEqualsUncompacted] [rapid] draw size: 1
+# 2026/11/16 22:05:47.347027 [TestPropCompactEqualsUncompacted] [rapid] draw op: 0
+# 2026/11/16 22:05:47.347149 [TestPropCompactEqualsUncompacted] [rapid] draw branch: "main"
+# 2026/11/16 22:05:47.347149 [TestPropCompactEqualsUncompacted] [rapid] draw subj: ""
+# 2026/11/16 22:05:47.347150 [TestPropCompactEqualsUncompacted] [rapid] draw k: 0
+# 2026/11/16 22:05:47.347150 [TestPropCompactEqualsUncompacted] [rapid] draw size: 1
+# 2026/11/16 22:05:47.347151 [TestPropCompactEqualsUncompacted] [rapid] draw op: 0
+# 2026/11/16 22:05:47.347279 [TestPropCompactEqualsUncompacted] [rapid] draw branch: "main"
+# 2026/11/16 22:05:47.347280 [TestPropCompactEqualsUncompacted] [rapid] draw subj: ""
+# 2026/11/16 22:05:47.347280 [TestPropCompactEqualsUncompacted] [rapid] draw k: 0
+# 2026/11/16 22:05:47.347280 [TestPropCompactEqualsUncompacted] [rapid] draw size: 1
+# 2026/11/16 22:05:47.347281 [TestPropCompactEqualsUncompacted] [rapid] draw op: 0
+# 2026/11/16 22:05:47.347410 [TestPropCompactEqualsUncompacted] [rapid] draw branch: "main"
+# 2026/11/16 22:05:47.347411 [TestPropCompactEqualsUncompacted] [rapid] draw subj: ""
+# 2026/11/16 22:05:47.347411 [TestPropCompactEqualsUncompacted] [rapid] draw k: 0
+# 2026/11/16 22:05:47.347412 [TestPropCompactEqualsUncompacted] [rapid] draw size: 1
+# 2026/11/16 22:05:47.347413 [TestPropCompactEqualsUncompacted] [rapid] draw op: 0
+# 2026/11/16 22:05:47.347540 [TestPropCompactEqualsUncompacted] [rapid] draw branch: "main"
+# 2026/11/16 22:05:47.347541 [TestPropCompactEqualsUncompacted] [rapid] draw subj: ""
+# 2026/11/16 22:05:47.347542 [TestPropCompactEqualsUncompacted] [rapid] draw k: 0
+# 2026/11/16 22:05:47.347542 [TestPropCompactEqualsUncompacted] [rapid] draw size: 1
+# 2026/11/16 22:05:47.347543 [TestPropCompactEqualsUncompacted] [rapid] draw op: 0
+# 2026/11/16 22:05:47.347682 [TestPropCompactEqualsUncompacted] [rapid] draw branch: "main"
+# 2026/11/16 22:05:47.347682 [TestPropCompactEqualsUncompacted] [rapid] draw subj: ""
+# 2026/11/16 22:05:47.347683 [TestPropCompactEqualsUncompacted] [rapid] draw k: 0
+# 2026/11/16 22:05:47.347684 [TestPropCompactEqualsUncompacted] [rapid] draw size: 1
+# 2026/11/16 22:05:47.347684 [TestPropCompactEqualsUncompacted] [rapid] draw op: 12
+# 2026/11/16 22:05:47.347685 [TestPropCompactEqualsUncompacted] [rapid] draw keep: 3
+# 2026/11/16 22:05:47.347686 [TestPropCompactEqualsUncompacted] [rapid] draw keepReflog: 1
+# 2026/11/16 22:05:47.347686 [TestPropCompactEqualsUncompacted] [rapid] draw keepMans: 1
+# 2026/11/16 22:05:47.348260 [TestPropCompactEqualsUncompacted] after gc keep 3: branch b16 @5 differs
+# gc:
+# kv k1="11x"
+# t:d d0="f1"
+# tally t:d f0=0
+# tally t:d f1=1
+# tally t:d f2=0
+# tally t:v f0=0
+# tally t:v f1=0
+# tally t:v f2=0
+# 
+# reference:
+# kv k0="0x"
+# kv k1="11x"
+# t:d d0="f1"
+# tally t:d f0=0
+# tally t:d f1=1
+# tally t:d f2=0
+# tally t:v f0=0
+# tally t:v f1=0
+# tally t:v f2=0
+# 
+v0.4.8#8114144812621859952
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0xc05c654ab866b
+0x18
+0x0
+0x0
+0x0
+0x1
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x9867f1f40f739
+0x8
+0x0
+0x38e38e38e38e4
+0x1
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x9867f1f40f739
+0x8
+0x0
+0x0
+0x1
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x9867f1f40f739
+0x3
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x1f2b5a0e61c3a6
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x1
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x38e38e38e38e4
+0x3
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x1
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x1f2b5a0e61c3a6
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x6b74f03291620
+0x7
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
+0x9867f1f40f739
+0xc
+0x0
+0x38e38e38e38e4
+0x3
+0x0
+0x0
+0x0
+0x0
+0x0
+0x0
