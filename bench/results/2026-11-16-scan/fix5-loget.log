@@ -1,0 +1,6 @@
+20:32:19 scan loget: loading 10000000 x 100B
+20:32:45 mem after load: rss 117 anon 49 file 68 MiB | go-resident 52 heap-live 18 goal 39 | off-heap anon -3 MiB
+20:32:48 loget full-iter: 10000000 keys in 1.76s (5680824 keys/s) RSS 112 -> peak 260 MiB, heap peak 41 MiB
+20:32:49 loget full-reverse: 10000000 keys in 1.86s (5387354 keys/s) RSS 254 -> peak 260 MiB, heap peak 40 MiB
+20:32:49 mem end: rss 253 anon 44 file 208 MiB | go-resident 48 heap-live 18 goal 38 | off-heap anon -4 MiB
+wrote /workspace/loget-tools/perf/fix5/scan-loget.json

@@ -43,6 +43,14 @@ per value), 27% in `KV.Range` comparing every source's key for every key,
      the keys returned, so conflicts are unchanged.
    - Not used with `Limit` set (the caller said how much it wants).
 
+5. **Cheaper per-key decode.** One-byte varints decode inline, a
+   single-version body is decoded once, and run cursors check the range
+   bound only in the block that can reach it.
+
+Result (10M × 100 B): forward 1.54M → 5.35–5.68M keys/s, reverse 1.58M →
+5.39–5.85M (Pebble 6.4–7.3M / 5.7–6.2M). Write, compaction and memory
+numbers unchanged within noise (results README).
+
 ## What does not change
 
 No format, manifest or log change; the index is still a pure fold of the
@@ -57,7 +65,7 @@ a key carries its value or the scan reports an error).
 ## Cost
 
 Read-ahead uses a second core: the 10M forward scan takes the same CPU
-time (~3.9 s) in less wall time (2.0 s vs 3.1 s). Pebble does the same
+time (~3.9 s, 3.4 s after step 5) in less wall time (2.0 s vs 3.1 s). Pebble does the same
 scan in ~1.5 s of CPU on one core, so per key LogEt still spends ~2.5×
 the CPU. The remainder is in key decoding (front-coded runs decoded per
 entry, a full `Version` decoded per key), the value copy every returned
