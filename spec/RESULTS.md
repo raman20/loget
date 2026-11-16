@@ -51,7 +51,7 @@ the first run reported 32 with identical state counts.
 | LogEtSnapshot | snapshot retention (design 27, 2026-11-04): writers append, snapshot creation (check floor and planned cut, register) and compaction planning (skip a cut below a live snapshot, record the cut, monotone) under one mutex, then commit or fail; snapshots age out (stop pinning) and are released; 3 snapshots, MaxLSN=4 | 768,903 | 151,967 | 17 | no error |
 | LogEtTTL | per-key expiry in the fold (design 27): frames with non-decreasing commit timestamps, puts with absolute expiries, reads at LSN L using TS(L), compaction to a base at any cut dropping keys expired at TS(cut); checks base+tail = full replay at every L ≥ cut and that OCC validation with the expiry rule implies the read is unchanged at commit; 2 keys, 4 frames, timestamps 0..3 | 5,085,081 | 1,833,081 | 6 | no error |
 | LogEtChunks | value chunks shared between bases (design 28): compactions sharing any subset of the current base's chunks and uploading fresh ones, crashes before commit (orphans), garbage = old refs minus new refs, due-garbage sweeps under grace, orphan sweep, readers of older manifests; checks no chunk a manifest, reader or in-flight compaction refers to is deleted; 5 chunks, 4 compactions | 9,826,032 | 2,158,748 | 15 | no error |
-| LogEtLogGC | log-only values and segment GC (design 30, 2026-11-16): values live in segments; a KV compact writes only a pointer base (no new chunks); history segments and leftover format-4 chunks are deleted only when no index, snapshot or recoverable tail refers to them; a second index may fold retained segments; crashes before commit leave orphan bases; grace for readers of older live-sets. CI config MaxLSN=3, MaxBase=2, MaxSnaps=1, MaxReaders=1, one leftover chunk | 773,363 | 124,028 | 20 | no error |
+| LogEtLogGC | log-only values and segment GC (design 30, 2026-11-16, retention-cut extension the same day): values live in segments; a KV compact writes only a pointer base (no new chunks); a commit may start the recoverable tail at any still-stored cut (pointer compact at head+1, or a KeepCommits/KeepFor cut that extends the tail back into history so SweepHist cannot delete the window); history segments and leftover format-4 chunks are deleted only when no index, snapshot or recoverable tail refers to them; a second index may fold retained segments; crashes before commit leave orphan bases; grace for readers of older live-sets. CI config MaxLSN=3, MaxBase=2, MaxSnaps=1, MaxReaders=1, one leftover chunk | 1,164,659 | 173,628 | 19 | no error |
 
 ## Properties checked
 
@@ -141,6 +141,16 @@ the first run reported 32 with identical state counts.
   model is a single writer plus a crash that leaves orphan pointer
   bases. LogEtChunks remains the model of the format-4 chunk protocol,
   which format-5 databases can still read.
+  The first LogEtLogGC omitted retention cuts: `Commit` always set
+  `tailFrom` to `head+1`, so in-window history after a pointer compact
+  was not in `Tail` and `SweepHist` could delete it (the Go
+  `retentionCut` walked only the writable tail). The extension allows
+  any `newTail` whose `newTail..head` segments are still stored; the
+  keep window is `Tail` again. The model still has no forks or rewind,
+  so it would not have caught a child inheriting a parent's pointer
+  base below `ParentLSN`, or a parent GC ignoring a child's live refs.
+  The sim double-count of retained `Entries` after a pointer compact
+  is a test-harness assumption, not a model property.
 
 ## Mutation checks (are the properties strong enough?)
 

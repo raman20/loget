@@ -90,27 +90,36 @@ SnapEnd ==
                  garbage, readers>>
 
 \* Write a pointer base (run pieces). No value object is created.
+\* Allowed even when the tail is empty (tailFrom = head+1): a later
+\* retention cut moves the tail back into retained history.
 StartCompact ==
-  /\ pending = 0 /\ nbase < MaxBase /\ head >= tailFrom
+  /\ pending = 0 /\ nbase < MaxBase /\ head > 0
   /\ nbase' = nbase + 1
   /\ pending' = nbase + 1
   /\ stored' = stored \cup {Base(nbase + 1)}
   /\ UNCHANGED <<head, tailFrom, kv, idx, snaps, base, garbage, readers>>
 
-\* Manifest commit: the KV base advances to the head; history is
-\* retained. The old pointer base is garbage. Segments are garbage
-\* only under the CompactDropsSegs mutant (the old design).
+\* Manifest commit: a pointer base is installed and the recoverable
+\* tail starts at newTail. newTail = head+1 is a pointer compact at
+\* the head (history is retained, not in Tail, and SweepHist may drop
+\* unreferenced history). newTail < tailFrom is a retention cut that
+\* extends the tail back into history: every segment in the keep
+\* window is again Tail, so SweepHist cannot delete it. This is the
+\* KeepCommits/KeepFor cut the first model omitted (a cut only in the
+\* writable tail left in-window history unswept-as-Tail and GC'd).
 Commit ==
   /\ pending # 0
-  /\ base' = pending
-  /\ tailFrom' = head + 1
-  /\ garbage' = garbage \cup
-       (IF base # 0 THEN {{Base(base)}} ELSE {}) \cup
-       (IF CompactDropsSegs
-        THEN {stored \cap Segs}
-        ELSE {})
-  /\ pending' = 0
-  /\ UNCHANGED <<stored, head, kv, idx, snaps, nbase, readers>>
+  /\ \E newTail \in 1..(head + 1) :
+       /\ \A i \in newTail..head : Seg(i) \in stored
+       /\ base' = pending
+       /\ tailFrom' = newTail
+       /\ garbage' = garbage \cup
+            (IF base # 0 THEN {{Base(base)}} ELSE {}) \cup
+            (IF CompactDropsSegs
+             THEN {stored \cap Segs}
+             ELSE {})
+       /\ pending' = 0
+       /\ UNCHANGED <<stored, head, kv, idx, snaps, nbase, readers>>
 
 \* Crash before the commit: the pointer base is an orphan.
 Crash ==
