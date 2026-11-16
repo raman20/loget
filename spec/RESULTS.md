@@ -52,6 +52,7 @@ the first run reported 32 with identical state counts.
 | LogEtTTL | per-key expiry in the fold (design 27): frames with non-decreasing commit timestamps, puts with absolute expiries, reads at LSN L using TS(L), compaction to a base at any cut dropping keys expired at TS(cut); checks base+tail = full replay at every L ≥ cut and that OCC validation with the expiry rule implies the read is unchanged at commit; 2 keys, 4 frames, timestamps 0..3 | 5,085,081 | 1,833,081 | 6 | no error |
 | LogEtChunks | value chunks shared between bases (design 28): compactions sharing any subset of the current base's chunks and uploading fresh ones, crashes before commit (orphans), garbage = old refs minus new refs, due-garbage sweeps under grace, orphan sweep, readers of older manifests; checks no chunk a manifest, reader or in-flight compaction refers to is deleted; 5 chunks, 4 compactions | 9,826,032 | 2,158,748 | 15 | no error |
 | LogEtLogGC | log-only values and segment GC (design 30, 2026-11-16, retention-cut extension the same day): values live in segments; a KV compact writes only a pointer base (no new chunks); a commit may start the recoverable tail at any still-stored cut (pointer compact at head+1, or a KeepCommits/KeepFor cut that extends the tail back into history so SweepHist cannot delete the window); history segments and leftover format-4 chunks are deleted only when no index, snapshot or recoverable tail refers to them; a second index may fold retained segments; crashes before commit leave orphan bases; grace for readers of older live-sets. CI config MaxLSN=3, MaxBase=2, MaxSnaps=1, MaxReaders=1, one leftover chunk | 1,164,659 | 173,628 | 19 | no error |
+| LogEtLogGCFork | companion to LogEtLogGC (design 30, 2026-11-16): a parent log P and one child C, ForkAt (branch/rewind) at a still-foldable parent LSN, writes and deletes of a KV key and a record key, pointer compact at a cut, history sweep. A child may name parent segments. Invariants TypeOK, NoDangling, CutEqualsFold, ChildReadable. CI bounds MaxLSN=3. Mutants SweepIgnoresChild (parent sweep ignores child refs: seed-12 class, violates NoDangling) and BaseFromHead (retention cut stores the head image: missing records at the cut, violates CutEqualsFold) | 919,395 | 93,593 | 14 | no error |
 
 ## Properties checked
 
@@ -198,3 +199,16 @@ the first run reported 32 with identical state counts.
   Neither reported a violation, which says nothing about the unexplored rest.
   LogEtCkpt models runs as LSN intervals, not their bytes: piece CRCs,
   descriptor decoding and the hash-chain binding are checked by Go tests.
+
+
+## LogEtLogGCFork (2026-11-16, Asia/Calcutta)
+
+Companion model for forks, rewind, and child refs into parent segments,
+the region LogEtLogGC cannot see. Correct config (SweepIgnoresChild=FALSE,
+BaseFromHead=FALSE): 919,395 states generated, 93,593 distinct, depth 14,
+no error. Mutant `LogEtLogGCFork_ignorechild.cfg` violates NoDangling
+(WriteP, WriteP/delete, ForkAt(1), CompactP(2), SweepP(1) drops the
+child's inherited parent segment — sim seed 12). Mutant
+`LogEtLogGCFork_basefromhead.cfg` violates CutEqualsFold (two writes,
+CompactP(1) stores the head image — TestPropCompactEqualsUncompacted
+missing keys at a retention cut). Mutants still fail as intended.
