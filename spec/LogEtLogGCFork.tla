@@ -12,7 +12,7 @@
    a parent segment only when neither P's latest nor C's latest (nor
    a pointer base, nor the recoverable tail) refers to it.
 
-   Mutants (the two remaining implementation failures):
+   Mutants:
    - SweepIgnoresChild: parent history GC uses only P's latest refs.
      After a rewind, a child's record that still lives in a parent
      segment is deleted; a later open/ViewAt cannot resolve it
@@ -22,13 +22,17 @@
      the cut and the head are then missing from ViewAt(cut)
      (TestPropCompactEqualsUncompacted: t:d keys gone at the cut,
      KV still matches).
+   - SweepOmitsOpenPrefix: sweep uses only live refs and the tail,
+     not the continuous fold prefix Open/recover will read. After
+     parent compact-at-head and a sweep of an overwritten parent
+     segment, an unbased child forked earlier cannot be opened
+     (keep0-reopen-lsn3: "history was deleted by log GC: LSN 3").
 
-   Correctness: NoDangling, CutEqualsFold (a stored pointer base
-   equals the lineage fold at its LSN, both keys), ChildReadable
-   (every live child ref exists in stored). *)
+   Correctness: NoDangling, CutEqualsFold, ChildReadable,
+   OpenReadsOnlyLive (every segment Open/recover reads is stored). *)
 EXTENDS Naturals, FiniteSets, Sequences, TLC
 
-CONSTANTS MaxLSN, SweepIgnoresChild, BaseFromHead
+CONSTANTS MaxLSN, SweepIgnoresChild, BaseFromHead, SweepOmitsOpenPrefix
 
 Keys == {"k", "d"}   \* k = KV, d = record store
 PSeg(n) == <<"p", n>>
@@ -105,15 +109,51 @@ PTailSegs == {PSeg(i) : i \in {n \in 1..MaxLSN : n >= pTail /\ n <= pHead}}
 CTailSegs == IF fork = 0 THEN {} ELSE
                {CSeg(i) : i \in {n \in 1..MaxLSN : n > fork /\ n >= cTail /\ n <= cHead}}
 
-\* Correct live set for history GC: both lineages, both images, both tails.
-\* Go gcReach is this set, plus live Snapshots (not in this model). The
-\* ancestor chain is already here: CLive may name a parent segment.
-Live == PLive \cup CLive \cup PTailSegs \cup CTailSegs
+\* Segments Open / recover / ViewAt(head) read for the parent:
+\* the pointer-base image's refs, plus the continuous tail after the
+\* base (or every parent segment, if there is no base).
+OpenP ==
+  IF pHead = 0 THEN {}
+  ELSE IF pBase # 0
+       THEN RefsOf(pImage) \cup
+            {PSeg(i) : i \in {n \in 1..MaxLSN : n > pBase /\ n <= pHead}}
+       ELSE {PSeg(i) : i \in 1..pHead}
 
-\* Buggy live set: parent GC ignores the child's refs (seed 12).
+\* Inherited prefix an unbased child must replay at its head (the fork).
+\* A parent base at or below the fork can start the fold; a later parent
+\* base (compact-at-head after the fork) cannot, so the child needs
+\* every parent segment 1..fork (keep0-reopen-lsn3).
+InheritC ==
+  IF fork = 0 \/ (cBase # 0 /\ cBase >= fork) THEN {}
+  ELSE IF pBase # 0 /\ pBase <= fork
+       THEN RefsOf(pImage) \cup
+            {PSeg(i) : i \in {n \in 1..MaxLSN : n > pBase /\ n <= fork}}
+       ELSE {PSeg(i) : i \in 1..fork}
+
+OpenC ==
+  IF fork = 0 THEN {}
+  ELSE InheritC \cup
+       (IF cBase # 0 THEN RefsOf(cImage) ELSE {}) \cup
+       RefsOf(ImageOf(cLog, cHead)) \cup
+       {CSeg(i) : i \in {n \in 1..MaxLSN :
+                          n > fork /\ n <= cHead /\ (cBase = 0 \/ n > cBase)}}
+
+\* needed(manifest) at each log's head. Snapshots are not in this model;
+\* retention windows are PTailSegs / CTailSegs (a cut below the head
+\* extends the tail back so ViewAt in the window stays foldable).
+OpenSegs == OpenP \cup OpenC
+
+\* Correct live set: exactly what Open will read, plus the retention
+\* window and the current images' refs (already in OpenSegs when the
+\* window is the head). Go gcReach is this set plus live Snapshots.
+Live == OpenSegs \cup PLive \cup CLive \cup PTailSegs \cup CTailSegs
+
+\* Buggy live sets.
 PSweepLive ==
   IF SweepIgnoresChild
   THEN PLive \cup PTailSegs
+  ELSE IF SweepOmitsOpenPrefix
+  THEN PLive \cup CLive \cup PTailSegs \cup CTailSegs
   ELSE Live
 
 WriteP(key, del) ==
@@ -171,6 +211,11 @@ CompactP(cut) ==
   /\ pHead > 0 /\ cut \in 1..pHead
   /\ CanFoldP(cut)
   /\ \A i \in (cut + 1)..pHead : PSeg(i) \in stored
+  \* Replacing P's base must leave C openable. An unbased child cannot
+  \* use a parent base above the fork, so 1..fork must still be stored
+  \* whenever this compact would move pBase past the fork.
+  /\ (fork = 0 \/ cBase # 0 \/ cut <= fork \/
+        \A i \in 1..fork : PSeg(i) \in stored)
   /\ pBase' = cut
   /\ pImage' = IF BaseFromHead /\ cut < pHead
                THEN ImageOf(pLog, pHead)
@@ -182,7 +227,9 @@ CompactP(cut) ==
                  cBase, cImage, cTail>>
 
 CompactC(cut) ==
-  /\ fork # 0 /\ cHead > fork /\ cut \in (fork + 1)..cHead
+  \* A child with no own frames (cHead = fork) can still take a pointer
+  \* base at the fork, so a later parent compact-at-head can drop 1..fork.
+  /\ fork # 0 /\ cHead >= fork /\ cut \in fork..cHead
   /\ CanFoldC(cut)
   /\ \A i \in {n \in (cut + 1)..cHead : n > fork} : CSeg(i) \in stored
   /\ cBase' = cut
@@ -211,12 +258,21 @@ SweepC(n) ==
   /\ UNCHANGED <<pHead, cHead, fork, pWrites, cWrites,
                  pBase, cBase, pImage, cImage, pTail, cTail>>
 
+\* Successful open/recover: every segment it would read is still stored.
+\* The interesting check is the invariant OpenReadsOnlyLive; this action
+\* is enabled only in good states (it does not add behaviour).
+Recover ==
+  /\ pHead > 0
+  /\ OpenSegs \subseteq stored
+  /\ UNCHANGED vars
+
 Next ==
   \/ \E k \in Keys : \/ WriteP(k, FALSE) \/ WriteP(k, TRUE)
   \/ \E k \in Keys : \/ WriteC(k, FALSE) \/ WriteC(k, TRUE)
   \/ \E F \in 1..MaxLSN : ForkAt(F)
   \/ \E cut \in 1..MaxLSN : CompactP(cut) \/ CompactC(cut)
   \/ \E n \in 1..MaxLSN : SweepP(n) \/ SweepC(n)
+  \/ Recover
 
 Spec == Init /\ [][Next]_vars
 
@@ -252,4 +308,7 @@ ChildReadable ==
     /\ (\A k \in Keys : CFold(k, fork) = PFold(k, fork))
     /\ CLive \subseteq stored
 
+\* Every segment Open/recover/ViewAt(head) will read is still stored.
+\* Violated by SweepOmitsOpenPrefix (keep0-reopen-lsn3).
+OpenReadsOnlyLive == OpenSegs \subseteq stored
 =============================================================================
