@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -34,10 +36,24 @@ func NewS3FromURL(u *url.URL) (*S3, error) {
 	}
 	ak := firstEnv("AWS_ACCESS_KEY_ID", "MINIO_ROOT_USER")
 	sk := firstEnv("AWS_SECRET_ACCESS_KEY", "MINIO_ROOT_PASSWORD")
+	idle := defaultS3IdleTimeout
+	if v := q.Get("idle_timeout"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil || d <= 0 {
+			return nil, fmt.Errorf("store: bad idle_timeout %q", v)
+		}
+		idle = d
+	}
+	secure := q.Get("insecure") == ""
+	tr, err := idleTransport(secure, idle)
+	if err != nil {
+		return nil, err
+	}
 	c, err := minio.New(endpoint, &minio.Options{
-		Creds:  credentials.NewStaticV4(ak, sk, ""),
-		Secure: q.Get("insecure") == "",
-		Region: q.Get("region"),
+		Creds:     credentials.NewStaticV4(ak, sk, ""),
+		Secure:    secure,
+		Region:    q.Get("region"),
+		Transport: tr,
 	})
 	if err != nil {
 		return nil, err
@@ -58,6 +74,62 @@ func NewS3FromURL(u *url.URL) (*S3, error) {
 		p += "/"
 	}
 	return &S3{c: c, bucket: u.Host, prefix: p}, nil
+}
+
+// defaultS3IdleTimeout bounds how long one S3 request may make no
+// progress (no byte read or written on its connection) before the attempt
+// fails and the client retries it. Without it a dead network path with
+// the TCP connection still open hangs a stalled upload or a response body
+// forever: the HTTP client's ResponseHeaderTimeout covers only the wait
+// for headers, and LogEt's single writer puts segments without a caller
+// deadline. Override per store with ?idle_timeout=30s in the s3:// URL.
+const defaultS3IdleTimeout = 30 * time.Second
+
+// idleTransport is minio-go's default transport with a per-connection
+// no-progress deadline.
+func idleTransport(secure bool, idle time.Duration) (*http.Transport, error) {
+	tr, err := minio.DefaultTransport(secure)
+	if err != nil {
+		return nil, err
+	}
+	dial := tr.DialContext
+	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		c, err := dial(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
+		return &idleConn{Conn: c, idle: idle}, nil
+	}
+	// A pooled connection waits in Read for the next response; close it
+	// before its deadline would fire.
+	tr.IdleConnTimeout = min(tr.IdleConnTimeout, idle*3/4)
+	return tr, nil
+}
+
+// idleConn fails a Read or Write that makes no progress for idle.
+type idleConn struct {
+	net.Conn
+	idle time.Duration
+}
+
+func (c *idleConn) Read(p []byte) (int, error) {
+	c.Conn.SetReadDeadline(time.Now().Add(c.idle))
+	return c.Conn.Read(p)
+}
+
+func (c *idleConn) Write(p []byte) (int, error) {
+	// one deadline per chunk so a slow but moving upload never trips it
+	n := 0
+	for n < len(p) {
+		e := min(len(p), n+64<<10)
+		c.Conn.SetWriteDeadline(time.Now().Add(c.idle))
+		m, err := c.Conn.Write(p[n:e])
+		n += m
+		if err != nil {
+			return n, err
+		}
+	}
+	return n, nil
 }
 
 func NewS3(c *minio.Client, bucket, prefix string) *S3 {
@@ -90,7 +162,32 @@ func (s *S3) PutIfAbsent(ctx context.Context, key string, data []byte) error {
 	return nil
 }
 
+// s3ReadTries bounds the attempts of one Get or GetRange whose transfer
+// fails after the response started (a reset, truncation or stall mid-body:
+// ErrShortRead). The HTTP client retries failures before the body itself.
+const s3ReadTries = 3
+
 func (s *S3) Get(ctx context.Context, key string) ([]byte, error) {
+	return retryShort(ctx, func() ([]byte, error) { return s.get(ctx, key) })
+}
+
+// GetRange implements RangeReader with an HTTP Range request.
+func (s *S3) GetRange(ctx context.Context, key string, off, n int64) ([]byte, error) {
+	return retryShort(ctx, func() ([]byte, error) { return s.getRange(ctx, key, off, n) })
+}
+
+func retryShort(ctx context.Context, f func() ([]byte, error)) ([]byte, error) {
+	var b []byte
+	var err error
+	for try := 0; try < s3ReadTries; try++ {
+		if b, err = f(); !errors.Is(err, ErrShortRead) || ctx.Err() != nil {
+			return b, err
+		}
+	}
+	return b, err
+}
+
+func (s *S3) get(ctx context.Context, key string) ([]byte, error) {
 	// Core.GetObject makes one request and returns the response's object
 	// info with the body (Object.Stat would cost a second request).
 	body, info, _, err := minio.Core{Client: s.c}.GetObject(ctx, s.bucket, s.prefix+key, minio.GetObjectOptions{})
@@ -99,11 +196,11 @@ func (s *S3) Get(ctx context.Context, key string) ([]byte, error) {
 	}
 	defer body.Close()
 	b, err := io.ReadAll(body)
-	if errors.Is(err, io.ErrUnexpectedEOF) { // body shorter than Content-Length
+	if err != nil && ctx.Err() == nil { // body cut short, reset or stalled
 		return nil, fmt.Errorf("%w: %s: %v", ErrShortRead, key, err)
 	}
 	if err != nil {
-		return nil, mapNF(err)
+		return nil, err
 	}
 	// Belt and braces: the size S3 reported must be what we read. (Both come
 	// from the response, so a proxy that rewrites Content-Length and body
@@ -114,8 +211,7 @@ func (s *S3) Get(ctx context.Context, key string) ([]byte, error) {
 	return b, nil
 }
 
-// GetRange implements RangeReader with an HTTP Range request.
-func (s *S3) GetRange(ctx context.Context, key string, off, n int64) ([]byte, error) {
+func (s *S3) getRange(ctx context.Context, key string, off, n int64) ([]byte, error) {
 	if off < 0 || n <= 0 {
 		if n == 0 && off >= 0 {
 			return []byte{}, nil
@@ -133,7 +229,15 @@ func (s *S3) GetRange(ctx context.Context, key string, off, n int64) ([]byte, er
 	defer o.Close()
 	b, err := io.ReadAll(o)
 	if err != nil {
-		return nil, mapNF(err)
+		// minio-go's Object sends the request on first read, so a missing
+		// key or an error status surfaces here as an ErrorResponse
+		if er := minio.ToErrorResponse(err); er.Code != "" || ctx.Err() != nil {
+			return nil, mapNF(err)
+		}
+		return nil, fmt.Errorf("%w: range %d+%d of %s: %v", ErrShortRead, off, n, key, err)
+	}
+	if int64(len(b)) < n {
+		return nil, fmt.Errorf("%w: range %d+%d of %s: got %d bytes", ErrShortRead, off, n, key, len(b))
 	}
 	if int64(len(b)) != n {
 		return nil, fmt.Errorf("store: range %d+%d of %s: got %d bytes", off, n, key, len(b))
